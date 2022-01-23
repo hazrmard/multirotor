@@ -1,5 +1,5 @@
 import numpy as np
-from numpy import sin, cos
+from numpy import sin, cos, tan, sec
 
 
 def body_to_inertial(coords: np.ndarray, *, rotations=None, dcm=None, dcm_inverse=None) -> np.ndarray:
@@ -24,7 +24,7 @@ def inertial_to_body(coords: np.ndarray, *, rotations=None, dcm=None) -> np.ndar
 
 
 
-def direction_cosine_matrix(yaw: float, pitch: float, roll: float) -> np.ndarray:
+def direction_cosine_matrix(yaw: float, pitch: float, roll: float) -> np.matrix:
     cy = cos(yaw)
     sy = sin(yaw)
     cp = cos(pitch)
@@ -36,4 +36,37 @@ def direction_cosine_matrix(yaw: float, pitch: float, roll: float) -> np.ndarray
         [-cr * sy + sr * sp * cy,   cr * cy + sr * sp * sy,     sr * cp],
         [sr * sy + cr * sp * cy,    -sr * cy + cr * sp * sy,    cr * cp]
     ])
-    return dcm
+    return np.asmatrix(dcm)
+
+
+
+def rotating_frame_derivative(value: np.ndarray, local_derivative: np.ndarray, omega: np.ndarray) -> np.ndarray:
+    # d (value . vector) / dt
+    # = vector . d value / dt + value . d vector / dt
+    #  ( local derivative )  ( coriolis term )
+    dv = np.copy(value)
+    dv_l = local_derivative
+    dv[0] = dv_l[0] - omega[2] * value[2]
+    dv[1] = dv_l[1] + omega[2] * value[0]
+    dv[2] = dv_l[2] - omega[1] * value[0] + omega[0] * value[2]
+    return dv
+
+
+
+def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
+    roll, pitch, yaw = orientation
+    p, q, r = angular_velocity
+    roll_rate = p + q * tan(pitch) * (q * sin(roll) + r * cos(roll))
+    pitch_rate = q * cos(roll) - r * sin(roll)
+    yaw_rate = sec(pitch) * (q * sin(roll) + r * cos(roll))
+    return np.asarray([roll_rate, pitch_rate, yaw_rate])
+
+
+
+def euler_to_angular_rate(euler_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
+    roll_rate, pitch_rate, yaw_rate = euler_velocity
+    roll, pitch, yaw = orientation
+    p = roll_rate - yaw_rate * sin(pitch)
+    q = pitch_rate * cos(roll) + yaw_rate * cos(pitch) * sin(roll)
+    r = yaw_rate * cos(roll) * cos(pitch) - pitch_rate * sin(roll)
+    return np.asarray([p, q, r])
