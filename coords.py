@@ -1,5 +1,5 @@
 import numpy as np
-from numpy import sin, cos, tan, sec
+from numpy import sin, cos, tan
 
 
 def body_to_inertial(coords: np.ndarray, *, rotations=None, dcm=None, dcm_inverse=None) -> np.ndarray:
@@ -58,7 +58,7 @@ def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray)
     p, q, r = angular_velocity
     roll_rate = p + q * tan(pitch) * (q * sin(roll) + r * cos(roll))
     pitch_rate = q * cos(roll) - r * sin(roll)
-    yaw_rate = sec(pitch) * (q * sin(roll) + r * cos(roll))
+    yaw_rate = (q * sin(roll) + r * cos(roll)) / cos(pitch)
     return np.asarray([roll_rate, pitch_rate, yaw_rate])
 
 
