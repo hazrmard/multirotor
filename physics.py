@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Iterable, Tuple
 
 import numpy as np
 from numba import njit, jit
@@ -8,8 +8,6 @@ from scipy.optimize import fsolve
 
 @njit
 def thrustEqn(vi, *prop_params):
-    
-    # Unpack parameters
     R,A,rho,a,b,c,eta,theta0,theta1,u,v,w,Omega = prop_params
     
     # Calculate local airflow velocity at propeller with vi, V'
@@ -26,7 +24,10 @@ def thrustEqn(vi, *prop_params):
 
 
 
-def thrust(speed, airstream_velocity, R, A, rho, a, b, c, eta, theta0, theta1) -> float:
+def thrust(
+    speed, airstream_velocity, R, A, rho, a, b, c, eta, theta0, theta1,
+    vi_guess=0.1
+) -> float:
     u, v, w = airstream_velocity
     # Convert commanded RPM to rad/s
     Omega = 2 * np.pi / 60 * speed
@@ -36,7 +37,7 @@ def thrust(speed, airstream_velocity, R, A, rho, a, b, c, eta, theta0, theta1) -
     
     # Numerically solve for propeller induced velocity, vi
     # using nonlinear root finder, fsolve, and prop_params
-    # TODO: numba jit gives error for this function ('Untyped global name fsolve')
+    # TODO: numba jit gives error for fsolve ('Untyped global name fsolve')
     vi = fsolve(thrustEqn, 0.1, args=prop_params)
     
     # Plug vi back into Thrust equation to solve for T
@@ -54,8 +55,10 @@ def torque(position_vector: np.ndarray, thrust: float) -> np.ndarray:
 
 
 @njit
-def apply_forces_torques(forces: np.ndarray, torques: np.ndarray, x: np.ndarray,
-    g: float, mass: float, inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix):
+def apply_forces_torques(
+    forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
+    inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
+) -> np.ndarray:
     # Store state variables in a readable format
     ub = x[0]
     vb = x[1]
@@ -106,3 +109,10 @@ def apply_forces_torques(forces: np.ndarray, torques: np.ndarray, x: np.ndarray,
     xdot[11] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
     
     return xdot
+
+
+
+def control_allocation(allocation_matrix: np.matrix, net_forces: np.array, net_torques: np.array):
+    # [F T] = P . f
+    # P-1 F T = f
+    pass

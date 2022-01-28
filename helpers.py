@@ -1,13 +1,16 @@
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
+from scipy.optimize import fsolve
 
 from vehicle import PropellerParams, VehicleParams
 from simulation import Propeller
 
 
 
-def moment_of_inertia_tensor_from_cooords(point_masses: Iterable[float], coords: Iterable[np.ndarray]) -> np.matrix:
+def moment_of_inertia_tensor_from_cooords(
+    point_masses: Iterable[float], coords: Iterable[np.ndarray]
+) -> np.matrix:
     coords = np.asarray(coords)
     masses = np.asarray(point_masses)
     x,y,z = coords[:,0], coords[:,1], coords[:2]
@@ -25,9 +28,12 @@ def moment_of_inertia_tensor_from_cooords(point_masses: Iterable[float], coords:
 
 
 
-def vehicle_params_factory(n: int, m_prop: float, d_prop: float, params: PropellerParams,
-    m_body: float, body_shape: str='point', body_size: float=0.1):
-    angles = np.linspace(0, 2 * np.pi, num=n, endpoint=False)
+def vehicle_params_factory(
+    n: int, m_prop: float, d_prop: float, params: PropellerParams,
+    m_body: float, body_shape: str='sphere_solid', body_size: float=0.1
+):
+    angle_spacing = 2 * np.pi / n
+    angles = np.arange(angle_spacing / 2, 2 * np.pi, angle_spacing)
     masses = [m_prop] * n
     x = np.cos(angles) * d_prop
     y = np.sin(angles) * d_prop
@@ -53,3 +59,12 @@ def vehicle_params_factory(n: int, m_prop: float, d_prop: float, params: Propell
         mass = n * m_prop + m_body,
         inertia_matrix = I
     )
+
+
+
+def find_nominal_speed(thrust_fn: Callable[[float], float], weight: float) -> float:
+    def balance(speed: float) -> float:
+        thrust = thrust_fn(speed)
+        residual = thrust - weight
+        return residual
+    return fsolve(balance, 1e3)[0]

@@ -1,45 +1,40 @@
 import numpy as np
 from numpy import sin, cos, tan
-
-
-def body_to_inertial(coords: np.ndarray, *, rotations=None, dcm=None, dcm_inverse=None) -> np.ndarray:
-    if rotations is not None:
-        dcm = direction_cosine_matrix(yaw=rotations[0], pitch=rotations[1], roll=rotations[2])
-    if dcm is not None:
-        dcm_inverse = dcm.T
-    if dcm_inverse is not None:
-        return dcm_inverse @ coords
-    else:
-        raise ValueError('Specify one of yaw, pitch, roll angles, direction cosine matrix, or its inverse.')
+from numba import njit
 
 
 
-def inertial_to_body(coords: np.ndarray, *, rotations=None, dcm=None) -> np.ndarray:
-    if rotations is not None:
-        dcm = direction_cosine_matrix(yaw=rotations[0], pitch=rotations[1], roll=rotations[2])
-    if dcm is not None:
-        return dcm @ coords
-    else:
-        raise ValueError('Specify one of yaw, pitch, roll angles or direction cosine matrix.')
+@njit
+def body_to_inertial(vector: np.ndarray, dcm: np.ndarray) -> np.ndarray:
+    dcm_inverse = dcm.T
+    return dcm_inverse @ vector
 
 
 
-def direction_cosine_matrix(yaw: float, pitch: float, roll: float) -> np.matrix:
-    cy = cos(yaw)
-    sy = sin(yaw)
-    cp = cos(pitch)
-    sp = sin(pitch)
+@njit
+def inertial_to_body(vector: np.ndarray, dcm=np.ndarray) -> np.ndarray:
+    return dcm @ vector
+
+
+
+@njit
+def direction_cosine_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
     cr = cos(roll)
     sr = sin(roll)
+    cp = cos(pitch)
+    sp = sin(pitch)
+    cy = cos(yaw)
+    sy = sin(yaw)
     dcm = np.asarray([
         [cp * cy,                   cp * sy,                    -sp],
         [-cr * sy + sr * sp * cy,   cr * cy + sr * sp * sy,     sr * cp],
         [sr * sy + cr * sp * cy,    -sr * cy + cr * sp * sy,    cr * cp]
     ])
-    return np.asmatrix(dcm)
+    return dcm
 
 
 
+@njit
 def rotating_frame_derivative(value: np.ndarray, local_derivative: np.ndarray, omega: np.ndarray) -> np.ndarray:
     # d (value . vector) / dt
     # = vector . d value / dt + value . d vector / dt
@@ -53,6 +48,7 @@ def rotating_frame_derivative(value: np.ndarray, local_derivative: np.ndarray, o
 
 
 
+@njit
 def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
     roll, pitch, yaw = orientation
     p, q, r = angular_velocity
@@ -63,10 +59,13 @@ def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray)
 
 
 
+@njit
 def euler_to_angular_rate(euler_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
     roll_rate, pitch_rate, yaw_rate = euler_velocity
     roll, pitch, yaw = orientation
-    p = roll_rate - yaw_rate * sin(pitch)
-    q = pitch_rate * cos(roll) + yaw_rate * cos(pitch) * sin(roll)
-    r = yaw_rate * cos(roll) * cos(pitch) - pitch_rate * sin(roll)
+    cr, cp = cos(roll), cos(pitch)
+    sr, sp = sin(roll), sin(pitch)
+    p = roll_rate - yaw_rate * sp
+    q = pitch_rate * cr + yaw_rate * cp * sr
+    r = yaw_rate * cr * cp - pitch_rate * sr
     return np.asarray([p, q, r])
