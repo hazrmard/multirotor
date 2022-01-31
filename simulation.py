@@ -58,10 +58,12 @@ class Multirotor:
         self.state: np.ndarray = None
         self.propellers: List[Propeller] = None
         self.propeller_vectors: np.matrix = None
+        self.t: float = None
         self.reset()
 
 
     def reset(self):
+        self.t = 0.
         self.propellers = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
@@ -152,5 +154,6 @@ class Multirotor:
 
 
     def step(self, u: np.ndarray):
+        self.t += self.simulation.dt
         self.state = odeint(self.dxdt, self.state, (0, self.simulation.dt), args=(u,))[-1]
         return self.state

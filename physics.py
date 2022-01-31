@@ -1,7 +1,7 @@
 from typing import Iterable, Tuple
 
 import numpy as np
-from numba import njit, jit
+from numba import njit
 from scipy.optimize import fsolve
 
 
@@ -38,7 +38,7 @@ def thrust(
     # Numerically solve for propeller induced velocity, vi
     # using nonlinear root finder, fsolve, and prop_params
     # TODO: numba jit gives error for fsolve ('Untyped global name fsolve')
-    vi = fsolve(thrustEqn, 0.1, args=prop_params)
+    vi = fsolve(thrustEqn, vi_guess, args=prop_params)
     
     # Plug vi back into Thrust equation to solve for T
     Vprime = np.sqrt(u**2 + v**2 + (w - vi)**2)
@@ -60,18 +60,18 @@ def apply_forces_torques(
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
     # Store state variables in a readable format
-    ub = x[0]
-    vb = x[1]
-    wb = x[2]
-    p = x[3]
-    q = x[4]
-    r = x[5]
-    phi = x[6]
-    theta = x[7]
-    psi = x[8]
-    xI = x[9]
+    ub = x[0]       # linear velocity along body-frame-x-axis
+    vb = x[1]       # linear velocity along body-frame-y-axis
+    wb = x[2]       # linear velocity along body-frame-z-axis (down is positive)
+    p = x[3]        # body-frame-x-axis rotation rate
+    q = x[4]        # body-frame-y-axis rotation rate
+    r = x[5]        # body-frame-z-axis rotation rate
+    phi = x[6]      # Roll
+    theta = x[7]    # Pitch
+    psi = x[8]      # Yaw
+    xI = x[9]       # Inertial frame positions
     yI = x[10]
-    hI = x[11]
+    zI = x[11]      # In inertial frame, down is positive z
     
     # Pre-calculate trig values
     cphi = np.cos(phi);   sphi = np.sin(phi)

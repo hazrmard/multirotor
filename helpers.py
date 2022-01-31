@@ -4,7 +4,6 @@ import numpy as np
 from scipy.optimize import fsolve
 
 from vehicle import PropellerParams, VehicleParams
-from simulation import Propeller
 
 
 
@@ -13,7 +12,7 @@ def moment_of_inertia_tensor_from_cooords(
 ) -> np.matrix:
     coords = np.asarray(coords)
     masses = np.asarray(point_masses)
-    x,y,z = coords[:,0], coords[:,1], coords[:2]
+    x,y,z = coords[:,0], coords[:,1], coords[:,2]
     Ixx = np.sum(masses * (y**2 + z**2))
     Iyy = np.sum(masses * (x**2 + z**2))
     Izz = np.sum(masses * (x**2 + y**2))
@@ -53,11 +52,11 @@ def vehicle_params_factory(
     I = I_body + I_prop
 
     return VehicleParams(
-        propellers = [Propeller(params) for _ in range(n)],
+        propellers = [params for _ in range(n)],
         angles = angles,
         distances=np.ones(n) * d_prop,
         mass = n * m_prop + m_body,
-        inertia_matrix = I
+        inertia_matrix = I,
     )
 
 
