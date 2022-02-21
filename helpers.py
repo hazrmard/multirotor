@@ -1,4 +1,4 @@
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Tuple
 
 import numpy as np
 from scipy.optimize import fsolve
@@ -67,3 +67,19 @@ def find_nominal_speed(thrust_fn: Callable[[float], float], weight: float) -> fl
         residual = thrust - weight
         return residual
     return fsolve(balance, 1e3)[0]
+
+
+
+def learn_thrust_coefficient(
+    thrust_fn: Callable[[float], float], domain: Tuple=(1, 10000)
+) -> float:
+    speeds = np.linspace(domain[0], domain[1], num=250)
+    thrust = np.zeros_like(speeds)
+    for i, speed in enumerate(speeds):
+        thrust[i] = thrust_fn(speed)
+    return np.polyfit(speeds, thrust, deg=2)[0] # return coefficient of quadradic term
+
+
+
+def moment_of_inertia_disk(m: float, r: float) -> float:
+    return 0.5 * m * r**2

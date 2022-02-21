@@ -6,8 +6,23 @@ from numba import njit
 
 @njit
 def body_to_inertial(vector: np.ndarray, dcm: np.ndarray) -> np.ndarray:
-    dcm_inverse = dcm.T
-    return dcm_inverse @ vector
+    """
+    View body coordinates in terms of coordinates on inertial axes. Assumes
+    both frames share same origin.
+
+    Parameters
+    ----------
+    vector : np.ndarray
+        The 3D vector of points, or a 3 x N matrix of N points
+    dcm : np.ndarray
+        The 3x3 direction cosine matrix
+
+    Returns
+    -------
+    np.ndarray
+        The transformed coordinates in the intertial frame
+    """
+    return dcm.T @ vector
 
 
 
@@ -19,11 +34,11 @@ def inertial_to_body(vector: np.ndarray, dcm=np.ndarray) -> np.ndarray:
 
 @njit
 def direction_cosine_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    cr = cos(roll)
+    cr = cos(roll)  # phi
     sr = sin(roll)
-    cp = cos(pitch)
+    cp = cos(pitch) # theta
     sp = sin(pitch)
-    cy = cos(yaw)
+    cy = cos(yaw)   # psi
     sy = sin(yaw)
     dcm = np.asarray([
         [cp * cy,                   cp * sy,                    -sp],
@@ -35,7 +50,9 @@ def direction_cosine_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray
 
 
 @njit
-def rotating_frame_derivative(value: np.ndarray, local_derivative: np.ndarray, omega: np.ndarray) -> np.ndarray:
+def rotating_frame_derivative(
+    value: np.ndarray, local_derivative: np.ndarray, omega: np.ndarray
+) -> np.ndarray:
     # d (value . vector) / dt
     # = vector . d value / dt + value . d vector / dt
     #  ( local derivative )  ( coriolis term )
@@ -49,7 +66,9 @@ def rotating_frame_derivative(value: np.ndarray, local_derivative: np.ndarray, o
 
 
 @njit
-def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
+def angular_to_euler_rate(
+    angular_velocity: np.ndarray, orientation: np.ndarray
+) -> np.ndarray:
     roll, pitch, yaw = orientation
     p, q, r = angular_velocity
     roll_rate = p + q * tan(pitch) * (q * sin(roll) + r * cos(roll))
@@ -60,7 +79,9 @@ def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray)
 
 
 @njit
-def euler_to_angular_rate(euler_velocity: np.ndarray, orientation: np.ndarray) -> np.ndarray:
+def euler_to_angular_rate(
+    euler_velocity: np.ndarray, orientation: np.ndarray
+) -> np.ndarray:
     roll_rate, pitch_rate, yaw_rate = euler_velocity
     roll, pitch, yaw = orientation
     cr, cp = cos(roll), cos(pitch)
