@@ -51,12 +51,19 @@ def thrust(
 @njit
 def torque(
     position_vector: np.ndarray, force: np.ndarray,
-    moment_of_inertia: float, prop_angular_acceleration: float
+    moment_of_inertia: float, prop_angular_acceleration: float,
+    drag_coefficient: float, prop_angular_velocity: float,
+    clockwise: int
 ) -> np.ndarray:
+    # TODO: See here
+    # https://andrew.gibiansky.com/downloads/pdf/Quadcopter%20Dynamics,%20Simulation,%20and%20Control.pdf
     # Total moments in the body frame
     # yaw moments
     # tau = I . d omega/dt
-    tau_rot = moment_of_inertia * prop_angular_acceleration
+    tau_rot = (
+        # clockwise * moment_of_inertia * prop_angular_acceleration + 
+        clockwise * drag_coefficient * prop_angular_velocity**2
+    )
     # tau = r x F
     tau = np.cross(position_vector, force)
     # print(moment_of_inertia, prop_angular_acceleration)
@@ -102,12 +109,11 @@ def apply_forces_torques(
     xdot[2] = 1/mass * (fz) + g * cphi * cthe + q * ub - p * vb # = wdot
 
 
-    # xdot[3] = 1/Ixx * (tx + (Iyy - Izz) * q * r)  # = pdot
-    # xdot[4] = 1/Iyy * (ty + (Izz - Ixx) * p * r)  # = qdot
-    # xdot[5] = 1/Izz * (tz + (Ixx - Iyy) * p * q)  # = rdot
+    # xdot[3] = 1/I[0,0] * (tx + (I[1,1] - I[2,2]) * q * r)  # = pdot
+    # xdot[4] = 1/I[1,1] * (ty + (I[2,2] - I[0,0]) * p * r)  # = qdot
+    # xdot[5] = 1/I[2,2] * (tz + (I[0,0] - I[1,1]) * p * q)  # = rdot
     # print(I.shape, x[3:6].shape, (I @ x[3:6]).shape)
     gyro = np.cross(x[3:6], I @ x[3:6])
-    # gyro = np.cross(x[3:6], I @ x[3:6]).squeeze()
     xdot[3:6] = I_inv @ (torques - gyro) # TODO: verify whether it is + or - gyro
 
     xdot[6] = p + (q*sphi + r*cphi) * sthe / cthe  # = phidot
@@ -123,10 +129,3 @@ def apply_forces_torques(
     xdot[11] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
     
     return xdot
-
-
-
-def control_allocation(allocation_matrix: np.matrix, net_forces: np.array, net_torques: np.array):
-    # [F T] = P . f
-    # P-1 F T = f
-    pass

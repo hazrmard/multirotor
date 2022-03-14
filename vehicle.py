@@ -85,26 +85,6 @@ class VehicleParams:
             self.clockwise = np.ones(len(self.propellers), dtype=int)
             self.clockwise[::2] = 1
             self.clockwise[1::2] = -1
-        
-        # Set up control allocation matrix if thrust and motor torque constants
-        # are provided
-        if (
-            all([p.k_thrust is not None for p in self.propellers]) and \
-            all([p.k_torque is not None for p in self.propellers])
-        ):
-            alloc = np.zeros((4, len(self.propellers))) #[Fz, Mx, My, Mz] x n-Propellers
-            x = self.distances * np.sin(self.angles)
-            y = self.distances * np.cos(self.angles)
-            for i, p in enumerate(self.propellers):
-                alloc[0, i] = -p.k_thrust                       # vertical force (negative up)
-                alloc[1, i] = p.k_thrust * x[i]                 # torque about x-axis
-                alloc[2, i] = p.k_thrust * y[i]                 # torque about y-axis
-                alloc[3, i] = p.k_torque * self.clockwise[i]    # torque about z-axis
-            self.alloc = alloc
-            self.alloc_inverse = np.linalg.pinv(alloc)
-        else:
-            self.alloc = None
-            self.alloc_inverse = None
 
 
 

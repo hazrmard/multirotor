@@ -7,6 +7,7 @@ from scipy.integrate import odeint
 from vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams
 from coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from physics import thrust, torque, apply_forces_torques
+from helpers import control_allocation_matrix
 
 
 
@@ -32,10 +33,38 @@ class Propeller:
 
 
     def apply_speed(self, speed: float) -> float:
+        """
+        Calculate the actual speed of the propeller after the speed signal is
+        given. This method is *pure* and does not change the state of the propeller.
+
+        Parameters
+        ----------
+        speed : float
+            Radians per second speed command
+
+        Returns
+        -------
+        float
+            The actual speed
+        """
         return speed
 
 
     def step(self, speed: float) -> float:
+        """
+        Step through the speed command. This method changes the state of the 
+        propeller.
+
+        Parameters
+        ----------
+        speed : float
+            Speed command in radians per second.
+
+        Returns
+        -------
+        float
+            The actual speed achieved.
+        """
         self.speed = speed
 
 
@@ -87,7 +116,7 @@ class Multirotor:
         self.simulation: SimulationParams = simulation
         self.state: np.ndarray = None
         self.propellers: List[Propeller] = None
-        self.propeller_vectors: np.matrix = None
+        self.propeller_vectors: np.ndarray = None
         self.t: float = 0.
         self.reset()
 
@@ -104,6 +133,7 @@ class Multirotor:
         self.propeller_vectors = np.vstack((x, y, z))
 
         self.inertial_matrix_inverse = np.asmatrix(np.linalg.inv(self.params.inertia_matrix))
+        self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
 
         self.state = np.zeros(12)
 
@@ -178,9 +208,10 @@ class Multirotor:
             )
             torque_vec[:, i] = torque(
                 self.propeller_vectors[:,i], thrust_vec[:,i],
-                prop.params.moment_of_inertia, clockwise * angular_acc
+                prop.params.moment_of_inertia, angular_acc,
+                prop.params.k_torque, speed,
+                clockwise
             )
-            # print(clockwise * angular_acc)
         forces = thrust_vec.sum(axis=1)
         torques = torque_vec.sum(axis=1)
         return forces, torques
@@ -199,7 +230,11 @@ class Multirotor:
 
     def step(self, u: np.ndarray):
         self.t += self.simulation.dt
-        self.state = odeint(self.dxdt, self.state, (0, self.simulation.dt), args=(u,))[-1]
+        # TODO: Explore RK45() or solve_ivp() functions from scipy.integrate?
+        self.state = odeint(
+            self.dxdt, self.state, (0, self.simulation.dt), args=(u,),
+            rtol=1e-5, atol=1e-5
+        )[-1]
         for u_, prop in zip(u, self.propellers):
             prop.step(u_)
         return self.state
@@ -208,8 +243,8 @@ class Multirotor:
     def allocate_control(self, thrust: float, torques: np.ndarray) -> np.ndarray:
         # TODO: njit it? np.linalg.lstsq can be compiled
         vec = np.asarray([-thrust, *torques])
-        # return np.sqrt(np.linalg.lstsq(self.params.alloc, vec, rcond=None)[0])
+        # return np.sqrt(np.linalg.lstsq(self.alloc, vec, rcond=None)[0])
         return np.sqrt(
-            np.clip(self.params.alloc_inverse @ vec, a_min=0., a_max=None)
+            np.clip(self.alloc_inverse @ vec, a_min=0., a_max=None)
         )
 
