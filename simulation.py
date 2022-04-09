@@ -17,11 +17,20 @@ class Propeller:
     certain rate.
     """
 
-    def __init__(self, params: PropellerParams, simulation: SimulationParams) -> None:
+    def __init__(
+        self, params: PropellerParams, simulation: SimulationParams,
+        use_thrust_constant: bool=False
+    ) -> None:
         self.params: PropellerParams = params
         self.simulation: SimulationParams = simulation
         self.speed: float = 0.
         "Radians per second"
+        self.use_thrust_constant = use_thrust_constant
+
+        if use_thrust_constant:
+            self.thrust = self._thrust_constant
+        else:
+            self.thrust = self._thrust_physics
 
 
     def reset(self):
@@ -68,7 +77,11 @@ class Propeller:
         self.speed = speed
 
 
-    def thrust(self, speed, airstream_velocity: np.ndarray=np.zeros(3)) -> float:
+    def _thrust_constant(self, speed,airstream_velocity: np.ndarray=np.zeros(3)) -> float:
+        return self.params.k_thrust * speed**2
+
+
+    def _thrust_physics(self, speed, airstream_velocity: np.ndarray=np.zeros(3)) -> float:
         p = self.params
         return thrust(
             speed, airstream_velocity,
@@ -118,15 +131,16 @@ class Multirotor:
         self.propellers: List[Propeller] = None
         self.propeller_vectors: np.ndarray = None
         self.t: float = 0.
+        self.propellers = []
+        for params in self.params.propellers:
+            self.propellers.append(Propeller(params, self.simulation))
         self.reset()
 
 
     def reset(self):
         self.t = 0.
-        self.propellers = []
-        for params in self.params.propellers:
-            self.propellers.append(Propeller(params, self.simulation))
-
+        for p in self.propellers:
+            p.reset()
         x = cos(self.params.angles) * self.params.distances
         y = sin(self.params.angles) * self.params.distances
         z = np.zeros_like(y)
@@ -136,25 +150,24 @@ class Multirotor:
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
 
         self.state = np.zeros(12)
+        return self.state
 
 
     @property
-    def position(self) -> np.ndarray:
-        """Navigation coordinates (height = - z coordinate)"""
-        return np.asarray([self.state[9], self.state[10], -self.state[11]])
+    def position(self):
+        return self.state[0:3]
 
 
     @property
     def velocity(self) -> np.ndarray:
         """Body-frame velocity"""
-        return self.state[:3]
+        return self.state[3:6]
 
 
     @property
-    def navigation_velocity(self) -> np.ndarray:
+    def world_velocity(self) -> np.ndarray:
         dcm = direction_cosine_matrix(*self.orientation)
         v_inertial = body_to_inertial(self.velocity, dcm)
-        v_inertial[2] *= -1 # convert inertial to navigation frame (h = -z)
         return v_inertial
 
 
@@ -167,7 +180,7 @@ class Multirotor:
     @property
     def angular_rate(self) -> np.ndarray:
         """Angular rate of body frame axes (not same as rate of roll, pitch, yaw)"""
-        return self.state[3:6]
+        return self.state[9:12]
 
 
     @property
@@ -200,11 +213,8 @@ class Multirotor:
             last_speed = prop.speed
             speed = prop.apply_speed(speed)
             angular_acc = (speed - last_speed) / self.simulation.dt
-            thrust_vec[2, i] = -thrust(
-                speed, airstream_velocity_inertial[:, i], prop.params.R,
-                prop.params.A, self.simulation.rho, prop.params.a,
-                prop.params.b, prop.params.c, prop.params.eta,
-                prop.params.theta0, prop.params.theta1
+            thrust_vec[2, i] = prop.thrust(
+                speed, airstream_velocity_inertial[:, i]
             )
             torque_vec[:, i] = torque(
                 self.propeller_vectors[:,i], thrust_vec[:,i],
@@ -242,7 +252,7 @@ class Multirotor:
 
     def allocate_control(self, thrust: float, torques: np.ndarray) -> np.ndarray:
         # TODO: njit it? np.linalg.lstsq can be compiled
-        vec = np.asarray([-thrust, *torques])
+        vec = np.asarray([thrust, *torques])
         # return np.sqrt(np.linalg.lstsq(self.alloc, vec, rcond=None)[0])
         return np.sqrt(
             np.clip(self.alloc_inverse @ vec, a_min=0., a_max=None)

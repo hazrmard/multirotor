@@ -88,12 +88,12 @@ def moment_of_inertia_disk(m: float, r: float) -> float:
 
 def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.ndarray]:
     alloc = np.zeros((4, len(params.propellers))) #[Fz, Mx, My, Mz] x n-Propellers
-    x = params.distances * np.sin(params.angles)
-    y = params.distances * np.cos(params.angles)
+    x = params.distances * np.cos(params.angles)
+    y = params.distances * np.sin(params.angles)
     for i, p in enumerate(params.propellers):
-        alloc[0, i] = -p.k_thrust                       # vertical force (negative up)
-        alloc[1, i] = p.k_thrust * x[i]                 # torque about x-axis
-        alloc[2, i] = p.k_thrust * y[i]                 # torque about y-axis
+        alloc[0, i] = p.k_thrust                       # vertical force
+        alloc[1, i] = p.k_thrust * y[i]                 # torque about x-axis
+        alloc[2, i] = p.k_thrust * (-x[i])              # torque about y-axis
         alloc[3, i] = p.k_torque * params.clockwise[i]    # torque about z-axis
     alloc_inverse = np.linalg.pinv(alloc)
     return alloc, alloc_inverse

@@ -78,18 +78,18 @@ def apply_forces_torques(
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
     # Store state variables in a readable format
-    ub = x[0]       # linear velocity along body-frame-x-axis
-    vb = x[1]       # linear velocity along body-frame-y-axis
-    wb = x[2]       # linear velocity along body-frame-z-axis (down is positive)
-    p = x[3]        # body-frame-x-axis rotation rate
-    q = x[4]        # body-frame-y-axis rotation rate
-    r = x[5]        # body-frame-z-axis rotation rate
+    xI = x[0]       # Inertial frame positions
+    yI = x[1]
+    zI = x[2]
+    ub = x[3]       # linear velocity along body-frame-x-axis
+    vb = x[4]       # linear velocity along body-frame-y-axis
+    wb = x[5]       # linear velocity along body-frame-z-axis (down is positive)
     phi = x[6]      # Roll
     theta = x[7]    # Pitch
     psi = x[8]      # Yaw
-    xI = x[9]       # Inertial frame positions
-    yI = x[10]
-    zI = x[11]      # In inertial frame, down is positive z
+    p = x[9]        # body-frame-x-axis rotation rate
+    q = x[10]        # body-frame-y-axis rotation rate
+    r = x[11]        # body-frame-z-axis rotation rate
     
     # Pre-calculate trig values
     cphi = np.cos(phi);   sphi = np.sin(phi)    # roll
@@ -103,29 +103,26 @@ def apply_forces_torques(
     
     # Calculate the derivative of the state matrix using EOM
     xdot = np.zeros_like(x)
-    
-    xdot[0] = 1/mass * (fx) - g * sthe + r * vb - q * wb  # = udot
-    xdot[1] = 1/mass * (fy) + g * sphi * cthe - r * ub + p * wb # = vdot
-    xdot[2] = 1/mass * (fz) + g * cphi * cthe + q * ub - p * vb # = wdot
+    # Position
+    xdot[0] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
+        (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot
+        
+    xdot[1] = cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \
+        (-sphi*cpsi+cphi*sthe*spsi) * wb # = yIdot
+        
+    xdot[2] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
+    #  Velocity
+    xdot[3] = 1/mass * (fx) + g * sthe + r * vb - q * wb  # = udot
+    xdot[4] = 1/mass * (fy) - g * sphi * cthe - r * ub + p * wb # = vdot
+    xdot[5] = 1/mass * (fz) - g * cphi * cthe + q * ub - p * vb # = wdot
 
-
-    # xdot[3] = 1/I[0,0] * (tx + (I[1,1] - I[2,2]) * q * r)  # = pdot
-    # xdot[4] = 1/I[1,1] * (ty + (I[2,2] - I[0,0]) * p * r)  # = qdot
-    # xdot[5] = 1/I[2,2] * (tz + (I[0,0] - I[1,1]) * p * q)  # = rdot
-    # print(I.shape, x[3:6].shape, (I @ x[3:6]).shape)
-    gyro = np.cross(x[3:6], I @ x[3:6])
-    xdot[3:6] = I_inv @ (torques - gyro) # TODO: verify whether it is + or - gyro
-
+    # Orientation
     xdot[6] = p + (q*sphi + r*cphi) * sthe / cthe  # = phidot
     xdot[7] = q * cphi - r * sphi  # = thetadot
     xdot[8] = (q * sphi + r * cphi) / cthe  # = psidot
-    
-    xdot[9] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
-        (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot
-        
-    xdot[10] = cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \
-        (-sphi*cpsi+cphi*sthe*spsi) * wb # = yIdot
-        
-    xdot[11] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
+
+    # Angular rate
+    gyro = np.cross(x[9:12], I @ x[9:12])
+    xdot[9:12] = I_inv @ (torques - gyro) # TODO: verify whether it is + or - gyro
     
     return xdot
