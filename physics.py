@@ -83,13 +83,13 @@ def apply_forces_torques(
     zI = x[2]
     ub = x[3]       # linear velocity along body-frame-x-axis
     vb = x[4]       # linear velocity along body-frame-y-axis
-    wb = x[5]       # linear velocity along body-frame-z-axis (down is positive)
+    wb = x[5]       # linear velocity along body-frame-z-axis
     phi = x[6]      # Roll
     theta = x[7]    # Pitch
     psi = x[8]      # Yaw
     p = x[9]        # body-frame-x-axis rotation rate
-    q = x[10]        # body-frame-y-axis rotation rate
-    r = x[11]        # body-frame-z-axis rotation rate
+    q = x[10]       # body-frame-y-axis rotation rate
+    r = x[11]       # body-frame-z-axis rotation rate
     
     # Pre-calculate trig values
     cphi = np.cos(phi);   sphi = np.sin(phi)    # roll
@@ -123,6 +123,6 @@ def apply_forces_torques(
 
     # Angular rate
     gyro = np.cross(x[9:12], I @ x[9:12])
-    xdot[9:12] = I_inv @ (torques - gyro) # TODO: verify whether it is + or - gyro
+    xdot[9:12] = I_inv @ (torques - gyro)
     
     return xdot

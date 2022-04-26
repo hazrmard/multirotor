@@ -11,9 +11,9 @@ from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Line3D
 
-from coords import body_to_inertial, direction_cosine_matrix
-from helpers import vehicle_params_factory
-from simulation import Multirotor
+from .coords import body_to_inertial, direction_cosine_matrix
+from .helpers import vehicle_params_factory
+from .simulation import Multirotor
 
 
 

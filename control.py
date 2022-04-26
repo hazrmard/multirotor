@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from simulation import Multirotor
+from .simulation import Multirotor
 
 
 

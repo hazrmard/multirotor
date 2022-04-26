@@ -8,6 +8,15 @@ import numpy as np
 @dataclass
 class MotorParams:
 
+    r: float
+    "Motor resistance"
+    moment_of_inertia: float
+    "Moment of inertia about rotational axis"
+    d_f: float
+    "Viscous damping coefficient"
+    static_friction: float
+    
+
     # See: http://learningrc.com/motor-kv/, http://web.mit.edu/first/scooter/motormath.pdf
     k_m: float
     "Motor constant, where omega = k_m * back_emf, and k_m = 1/k_e"

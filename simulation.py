@@ -4,10 +4,10 @@ import numpy as np
 from numpy import (cos, sin)
 from scipy.integrate import odeint
 
-from vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams
-from coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
-from physics import thrust, torque, apply_forces_torques
-from helpers import control_allocation_matrix
+from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams
+from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
+from .physics import thrust, torque, apply_forces_torques
+from .helpers import control_allocation_matrix
 
 
 

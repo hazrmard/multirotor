@@ -3,7 +3,7 @@ from typing import Callable, Iterable, Tuple
 import numpy as np
 from scipy.optimize import fsolve
 
-from vehicle import PropellerParams, VehicleParams
+from .vehicle import PropellerParams, VehicleParams
 
 
 
