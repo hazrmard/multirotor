@@ -19,7 +19,7 @@ def moment_of_inertia_tensor_from_cooords(
     Ixy = Iyx = -np.sum(x * y * masses)
     Iyz = Izy = -np.sum(y * z * masses)
     Ixz = Izx = -np.sum(x * z * masses)
-    return np.asmatrix([
+    return np.asarray([
         [Ixx, Ixy, Ixz],
         [Iyx, Iyy, Iyz],
         [Izx, Izy, Izz]
@@ -41,13 +41,13 @@ def vehicle_params_factory(
     I_prop = moment_of_inertia_tensor_from_cooords(masses, coords)
 
     if body_shape == 'point':
-        I_body = np.asmatrix(np.zeros((3,3)))
+        I_body = np.asarray(np.zeros((3,3)))
     elif body_shape == 'sphere_solid':
-        I_body = np.asmatrix(np.eye(3) * 0.4 * m_body * body_size**2)
+        I_body = np.asarray(np.eye(3) * 0.4 * m_body * body_size**2)
     elif body_shape == 'sphere_shell':
-        I_body = np.asmatrix(np.eye(3) * 2 * m_body * body_size**2 / 3)
+        I_body = np.asarray(np.eye(3) * 2 * m_body * body_size**2 / 3)
     elif body_shape == 'cube':
-        I_body = np.asmatrix(np.eye(3) * 2 * m_body * body_size**2 / 12)
+        I_body = np.asarray(np.eye(3) * 2 * m_body * body_size**2 / 12)
 
     I = I_body + I_prop
 
