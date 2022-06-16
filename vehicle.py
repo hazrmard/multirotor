@@ -100,7 +100,7 @@ class VehicleParams:
 @dataclass
 class SimulationParams:
 
-    dt: float = 1e-2
+    dt: float = 1e-3
     """Timestep of simulation"""
     g: float = 9.81
     """Gravitational acceleration"""

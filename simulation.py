@@ -1,4 +1,5 @@
 from typing import List, Tuple
+from copy import deepcopy
 
 import numpy as np
 from numpy import (cos, sin)
@@ -21,7 +22,7 @@ class Propeller:
         self, params: PropellerParams, simulation: SimulationParams,
         use_thrust_constant: bool=False
     ) -> None:
-        self.params: PropellerParams = params
+        self.params: PropellerParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
         self.speed: float = 0.
         "Radians per second"
@@ -107,7 +108,7 @@ class Motor:
     """
 
     def __init__(self, params: MotorParams, simulation: SimulationParams) -> None:
-        self.params = params
+        self.params = deepcopy(params)
         self.simulation = simulation
         self.speed: float = 0.
         "Radians per second"
@@ -125,7 +126,7 @@ class Motor:
 class Multirotor:
 
     def __init__(self, params: VehicleParams, simulation: SimulationParams) -> None:
-        self.params: VehicleParams = params
+        self.params: VehicleParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
         self.state: np.ndarray = None
         self.propellers: List[Propeller] = None
@@ -227,7 +228,20 @@ class Multirotor:
         return forces, torques
 
 
-    def dxdt(self, x: np.ndarray, t: float, u: np.ndarray):
+    def dxdt_dynamics(self, x: np.ndarray, t: float, u: np.ndarray):
+        # This method must not have any side-effects. It should not change the
+        # state of the vehicle. This method is called multiple times from the 
+        # same state by the odeint() function, and the results should be consistent.
+        # Do not need to get forces/torques on body, since the action array
+        # already is a 6d vector of forces/torques.
+        # forces, torques = self.get_forces_torques(u, x)
+        xdot = apply_forces_torques(
+            u[:3], u[3:], x, self.simulation.g,
+            self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
+        return np.around(xdot, 4)
+
+
+    def dxdt_speeds(self, x: np.ndarray, t: float, u: np.ndarray):
         # This method must not have any side-effects. It should not change the
         # state of the vehicle. This method is called multiple times from the 
         # same state by the odeint() function, and the results should be consistent.
@@ -235,16 +249,30 @@ class Multirotor:
         xdot = apply_forces_torques(
             forces, torques, x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return xdot
+        return np.around(xdot, 4)
 
 
-    def step(self, u: np.ndarray):
+    def step_dynamics(self, u: np.ndarray):
         self.t += self.simulation.dt
         # TODO: Explore RK45() or solve_ivp() functions from scipy.integrate?
         self.state = odeint(
-            self.dxdt, self.state, (0, self.simulation.dt), args=(u,),
-            rtol=1e-5, atol=1e-5
+            self.dxdt_dynamics, self.state, (0, self.simulation.dt), args=(u,),
+            rtol=1e-4, atol=1e-4
         )[-1]
+        self.state = np.around(self.state, 4)
+        for u_, prop in zip(u, self.propellers):
+            prop.step(u_)
+        return self.state
+
+
+    def step_speeds(self, u: np.ndarray):
+        self.t += self.simulation.dt
+        # TODO: Explore RK45() or solve_ivp() functions from scipy.integrate?
+        self.state = odeint(
+            self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
+            rtol=1e-4, atol=1e-4
+        )[-1]
+        self.state = np.around(self.state, 4)
         for u_, prop in zip(u, self.propellers):
             prop.step(u_)
         return self.state

@@ -151,6 +151,7 @@ class PosController(PIDController):
 
     vehicle: Multirotor
     max_tilt: float = np.pi / 15
+    max_velocity: float = 7.0
 
 
     def __post_init__(self):
@@ -177,8 +178,12 @@ class PosController(PIDController):
         # Using rotation matrix. For a positive yaw, the target x,y will appear
         # desired/reference change in x/y i.e. velocity
         ref_delta_xy = rot @ np.asarray([delta_x, delta_y])
+        # TODO: Explicitly track velocity, instead of deltas
+        # ref_vel_xy = ref_delta_xy / self.vehicle.simulation.dt
+        # abs_max_vel = np.abs((ref_vel_xy / (np.linalg.norm(ref_vel_xy) + 1e-6)) * self.max_velocity)
+        # ref_vel_xy = np.clip(ref_vel_xy, a_min=-abs_max_vel, a_max=abs_max_vel)
         # actual/measured velocity
-        mea_delta_xy = self.vehicle.velocity[:2]
+        mea_delta_xy = mea_vel_xy = self.vehicle.velocity[:2]
         # desired pitch, roll
         ctrl = super().step(reference=ref_delta_xy, measurement=mea_delta_xy)
         # ctrl[0] -> x dir -> pitch -> forward
