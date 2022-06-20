@@ -81,9 +81,9 @@ def apply_forces_torques(
     xI = x[0]       # Inertial frame positions
     yI = x[1]
     zI = x[2]
-    ub = x[3]       # linear velocity along body-frame-x-axis
-    vb = x[4]       # linear velocity along body-frame-y-axis
-    wb = x[5]       # linear velocity along body-frame-z-axis
+    ub = x[3]       # linear velocity along body-frame-x-axis b1
+    vb = x[4]       # linear velocity along body-frame-y-axis b2
+    wb = x[5]       # linear velocity along body-frame-z-axis b3
     phi = x[6]      # Roll
     theta = x[7]    # Pitch
     psi = x[8]      # Yaw
@@ -96,25 +96,27 @@ def apply_forces_torques(
     cthe = np.cos(theta); sthe = np.sin(theta)  # pitch
     cpsi = np.cos(psi);   spsi = np.sin(psi)    # yaw
 
-    fx, fy, fz = forces
-    tx, ty, tz = torques
+    f1, f2, f3 = forces # in the body frame (b1, b2, b3)
+    t1, t2, t3 = torques
     I = inertia_matrix
     I_inv = inertia_matrix_inverse
     
     # Calculate the derivative of the state matrix using EOM
     xdot = np.zeros_like(x)
-    # Position
+
+    # velocity = dPosition (inertial) / dt (convert body velocity to inertial)
+    # Essentially = Rotation matrix (body to inertial) x body velocity
     xdot[0] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
-        (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot
-        
+        (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot 
     xdot[1] = cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \
-        (-sphi*cpsi+cphi*sthe*spsi) * wb # = yIdot
-        
+        (-sphi*cpsi+cphi*sthe*spsi) * wb # = yIdot 
     xdot[2] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
-    #  Velocity
-    xdot[3] = 1/mass * (fx) + g * sthe + r * vb - q * wb  # = udot
-    xdot[4] = 1/mass * (fy) - g * sphi * cthe - r * ub + p * wb # = vdot
-    xdot[5] = 1/mass * (fz) - g * cphi * cthe + q * ub - p * vb # = wdot
+
+    #  Acceleration = dVelocity (body frame) / dt
+    #           External forces     Gravity             Coriolis effect
+    xdot[3] = 1/mass * (f1)     + g * sthe          + r * vb - q * wb  # = udot
+    xdot[4] = 1/mass * (f2)     - g * sphi * cthe   - r * ub + p * wb # = vdot
+    xdot[5] = 1/mass * (f3)     - g * cphi * cthe   + q * ub - p * vb # = wdot
 
     # Orientation
     xdot[6] = p + (q*sphi + r*cphi) * sthe / cthe  # = phidot
