@@ -39,9 +39,6 @@ class PIDController:
         return self.k_p * self.err_p + self.k_i * self.err_i + self.k_d * self.err_d
 
 
-# Altitude control
-# Position Control (x,y) -> theta, phi
-#   Attitude Control (phi, theta, psi) -> delta phi, delta theta, delta psi
 
 @dataclass
 class PosController(PIDController):
