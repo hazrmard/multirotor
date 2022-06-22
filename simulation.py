@@ -1,11 +1,11 @@
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 from copy import deepcopy
 
 import numpy as np
 from numpy import (cos, sin)
-from scipy.integrate import odeint
+from scipy.integrate import odeint, trapezoid
 
-from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams
+from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams, BatteryParams
 from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from .physics import thrust, torque, apply_forces_torques
 from .helpers import control_allocation_matrix
@@ -29,27 +29,30 @@ class Propeller:
         self.use_thrust_constant = use_thrust_constant
 
         if use_thrust_constant:
-            self.thrust = self._thrust_constant
+            self.thrust: Callable = self._thrust_constant
         else:
-            self.thrust = self._thrust_physics
+            self.thrust: Callable = self._thrust_physics
+        
+        if params.motor is not None:
+            self.motor = Motor(params.motor, self.simulation)
+        else:
+            self.motor: Motor = None
 
 
     def reset(self):
         self.speed = 0.
+        if self.motor is not None:
+            self.motor.reset()
 
 
-    def step(self, u: float) -> float:
-        return self.apply_speed(u)
-
-
-    def apply_speed(self, speed: float) -> float:
+    def apply_speed(self, u: float) -> float:
         """
         Calculate the actual speed of the propeller after the speed signal is
         given. This method is *pure* and does not change the state of the propeller.
 
         Parameters
         ----------
-        speed : float
+        u : float
             Radians per second speed command
 
         Returns
@@ -57,17 +60,19 @@ class Propeller:
         float
             The actual speed
         """
-        return speed
+        if self.motor is not None:
+            return self.motor.apply_speed(u)
+        return u
 
 
-    def step(self, speed: float) -> float:
+    def step(self, u: float) -> float:
         """
         Step through the speed command. This method changes the state of the 
         propeller.
 
         Parameters
         ----------
-        speed : float
+        u : float
             Speed command in radians per second.
 
         Returns
@@ -75,7 +80,11 @@ class Propeller:
         float
             The actual speed achieved.
         """
-        self.speed = speed
+        if self.motor is not None:
+            self.speed = self.motor.step(u)
+        else:
+            self.speed = u
+        return self.speed
 
 
     def _thrust_constant(self, speed,airstream_velocity: np.ndarray=np.zeros(3)) -> float:
@@ -112,13 +121,56 @@ class Motor:
         self.simulation = simulation
         self.speed: float = 0.
         "Radians per second"
+        self._net_torques = np.zeros(2)
 
 
     def reset(self) -> float:
         self.speed = 0.
+        self.voltage = 0.
+        self.current = 0.
+        self._net_torques *= 0
+
+
+    def apply_speed(self, u: float) -> float:
+        voltage = self.params.speed_voltage_scaling * u
+        current = (voltage - self.speed * self.params.k_emf) / self.params.resistance
+        torque = self.params.k_torque * current
+        # Subtract drag torque and dynamic friction from electrical torque
+        net_torque = torque - \
+                     self.params.k_df * self.speed - \
+                     self.params.k_drag * self.speed**2
+        self._net_torques[0] = self._net_torques[1]
+        self._net_torques[1] = net_torque
+        return self.speed + \
+        trapezoid(
+            self._net_torques / self.params.moment_of_inertia,
+            dx=self.simulation.dt
+        )
 
 
     def step(self, u: float) -> float:
+        self.voltage = self.params.speed_voltage_scaling * u
+        self.current = (self.voltage - self.speed * self.params.k_emf) / self.params.resistance
+        self.speed = self.apply_speed(u)
+        return self.speed
+
+
+
+class Battery:
+    """
+    Models the state of charge of the battery of the Multirotor.
+    """
+
+    def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
+        self.params = deepcopy(params)
+        self.simulation = simulation
+
+
+    def reset(self):
+        pass
+
+
+    def step(self):
         pass
 
 
@@ -220,7 +272,7 @@ class Multirotor:
             torque_vec[:, i] = torque(
                 self.propeller_vectors[:,i], thrust_vec[:,i],
                 prop.params.moment_of_inertia, angular_acc,
-                prop.params.k_torque, speed,
+                prop.params.k_drag, speed,
                 clockwise
             )
         forces = thrust_vec.sum(axis=1)
@@ -254,20 +306,17 @@ class Multirotor:
 
     def step_dynamics(self, u: np.ndarray):
         self.t += self.simulation.dt
-        # TODO: Explore RK45() or solve_ivp() functions from scipy.integrate?
         self.state = odeint(
             self.dxdt_dynamics, self.state, (0, self.simulation.dt), args=(u,),
             rtol=1e-4, atol=1e-4
         )[-1]
         self.state = np.around(self.state, 4)
-        for u_, prop in zip(u, self.propellers):
-            prop.step(u_)
+        # TODO: inverse solve for speed = forces to set propeller speeds
         return self.state
 
 
     def step_speeds(self, u: np.ndarray):
         self.t += self.simulation.dt
-        # TODO: Explore RK45() or solve_ivp() functions from scipy.integrate?
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
             rtol=1e-4, atol=1e-4

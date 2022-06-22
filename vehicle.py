@@ -8,22 +8,32 @@ import numpy as np
 @dataclass
 class MotorParams:
 
-    r: float
-    "Motor resistance"
-    moment_of_inertia: float
-    "Moment of inertia about rotational axis"
-    d_f: float
-    "Viscous damping coefficient"
-    static_friction: float
-    
-
-    # See: http://learningrc.com/motor-kv/, http://web.mit.edu/first/scooter/motormath.pdf
-    k_m: float
-    "Motor constant, where omega = k_m * back_emf, and k_m = 1/k_e"
-    k_e: float = None
-    "Back-EMF constant, relates motor speed induced voltage, back_emf = k_e * omega"
-    k_q: float = None
+    resistance: float
+    "Motor resistance r. Current = (voltage - back_emf) / resistance"
+     # See: http://learningrc.com/motor-kv/, http://web.mit.edu/first/scooter/motormath.pdf
+    k_motor: float = None
+    "Motor constant k_m, where speed = k_m * back_emf, and k_m = 1/k_e"
+    k_emf: float = None
+    "Back-EMF constant k_e, relates motor speed induced voltage, back_emf = k_e * omega"
+    k_torque: float = None
     "Torque constant k_q, where torque Q = k_q * current. Equal to k_e"
+    k_drag: float = None
+    "Aerodynamic drag coefficient, where torque = k_drag * omega^2"
+    moment_of_inertia: float = 0.
+    "Moment of inertia about rotational axis"
+    k_df: float = 0.
+    "Viscous damping coefficient. Torque = d_f * speed"
+    static_friction: float = 0.
+    speed_voltage_scaling: float = 1.
+    """Scaling constant to convert speed signal (rad/s) into speed controller voltage (V).
+    If 1, means input action is same as Voltage"""
+
+
+    def __post_init__(self):
+        # See: https://www.motioncontroltips.com/faq-difference-between-torque-back-emf-motor-constant/
+        # For an ideal square-wave motor, torque and back-emf constants are same
+        self.k_torque = self.k_torque or self.k_emf
+        self.k_emf = self.k_emf or self.k_torque
 
 
 @dataclass
@@ -48,8 +58,8 @@ class PropellerParams:
 
     k_thrust: float = None
     "Propeller's aerodynamic thrust coefficient, where thrust =  k_thrust * angular velocity^2"
-    k_torque: float = None
-    "Torque constant, where torque = k_torque * angular velocity^2"
+    k_drag: float = None
+    "Torque constant or drag coefficient, where torque = k_drag * angular velocity^2"
 
     motor: MotorParams = None
     "The parameters of the motor to simulate speed, otherwise instantaneous."
@@ -66,6 +76,8 @@ class PropellerParams:
         "Pitch angle at root of blade"
         self.theta1 = -4 / 3 * np.arctan2(self.pitch, 2 * np.pi * 3/4 * self.diameter/2)
         "Change in pitch angle towards tip of blade"
+        if self.motor is not None:
+            self.motor.k_drag = self.k_drag
         # Pitch angel is reduced to allow for even lift as blade velocity increases
         # with increasing radius. Assuming linear reduction from root to tip.
 
@@ -106,3 +118,11 @@ class SimulationParams:
     """Gravitational acceleration"""
     rho: float = 1.225
     "Air density kg/m^3 at MSL"
+
+
+
+@dataclass
+class BatteryParams:
+
+    max_voltage: float = 20
+    "Maximum voltage of the battery"

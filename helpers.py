@@ -81,6 +81,17 @@ def learn_thrust_coefficient(
 
 
 
+def learn_speed_voltage_scaling(
+    speed_fn: Callable[[float], float], domain: Tuple=(0,20)
+) -> float:
+    signals = np.linspace(domain[0], domain[1], num=10)
+    speeds = np.zeros_like(signals)
+    for i, signal in enumerate(signals):
+        speeds[i] = speed_fn(signal)
+    return np.polyfit(signals, speeds, 1)[0]
+
+
+
 def moment_of_inertia_disk(m: float, r: float) -> float:
     return 0.5 * m * r**2
 
@@ -94,6 +105,6 @@ def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.nda
         alloc[0, i] = p.k_thrust                       # vertical force
         alloc[1, i] = p.k_thrust * y[i]                 # torque about x-axis
         alloc[2, i] = p.k_thrust * (-x[i])              # torque about y-axis
-        alloc[3, i] = p.k_torque * params.clockwise[i]    # torque about z-axis
+        alloc[3, i] = p.k_drag * params.clockwise[i]    # torque about z-axis
     alloc_inverse = np.linalg.pinv(alloc)
     return alloc, alloc_inverse
