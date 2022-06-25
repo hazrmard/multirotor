@@ -121,37 +121,44 @@ class Motor:
         self.simulation = simulation
         self.speed: float = 0.
         "Radians per second"
-        self._net_torques = np.zeros(2)
+        self.voltage = 0.
+        self.current = 0.
+        self._last_angular_acc = 0.
 
 
     def reset(self) -> float:
         self.speed = 0.
         self.voltage = 0.
         self.current = 0.
-        self._net_torques *= 0
+        self._last_angular_acc = 0.
 
 
     def apply_speed(self, u: float) -> float:
-        voltage = self.params.speed_voltage_scaling * u
-        current = (voltage - self.speed * self.params.k_emf) / self.params.resistance
-        torque = self.params.k_torque * current
-        # Subtract drag torque and dynamic friction from electrical torque
-        net_torque = torque - \
-                     self.params.k_df * self.speed - \
-                     self.params.k_drag * self.speed**2
-        self._net_torques[0] = self._net_torques[1]
-        self._net_torques[1] = net_torque
-        return self.speed + \
-        trapezoid(
-            self._net_torques / self.params.moment_of_inertia,
-            dx=self.simulation.dt
-        )
+        voltage, current, last_acc = self.voltage, self.current, self._last_angular_acc
+        last_speed = self.speed
+        speed = self.step(u)
+        self.voltage = voltage
+        self.current = current
+        self._last_angular_acc = last_acc
+        self.speed = last_speed
+        return speed
 
 
     def step(self, u: float) -> float:
         self.voltage = self.params.speed_voltage_scaling * u
         self.current = (self.voltage - self.speed * self.params.k_emf) / self.params.resistance
-        self.speed = self.apply_speed(u)
+        torque = self.params.k_torque * self.current
+        # Subtract drag torque and dynamic friction from electrical torque
+        net_torque = torque - \
+                     self.params.k_df * self.speed - \
+                     self.params.k_drag * self.speed**2
+        accs = (self._last_angular_acc, net_torque / self.params.moment_of_inertia)
+        self.speed += \
+        trapezoid(
+            accs,
+            dx=self.simulation.dt
+        )
+        self._last_angular_acc = accs[1]
         return self.speed
 
 
@@ -290,7 +297,10 @@ class Multirotor:
         xdot = apply_forces_torques(
             u[:3], u[3:], x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, 4)
+        # print('Force z: %.2f' % u[2])
+        # print('Expected Acc: %.2f' % ((u[2] - self.weight) / self.simulation.g))
+        # print('Acc z: %.2f' % xdot[5])
+        return np.around(xdot, 3)
 
 
     def dxdt_speeds(self, x: np.ndarray, t: float, u: np.ndarray):
@@ -301,7 +311,7 @@ class Multirotor:
         xdot = apply_forces_torques(
             forces, torques, x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, 4)
+        return np.around(xdot, 3)
 
 
     def step_dynamics(self, u: np.ndarray):
