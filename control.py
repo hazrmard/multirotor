@@ -61,10 +61,22 @@ class PIDController:
 
 @dataclass
 class PosController(PIDController):
+    """
+    Position controller. Takes reference x/y position and outputs reference 
+    pitch and roll angles for x and y motion, respectively.
+
+    Uses vector from current to reference position as an approximation of 
+    reference velocity. Compares against measured velocity. The deficit is used
+    to change pitch and roll angles to increase and decrease velocity.
+
+    Able to limit maximum velocity and tilt angles when tracking reference waypoints.
+    """
 
     vehicle: Multirotor
     max_tilt: float = np.pi / 15
+    "Maximum tilt angle in radians"
     max_velocity: float = 1.0
+    "Maximum velocity in m/s"
 
 
 
@@ -104,6 +116,14 @@ class PosController(PIDController):
 
 @dataclass
 class AttController(PIDController):
+    """
+    Attitude controller. Tracks reference roll, pitch, yaw angles and outputs
+    the necessary moments about each x,y,z axes to achieve them.
+
+    Uses change in orientation from measured to reference as approximate reference
+    angular rate. Compares against measured angular rate. Outputs required change
+    in angular rate (angular acceleration) as moments.
+    """
 
     vehicle: Multirotor
 
@@ -129,6 +149,13 @@ class AttController(PIDController):
 
 @dataclass
 class AltController(PIDController):
+    """
+    Altitude Controller. Tracks z-position and outputs thrust force needed.
+
+    Uses change in z-position as approximate vertical velocity. Compares against
+    measured velocity. Outputs the change in velocity (acceleration) as thrust force,
+    given orientation of vehicle.
+    """
 
     vehicle: Multirotor
 
@@ -137,7 +164,7 @@ class AltController(PIDController):
             # desired change in z i.e. velocity
             ref_delta_z = reference - measurement
             # actual change in z
-            mea_delta_z = self.vehicle.velocity[2]
+            mea_delta_z = self.vehicle.world_velocity[2]
             # change in delta_z i.e. change in velocity i.e. acceleration
             ctrl = super().step(reference=ref_delta_z, measurement=mea_delta_z)
             # change in z-velocity i.e. acceleration
@@ -150,6 +177,13 @@ class AltController(PIDController):
 
 
 class Controller:
+    """
+    The cascaded PID controller. Tracks position and yaw, and outputs thrust and
+    moments needed.
+
+        (x,y) --> Position Ctrl --> (Angles) --> Attitude Ctrl --> (Moments)
+        (z)   --> Attitude Ctrl --> (Forces)
+    """
 
     def __init__(self, ctrl_p: PosController, ctrl_a: AttController, ctrl_z: AltController):
         self.ctrl_p = ctrl_p
