@@ -64,7 +64,8 @@ class PosController(PIDController):
 
     vehicle: Multirotor
     max_tilt: float = np.pi / 15
-    max_velocity: float = 7.0
+    max_velocity: float = 1.0
+
 
 
     def __post_init__(self):
@@ -92,7 +93,7 @@ class PosController(PIDController):
         # actual/measured velocity
         mea_delta_xy = mea_vel_xy = self.vehicle.velocity[:2]
         # desired pitch, roll
-        ctrl = super().step(reference=ref_delta_xy, measurement=mea_delta_xy)
+        ctrl = super().step(reference=ref_vel_xy, measurement=mea_delta_xy)
         # ctrl[0] -> x dir -> pitch -> forward
         # ctrl[1] -> y dir -> roll -> lateral
         ctrl[0:2] = np.clip(ctrl[0:2], a_min=-self.max_tilt, a_max=self.max_tilt)
@@ -125,6 +126,7 @@ class AttController(PIDController):
         return self.vehicle.params.inertia_matrix.dot(ctrl)
 
 
+
 @dataclass
 class AltController(PIDController):
 
@@ -144,6 +146,7 @@ class AltController(PIDController):
                 ) + \
                 self.vehicle.weight
             return ctrl # thrust force
+
 
 
 class Controller:

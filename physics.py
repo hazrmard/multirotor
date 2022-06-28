@@ -4,6 +4,8 @@ import numpy as np
 from numba import njit
 from scipy.optimize import fsolve
 
+from .coords import body_to_inertial, direction_cosine_matrix
+
 
 
 @njit
@@ -106,6 +108,8 @@ def apply_forces_torques(
 
     # velocity = dPosition (inertial) / dt (convert body velocity to inertial)
     # Essentially = Rotation matrix (body to inertial) x body velocity
+    # dcm = direction_cosine_matrix(roll=phi, pitch=theta, yaw=psi)
+    # xdot[0:3] = body_to_inertial(x[3:6], dcm)
     xdot[0] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
         (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot 
     xdot[1] = cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \

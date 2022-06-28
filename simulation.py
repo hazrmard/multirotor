@@ -19,16 +19,14 @@ class Propeller:
     """
 
     def __init__(
-        self, params: PropellerParams, simulation: SimulationParams,
-        use_thrust_constant: bool=False
+        self, params: PropellerParams, simulation: SimulationParams
     ) -> None:
         self.params: PropellerParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
         self.speed: float = 0.
         "Radians per second"
-        self.use_thrust_constant = use_thrust_constant
 
-        if use_thrust_constant:
+        if self.params.use_thrust_constant:
             self.thrust: Callable = self._thrust_constant
         else:
             self.thrust: Callable = self._thrust_physics

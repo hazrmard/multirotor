@@ -58,8 +58,8 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
             speeds = self.vehicle.allocate_control(action[0], action[3:6])
             forces, torques = self.vehicle.get_forces_torques(speeds, self.vehicle.state)
             action = np.concatenate(forces, torques)
-        state = self.vehicle.step_dynamics(u=action)
-        return state, None, None, None
+        self.state = self.vehicle.step_dynamics(u=action)
+        return self.state, None, None, None
 
 
 
@@ -78,5 +78,5 @@ class SpeedsMultirotorEnv(gym.Env):
 
 
     def step(self, action: np.ndarray):
-        state = self.vehicle.step_speeds(u=action)
-        return state, None, None, None
+        self.state = self.vehicle.step_speeds(u=action)
+        return self.state, None, None, None

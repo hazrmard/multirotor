@@ -55,7 +55,8 @@ class PropellerParams:
     "Mean chord length (m) of the propeller blade"
     eta: float = 1.
     "Propeller efficiency"
-
+    use_thrust_constant: bool = True
+    "Use k_thrust instead of propeller geometry for thrust calculations."
     k_thrust: float = None
     "Propeller's aerodynamic thrust coefficient, where thrust =  k_thrust * angular velocity^2"
     k_drag: float = None
@@ -76,6 +77,8 @@ class PropellerParams:
         "Pitch angle at root of blade"
         self.theta1 = -4 / 3 * np.arctan2(self.pitch, 2 * np.pi * 3/4 * self.diameter/2)
         "Change in pitch angle towards tip of blade"
+        if self.use_thrust_constant and self.k_thrust is None:
+            raise ValueError('"k_thrust" is None, even though "use_thrust_constant=True"')
         if self.motor is not None:
             self.motor.k_drag = self.k_drag
         # Pitch angel is reduced to allow for even lift as blade velocity increases
