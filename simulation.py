@@ -26,11 +26,13 @@ class Propeller:
         self.speed: float = 0.
         "Radians per second"
 
+        # Thrust constant uses a simpler quardatic relationship to calculate
+        # propeller thrust.
         if self.params.use_thrust_constant:
             self.thrust: Callable = self._thrust_constant
         else:
             self.thrust: Callable = self._thrust_physics
-        
+        # If not motor is provided, then speed signals take effect instantaneously
         if params.motor is not None:
             self.motor = Motor(params.motor, self.simulation)
         else:
@@ -47,6 +49,7 @@ class Propeller:
         """
         Calculate the actual speed of the propeller after the speed signal is
         given. This method is *pure* and does not change the state of the propeller.
+        It is used by the multirotor's dxdt_* methods to calculate derivatives.
 
         Parameters
         ----------
@@ -132,6 +135,20 @@ class Motor:
 
 
     def apply_speed(self, u: float) -> float:
+        """
+        Apply a voltage speed signal to the motor. This method is pure and doesn't
+        change the state of the motor.
+
+        Parameters
+        ----------
+        u : float
+            Voltage signal.
+
+        Returns
+        -------
+        float
+            The speed of the motor (rad /s)
+        """
         voltage, current, last_acc = self.voltage, self.current, self._last_angular_acc
         last_speed = self.speed
         speed = self.step(u)
@@ -143,6 +160,20 @@ class Motor:
 
 
     def step(self, u: float) -> float:
+        """
+        Apply a voltage speed signal to the motor. This method changes the state
+        of the motor.
+
+        Parameters
+        ----------
+        u : float
+            Voltage signal.
+
+        Returns
+        -------
+        float
+            The speed of the motor (rad /s)
+        """
         self.voltage = self.params.speed_voltage_scaling * u
         self.current = (self.voltage - self.speed * self.params.k_emf) / self.params.resistance
         torque = self.params.k_torque * self.current
@@ -213,6 +244,7 @@ class Multirotor:
 
     @property
     def position(self):
+        """Position in the inertial frame."""
         return self.state[0:3]
 
 
@@ -224,6 +256,7 @@ class Multirotor:
 
     @property
     def world_velocity(self) -> np.ndarray:
+        """Velocity in the intertial frame."""
         dcm = direction_cosine_matrix(*self.orientation)
         v_inertial = body_to_inertial(self.velocity, dcm)
         return v_inertial
@@ -253,6 +286,22 @@ class Multirotor:
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Calculate the forces and torques acting on the vehicle's center of gravity
+        given its current state and speed of propellers.
+
+        Parameters
+        ----------
+        speeds : np.ndarray
+            Propeller speeds (rad/s)
+        state : np.ndarray
+            State of the vehicle (position, velocity, orientation, angular rate)
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            The forces and torques acting on the body.
+        """
         linear_vel_body = state[:3]
         angular_vel_body = state[3:6]
         airstream_velocity_inertial = rotating_frame_derivative(
@@ -286,6 +335,24 @@ class Multirotor:
 
 
     def dxdt_dynamics(self, x: np.ndarray, t: float, u: np.ndarray):
+        """
+        Calculate the rate of change of state given the dynamics (forces, torques)
+        acting on the system.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            State of the vehicle.
+        t : float
+            Time. Currently this function is time invariant.
+        u : np.ndarray
+            A 6-vector of forces and torques.
+
+        Returns
+        -------
+        np.ndarray
+            The rate of change of state.
+        """
         # This method must not have any side-effects. It should not change the
         # state of the vehicle. This method is called multiple times from the 
         # same state by the odeint() function, and the results should be consistent.
@@ -295,13 +362,28 @@ class Multirotor:
         xdot = apply_forces_torques(
             u[:3], u[3:], x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        # print('Force z: %.2f' % u[2])
-        # print('Expected Acc: %.2f' % ((u[2] - self.weight) / self.simulation.g))
-        # print('Acc z: %.2f' % xdot[5])
         return np.around(xdot, 3)
 
 
     def dxdt_speeds(self, x: np.ndarray, t: float, u: np.ndarray):
+        """
+        Calculate the rate of change of state given the propeller speeds on the
+        system (rad/s).
+
+        Parameters
+        ----------
+        x : np.ndarray
+            State of the vehicle.
+        t : float
+            Time. Currently this function is time invariant.
+        u : np.ndarray
+            A p-vector of propeller speeds (rad/s), where p=number of propellers.
+
+        Returns
+        -------
+        np.ndarray
+            The rate of change of state.
+        """
         # This method must not have any side-effects. It should not change the
         # state of the vehicle. This method is called multiple times from the 
         # same state by the odeint() function, and the results should be consistent.
@@ -336,6 +418,22 @@ class Multirotor:
 
 
     def allocate_control(self, thrust: float, torques: np.ndarray) -> np.ndarray:
+        """
+        Allocate control to propellers by converting presscribed forces and torqes
+        into propeller speeds. Uses the control allocation matrix.
+
+        Parameters
+        ----------
+        thrust : float
+            The thrust in the body z-direction.
+        torques : np.ndarray
+            The roll, pitch, yaw torques required about (x, y, z) axes.
+
+        Returns
+        -------
+        np.ndarray
+            The prescribed propeller speeds (rad /s)
+        """
         # TODO: njit it? np.linalg.lstsq can be compiled
         vec = np.asarray([thrust, *torques])
         # return np.sqrt(np.linalg.lstsq(self.alloc, vec, rcond=None)[0])

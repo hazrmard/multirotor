@@ -57,6 +57,32 @@ def torque(
     drag_coefficient: float, prop_angular_velocity: float,
     clockwise: int
 ) -> np.ndarray:
+    """
+    Calculates the torque acting on the three body axes (roll, pitch, yaw), due 
+    to a single propeller.
+
+    Parameters
+    ----------
+    position_vector : np.ndarray
+        Position vector of force, relative to center of mass.
+    force : np.ndarray
+        Force vector acting at that position (nominally thrust).
+    moment_of_inertia : float
+        Moment of inertia of the body.
+    prop_angular_acceleration : float
+        Angular acceleration experienced by propeller.
+    drag_coefficient : float
+        The drag coefficient of propeller.
+    prop_angular_velocity : float
+        Propeller speed (rad/s)
+    clockwise : int
+        Whether propeller is spinning clockwise or counter clockwise.
+
+    Returns
+    -------
+    np.ndarray
+        The torque due to the propeller acting on the center of mass.
+    """
     # TODO: See here
     # https://andrew.gibiansky.com/downloads/pdf/Quadcopter%20Dynamics,%20Simulation,%20and%20Control.pdf
     # Total moments in the body frame
@@ -79,6 +105,31 @@ def apply_forces_torques(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
+    """
+    Given forces and torqes, return the rate of change of state.
+
+    Parameters
+    ----------
+    forces : np.ndarray
+        Forces acting in the body frame.
+    torques : np.ndarray
+        Torques acting in the body frame.
+    x : np.ndarray
+        State of the vehicle.
+    g : float
+        Gravitational acceleration.
+    mass : float
+        Mass of the vehicle.
+    inertia_matrix : np.matrix
+        Inertial matrix.
+    inertia_matrix_inverse : np.matrix
+        Inverse of inertial matrix.
+
+    Returns
+    -------
+    np.ndarray
+        The rate of change of state d(state)/dt
+    """
     # Store state variables in a readable format
     xI = x[0]       # Inertial frame positions
     yI = x[1]
