@@ -9,7 +9,25 @@ from .vehicle import PropellerParams, VehicleParams
 
 def moment_of_inertia_tensor_from_cooords(
     point_masses: Iterable[float], coords: Iterable[np.ndarray]
-) -> np.matrix:
+) -> np.ndarray:
+    """
+    Calculate the inertial matrix given a distribution of point masses.
+
+    Parameters
+    ----------
+    point_masses : Iterable[float]
+        A list of masses.
+    coords : Iterable[np.ndarray]
+        The corresponding coordinates of those masses about the center of rotation.
+        Ideally, this would be the center of mass of the object.
+
+    Returns
+    -------
+    np.ndarray
+        The 3x3 inertial matrix.
+    """
+    # TODO: Conditionally calculate the center of mass and transform coordinates
+    # about it if a boolean option is provided.
     coords = np.asarray(coords)
     masses = np.asarray(point_masses)
     x,y,z = coords[:,0], coords[:,1], coords[:,2]
@@ -30,7 +48,33 @@ def moment_of_inertia_tensor_from_cooords(
 def vehicle_params_factory(
     n: int, m_prop: float, d_prop: float, params: PropellerParams,
     m_body: float, body_shape: str='sphere_solid', body_size: float=0.1
-):
+) -> VehicleParams:
+    """
+    Create a simple multirotor vehicle parameters object. The multirotor has
+    evenly spaced propellers and a simple core shape (shell, cube etc.)
+
+    Parameters
+    ----------
+    n : int
+        The number of arms/propellers.
+    m_prop : float
+        The mass of each propeller.
+    d_prop : float
+        The distance of each propeller from the center of the multirotor.
+    params : PropellerParams
+        The parameters describing a propeller.
+    m_body : float
+        The mass of the central body.
+    body_shape : str, optional
+        The shape of the core, by default 'sphere_solid'
+    body_size : float, optional
+        The dimension of the core (m), by default 0.1
+
+    Returns
+    -------
+    VehicleParams
+        The parameters object.
+    """
     angle_spacing = 2 * np.pi / n
     angles = np.arange(angle_spacing / 2, 2 * np.pi, angle_spacing)
     masses = [m_prop] * n
@@ -62,6 +106,21 @@ def vehicle_params_factory(
 
 
 def find_nominal_speed(thrust_fn: Callable[[float], float], weight: float) -> float:
+    """
+    Calculate the speed a propeller must spin to balance the weight.
+
+    Parameters
+    ----------
+    thrust_fn : Callable[[float], float]
+        A function taking the speed as input and outputting thrust (N).
+    weight : float
+        The weight to balance.
+
+    Returns
+    -------
+    float
+        The speed to balance the weight.
+    """
     def balance(speed: float) -> float:
         thrust = thrust_fn(speed)
         residual = thrust - weight
@@ -73,6 +132,24 @@ def find_nominal_speed(thrust_fn: Callable[[float], float], weight: float) -> fl
 def learn_thrust_coefficient(
     thrust_fn: Callable[[float], float], domain: Tuple=(1, 10000)
 ) -> float:
+    """
+    Assuming a quadratic relationship between thrust and propeller speed,
+    estimate the coefficient of proportionality k_thrust, where
+
+        thrust = k_thrust . speed^2
+
+    Parameters
+    ----------
+    thrust_fn : Callable[[float], float]
+        The function accepting speed and returning thrust.
+    domain : Tuple, optional
+        The range of speeds to try, by default (1, 10000)
+
+    Returns
+    -------
+    float
+        The thrust coefficient.
+    """
     speeds = np.linspace(domain[0], domain[1], num=250)
     thrust = np.zeros_like(speeds)
     for i, speed in enumerate(speeds):
@@ -84,6 +161,24 @@ def learn_thrust_coefficient(
 def learn_speed_voltage_scaling(
     speed_fn: Callable[[float], float], domain: Tuple=(0,20)
 ) -> float:
+    """
+    Assuming a linear relationship between voltage and motor speed, learn
+    the scaling coefficient, k_scaling, where:
+
+        
+
+    Parameters
+    ----------
+    speed_fn : Callable[[float], float]
+        A function accepting voltage and returning speed.
+    domain : Tuple, optional
+        The range of voltages to try to learn the coefficient, by default (0,20)
+
+    Returns
+    -------
+    float
+        The scaling coefficient.
+    """
     signals = np.linspace(domain[0], domain[1], num=10)
     speeds = np.zeros_like(signals)
     for i, signal in enumerate(signals):

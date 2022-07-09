@@ -32,6 +32,16 @@ class Trajectory:
     Iterate over waypoints for a multirotor. The trajectory class can segment a
     list of waypoints into smaller sections and feed them to the controller when
     the vehicle is within a radius of its current waypoint.
+
+    For example:
+        m = Multirotor(...)
+        traj = Trajectory(
+            points=[(0,0,0), (0,0,2), (10,0,2)],
+            vehicle=m, proximity=0.1, resolution=0.5)
+        for point in traj:
+            Each point is spaced `resolution` units apart in euclidean distance.
+            When m.position is within `proximity` of current point, the next
+            point in the trajectory is yielded.
     """
 
 

@@ -17,6 +17,8 @@ class PIDController:
         err = reference - measurement
 
         u = k_p * err + k_d * d(err)/dt + k_i * int(err . dt)
+    
+    Can control a single or an array of signals, given float or array PID constants.
     """
 
     k_p: np.ndarray
@@ -47,6 +49,22 @@ class PIDController:
 
 
     def step(self, reference: np.ndarray, measurement: np.ndarray) -> np.ndarray:
+        """
+        Calculate the output, based on the current measurement and the reference
+        signal.
+
+        Parameters
+        ----------
+        reference : np.ndarray
+            The reference signal(s) to track. Can be a number or an array.
+        measurement : np.ndarray
+            The actual measurement(s).
+
+        Returns
+        -------
+        np.ndarray
+            The action signal.
+        """
         err = reference - measurement
         self.err_p = err
         self.err_i = np.clip(
@@ -65,7 +83,7 @@ class PosController(PIDController):
     Position controller. Takes reference x/y position and outputs reference 
     pitch and roll angles for x and y motion, respectively.
 
-    Uses vector from current to reference position as an approximation of 
+    Uses vector from current-to-reference position as an approximation of 
     reference velocity. Compares against measured velocity. The deficit is used
     to change pitch and roll angles to increase and decrease velocity.
 

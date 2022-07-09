@@ -149,13 +149,15 @@ class Motor:
         float
             The speed of the motor (rad /s)
         """
-        voltage, current, last_acc = self.voltage, self.current, self._last_angular_acc
-        last_speed = self.speed
+        # This method simply calls step() but restores the state of the object
+        # afterwards, thus making it a "pure" function.
+        voltage, current, last_acc, last_speed = \
+            self.voltage, self.current, self._last_angular_acc, self.speed
+
         speed = self.step(u)
-        self.voltage = voltage
-        self.current = current
-        self._last_angular_acc = last_acc
-        self.speed = last_speed
+
+        self.voltage, self.current, self._last_angular_acc, self.speed = \
+            voltage, current, last_acc, last_speed
         return speed
 
 
@@ -196,6 +198,7 @@ class Battery:
     """
     Models the state of charge of the battery of the Multirotor.
     """
+    # TODO
 
     def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
         self.params = deepcopy(params)
@@ -212,8 +215,19 @@ class Battery:
 
 
 class Multirotor:
+    """
+    The multirotor class models dynamics and control allocation of a vehicle.
+    """
 
     def __init__(self, params: VehicleParams, simulation: SimulationParams) -> None:
+        """
+        Parameters
+        ----------
+        params : VehicleParams
+            The vehicle parameters. These completely describe the vehicle's properties.
+        simulation : SimulationParams
+            The simulation parameters.
+        """
         self.params: VehicleParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
         self.state: np.ndarray = None
@@ -226,7 +240,18 @@ class Multirotor:
         self.reset()
 
 
-    def reset(self):
+    def reset(self) -> np.ndarray:
+        """
+        Reset the state of the vehicle. This includes resetting each propeller
+        and re-calculating inertia and allocation matrices.
+
+        Can simulate dynamics with propellers with/out motors.
+
+        Returns
+        -------
+        np.ndarray
+            The state of the vehicle.
+        """
         self.t = 0.
         for p in self.propellers:
             p.reset()
@@ -394,7 +419,22 @@ class Multirotor:
         return np.around(xdot, 3)
 
 
-    def step_dynamics(self, u: np.ndarray):
+    def step_dynamics(self, u: np.ndarray) -> np.ndarray:
+        """
+        Given the 6-vector of x,y,z-forces and roll,pitch,yaw-torques, calculate
+        the next state of the vehicle.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The 6-vector, where the first 3 elements are forces (N) and the next 3
+            elements are the torques (Nm)
+
+        Returns
+        -------
+        np.ndarray
+            The new state of the vehicle.
+        """
         self.t += self.simulation.dt
         self.state = odeint(
             self.dxdt_dynamics, self.state, (0, self.simulation.dt), args=(u,),
@@ -405,7 +445,23 @@ class Multirotor:
         return self.state
 
 
-    def step_speeds(self, u: np.ndarray):
+    def step_speeds(self, u: np.ndarray) -> np.ndarray:
+        """
+        Given the n-vector of propeller speed signals, calculate
+        the next state of the vehicle. Where n is number of propellers.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals to be sent to each propeller's step() method. Can
+            be the actual speed (rad/s) or the voltage signal (V) if a motor
+            is used and MotorParams.speed_voltage_scaling constant is set.
+
+        Returns
+        -------
+        np.ndarray
+            The new state of the vehicle.
+        """
         self.t += self.simulation.dt
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
