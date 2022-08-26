@@ -34,6 +34,7 @@ class Trajectory:
     the vehicle is within a radius of its current waypoint.
 
     For example:
+
         m = Multirotor(...)
         traj = Trajectory(
             points=[(0,0,0), (0,0,2), (10,0,2)],
@@ -65,20 +66,11 @@ class Trajectory:
             provided. For e.g. resolution=2 and points=(0,0,0), (10,0,0) will
             create intermediate points a distance 2 apart.
         """
-        # TODO: loiter in trajectory
-        self.proximity = proximity
+        self.points = points
         self.vehicle = vehicle
-        self.points = np.asarray(points)
-        if resolution is not None:
-            points = []
-            for p1, p2 in zip(self.points[:-1], self.points[1:]):
-                dist = np.linalg.norm(p2 - p1)
-                num = int(dist / resolution) + 1
-                points.extend(np.linspace(p1, p2, num=num, endpoint=True))
-            self._points = points
-        else:
-            self._points = points
-
+        self.proximity = proximity
+        self.resolution = resolution
+        
 
     def __len__(self):
         return len(self._points)
@@ -89,12 +81,38 @@ class Trajectory:
 
 
     def __iter__(self):
+        self._points, self._durations = self.generate_trajectory(self.vehicle.position)
         if self.proximity is not None and self.vehicle is not None:
             for i in range(len(self)):
                 while np.linalg.norm((self.vehicle.position - self[i])) >= self.proximity:
-                    yield self[i]
+                        yield self[i]
+                for _ in range(self._durations[i] - 1):
+                        yield self[i]
         elif self.proximity is None:
             for i in range(len(self)):
-                yield self[i]
+                for _ in range(self._durations[i]):
+                        yield self[i]
         else:
             raise ValueError('Vehicle must be provided if a proximity value is given.')
+
+
+    def generate_trajectory(self, curr_pos=None):
+        if curr_pos is not None:
+            points = [curr_pos, *self.points]
+        durations = [1 if len(p)==3 else p[-1] for p in points]
+        points = np.asarray([p[:3] for p in points])
+        if self.resolution is not None:
+            _points = []
+            _durations = []
+            for i, (p1, p2) in enumerate(zip(points[:-1], points[1:])):
+                dist = np.linalg.norm(p2 - p1)
+                num = int(dist / self.resolution) + 1
+                _points.extend(np.linspace(p1, p2, num=num, endpoint=True))
+                dur = np.ones(num, dtype=int)
+                dur[0] = durations[i]
+                _durations.extend(dur)
+            _durations[-1] = durations[-1]
+        else:
+            _points = points
+            _durations = durations
+        return _points, _durations

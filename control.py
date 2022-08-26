@@ -37,6 +37,7 @@ class PIDController:
         self.err_i = np.zeros_like(self.k_i)
         self.err_d = np.zeros_like(self.k_d)
         self.err = np.zeros_like(self.k_p)
+        self.state = None
         if self.max_err_i is None:
             self.max_err_i = np.inf
 
@@ -46,6 +47,7 @@ class PIDController:
         self.err_p *= 0
         self.err_i *= 0
         self.err_d *= 0
+        self.state = None
 
 
     def step(self, reference: np.ndarray, measurement: np.ndarray) -> np.ndarray:
@@ -73,7 +75,8 @@ class PIDController:
         )
         self.err_d = (err - self.err) / self.dt
         self.err = err
-        return self.k_p * self.err_p + self.k_i * self.err_i + self.k_d * self.err_d
+        self.state = self.k_p * self.err_p + self.k_i * self.err_i + self.k_d * self.err_d
+        return self.state
 
 
 
@@ -91,7 +94,7 @@ class PosController(PIDController):
     """
 
     vehicle: Multirotor
-    max_tilt: float = np.pi / 15
+    max_tilt: float = np.pi / 18
     "Maximum tilt angle in radians"
     max_velocity: float = 1.0
     "Maximum velocity in m/s"
@@ -128,6 +131,7 @@ class PosController(PIDController):
         # ctrl[1] -> y dir -> roll -> lateral
         ctrl[0:2] = np.clip(ctrl[0:2], a_min=-self.max_tilt, a_max=self.max_tilt)
         ctrl[1] *= -1 # +y motion requires negative roll
+        self.state = ctrl
         return ctrl # desired pitch, roll
 
 
@@ -161,7 +165,8 @@ class AttController(PIDController):
         # prescribed change in velocity i.e. angular acceleration
         ctrl = super().step(reference=ref_delta, measurement=mea_delta)
         # torque = moment of inertia . angular_acceleration
-        return self.vehicle.params.inertia_matrix.dot(ctrl)
+        self.state = self.vehicle.params.inertia_matrix.dot(ctrl)
+        return self.state
 
 
 
@@ -190,6 +195,7 @@ class AltController(PIDController):
                     ctrl / (np.cos(roll) * np.cos(pitch))
                 ) + \
                 self.vehicle.weight
+            self.state = ctrl
             return ctrl # thrust force
 
 
@@ -207,12 +213,14 @@ class Controller:
         self.ctrl_p = ctrl_p
         self.ctrl_a = ctrl_a
         self.ctrl_z = ctrl_z
+        self.state = np.zeros(4)
         self.vehicle = self.ctrl_a.vehicle
         assert self.ctrl_a.vehicle is self.ctrl_p.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_z.vehicle, "Vehicle instances different."
 
 
     def reset(self):
+        self.state = np.zeros(4)
         self.ctrl_a.reset()
         self.ctrl_p.reset()
         self.ctrl_z.reset()
@@ -224,4 +232,5 @@ class Controller:
         ref_orientation = np.asarray([pitch_roll[1], pitch_roll[0], reference[3]])
         torques = self.ctrl_a.step(ref_orientation, self.vehicle.orientation)
         thrust = self.ctrl_z.step(reference[2], self.vehicle.position[2])
-        return np.asarray([thrust, *torques])
+        self.state = np.asarray([thrust, *torques])
+        return self.state

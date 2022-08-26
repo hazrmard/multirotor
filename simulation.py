@@ -234,6 +234,7 @@ class Multirotor:
         self.propellers: List[Propeller] = None
         self.propeller_vectors: np.ndarray = None
         self.t: float = 0.
+        self.dxdt_decimals = max(1, 1 - int(np.log10(self.simulation.dt)))
         self.propellers = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
@@ -359,17 +360,17 @@ class Multirotor:
         return forces, torques
 
 
-    def dxdt_dynamics(self, x: np.ndarray, t: float, u: np.ndarray):
+    def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray):
         """
         Calculate the rate of change of state given the dynamics (forces, torques)
         acting on the system.
 
         Parameters
         ----------
-        x : np.ndarray
-            State of the vehicle.
         t : float
             Time. Currently this function is time invariant.
+        x : np.ndarray
+            State of the vehicle.
         u : np.ndarray
             A 6-vector of forces and torques.
 
@@ -387,20 +388,20 @@ class Multirotor:
         xdot = apply_forces_torques(
             u[:3], u[3:], x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, 3)
+        return np.around(xdot, self.dxdt_decimals)
 
 
-    def dxdt_speeds(self, x: np.ndarray, t: float, u: np.ndarray):
+    def dxdt_speeds(self, t: float, x: np.ndarray, u: np.ndarray):
         """
         Calculate the rate of change of state given the propeller speeds on the
         system (rad/s).
 
         Parameters
         ----------
-        x : np.ndarray
-            State of the vehicle.
         t : float
             Time. Currently this function is time invariant.
+        x : np.ndarray
+            State of the vehicle.
         u : np.ndarray
             A p-vector of propeller speeds (rad/s), where p=number of propellers.
 
@@ -416,7 +417,7 @@ class Multirotor:
         xdot = apply_forces_torques(
             forces, torques, x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, 3)
+        return np.around(xdot, self.dxdt_decimals)
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -438,7 +439,7 @@ class Multirotor:
         self.t += self.simulation.dt
         self.state = odeint(
             self.dxdt_dynamics, self.state, (0, self.simulation.dt), args=(u,),
-            rtol=1e-4, atol=1e-4
+            rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
         self.state = np.around(self.state, 4)
         # TODO: inverse solve for speed = forces to set propeller speeds
@@ -465,7 +466,7 @@ class Multirotor:
         self.t += self.simulation.dt
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
-            rtol=1e-4, atol=1e-4
+            rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
         self.state = np.around(self.state, 4)
         for u_, prop in zip(u, self.propellers):
@@ -497,3 +498,28 @@ class Multirotor:
             np.clip(self.alloc_inverse @ vec, a_min=0., a_max=None)
         )
 
+
+    def nonlinear_dynamics_controls_system(self):
+        import control
+        sys = control.NonlinearIOSystem(
+            updfcn=self.dxdt_dynamics,
+            inputs=['fx','fy','fz','tx','ty','tz'],
+            outputs=['x','y','z',
+                    'vx','vy','vz',
+                    'roll','pitch','yaw',
+                    'xrate', 'yrate', 'zrate']
+        )
+        return sys
+    
+
+    def nonlinear_speeds_controls_system(self):
+        import control
+        sys = control.NonlinearIOSystem(
+            updfcn=self.dxdt_speeds,
+            inputs=['w%d' % i for i in range(len(self.propellers))],
+            outputs=['x','y','z',
+                    'vx','vy','vz',
+                    'roll','pitch','yaw',
+                    'xrate', 'yrate', 'zrate']
+        )
+        return sys

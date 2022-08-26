@@ -13,3 +13,19 @@ Please cite this as:
     organization={IEEE}
 }
 ```
+
+## Installation
+
+Install from the Python Package Index (PyPI):
+
+```
+pip install multirotor
+```
+
+Or, clone repository and install for development. This will allow you to change the code of the package so the changes show up when you `import multirotor` in other projects.
+
+```
+git clone https://github.com/hazrmard/multirotor.git
+cd multirotor
+pip install -e .
+```

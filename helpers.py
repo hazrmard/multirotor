@@ -193,6 +193,22 @@ def moment_of_inertia_disk(m: float, r: float) -> float:
 
 
 def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate the control allocation matrix such that:
+
+        action = matrix @ [thrust, torque_x, torque_y, torque_z]
+
+    Parameters
+    ----------
+    params : VehicleParams
+        The vehicle parameters for which to compute the matrix
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        The allocation matrix and its inverse. If no inverse exists, returns
+        the Moore-Penrose Pseudo-inverse.
+    """
     alloc = np.zeros((4, len(params.propellers))) #[Fz, Mx, My, Mz] x n-Propellers
     x = params.distances * np.cos(params.angles)
     y = params.distances * np.sin(params.angles)
@@ -203,3 +219,133 @@ def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.nda
         alloc[3, i] = p.k_drag * params.clockwise[i]    # torque about z-axis
     alloc_inverse = np.linalg.pinv(alloc)
     return alloc, alloc_inverse
+
+
+
+class DataLog:
+    """
+    Records state and action variables for a multirotor and controller for each
+    simulation step.
+    """
+    def __init__(
+        self, vehicle: 'Multirotor'=None, controller: 'Controller'=None,
+        *other_vars
+    ):
+        """
+        Parameters
+        ----------
+        vehicle : Multirotor, optional
+            The Multirotor to track, by default None
+        controller : Controller, optional
+            The controller instance to track, by default None
+        """
+        return self.track(vehicle, controller, *other_vars)
+
+
+    def track(self, vehicle, controller, *other_vars):
+        """
+        Register Multirotor and Controller instances to track, along with names
+        of any other variables to be manually added.
+
+        >>> DataLog.track(Multirotor(), Controller(), 'error')
+
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The vehicle to track.
+        controller : Controller
+            The controller to track.
+        """
+        self._states_names = ('x','y','z',
+                              'vx','vy','vz',
+                              'roll','pitch','yaw',
+                              'xrate', 'yrate', 'zrate')
+        self._action_names = ('thrust', 'torque_x', 'torque_y', 'torque_z')
+        self._arrayed = False
+        self._states = []
+        self.states = None
+        self._actions = []
+        self.actions = None
+        self._args = other_vars
+        for arg in self._args:
+            setattr(self, arg, None)
+            setattr(self, '_' + str(arg), [])
+        self.vehicle = vehicle
+        self.controller = controller
+
+        
+    def log(self, **kwargs):
+        """
+        Add the state and action variables from the Multirotor and Controller.
+        Any keyword arguments should already have been registered in `track()`
+        and their values are now appended to the list.
+
+        >>> DataLog.log(error=5)
+        """
+        self._arrayed = False
+        if self.vehicle is not None:
+            self._states.append(self.vehicle.state)
+        if self.controller is not None:
+            self._actions.append(self.controller.state)
+        for key, value in kwargs.items():
+            getattr(self, '_' + key).append(value)
+
+            
+    def done_logging(self):
+        """
+        Indicate that no more logs are goingto be put so the python lists are converted
+        to numpy arrays and discarded.
+        """
+        self._make_arrays()
+        self._states = []
+        self._actions = []
+        for arg in self._args:
+            setattr(self, '_' + arg, [])
+
+            
+    def _make_arrays(self):
+        """
+        Convert python list to array and put up a flag that all arrays are up
+        to date.
+        """
+        if not self._arrayed:
+            self.states = np.asarray(self._states)
+            self.actions = np.asarray(self._actions)
+            for arg in self._args:
+                setattr(self, arg, np.asarray(getattr(self, '_' + arg)))
+        self._arrayed = True
+
+        
+    @property
+    def position(self):
+        self._make_arrays()
+        return self.states[:, 0:3]
+    @property
+    def x(self):
+        return self.position[:, 0].reshape(-1)
+    @property
+    def y(self):
+        return self.position[:, 1].reshape(-1)
+    @property
+    def z(self):
+        return self.position[:, 2].reshape(-1)
+    @property
+    def velocity(self):
+        self._make_arrays()
+        return self.states[:, 3:6]
+    @property
+    def orientation(self):
+        self._make_arrays()
+        return self.states[:, 6:9]
+    @property
+    def angular_rate(self):
+        self._make_arrays()
+        return self.states[:, 9:12]
+    @property
+    def thrust(self):
+        self._make_arrays()
+        return self.actions[:, :1].reshape(-1)
+    @property
+    def torques(self):
+        self._make_arrays()
+        return self.actions[:, 1:4]
