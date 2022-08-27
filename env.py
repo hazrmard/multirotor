@@ -6,6 +6,7 @@ import numpy as np
 import gym
 
 from .simulation import Multirotor
+from .helpers import find_nominal_speed
 
 
 class BaseMultirotorEnv(gym.Env):
@@ -41,7 +42,7 @@ class BaseMultirotorEnv(gym.Env):
 class DynamicsMultirotorEnv(BaseMultirotorEnv):
 
 
-    def __init__(self, vehicle: Multirotor=None, allocate: bool=False) -> None:
+    def __init__(self, vehicle: Multirotor=None, allocate: bool=False, max_rads=None) -> None:
         super().__init__(vehicle=vehicle)
         
         self.action_space = gym.spaces.Box(
@@ -51,13 +52,15 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
             shape=(6,)  # 3 forces, 3 torques
         )
         self.allocate = allocate
+        self.max_rads = max_rads
 
 
     def step(self, action: np.ndarray):
         if self.allocate:
-            speeds = self.vehicle.allocate_control(action[0], action[3:6])
+            speeds = self.vehicle.allocate_control(action[2], action[3:6])
+            speeds = np.clip(speeds, a_min=0, a_max=self.max_rads)
             forces, torques = self.vehicle.get_forces_torques(speeds, self.vehicle.state)
-            action = np.concatenate(forces, torques)
+            action = np.concatenate((forces, torques))
         self.state = self.vehicle.step_dynamics(u=action)
         return self.state, None, None, None
 
@@ -66,7 +69,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
 class SpeedsMultirotorEnv(gym.Env):
 
 
-    def __init__(self, vehicle: Multirotor=None) -> None:
+    def __init__(self, vehicle: Multirotor=None, max_rads=None) -> None:
         super().__init__(vehicle=vehicle)
         
         self.action_space = gym.spaces.Box(
@@ -75,8 +78,10 @@ class SpeedsMultirotorEnv(gym.Env):
             dtype=np.float32,
             shape=(len(vehicle.propellers),)  # action for each propeller
         )
+        self.max_rads = max_rads
 
 
     def step(self, action: np.ndarray):
+        action = np.clip(action, a_min=0, a_max=self.max_rads)
         self.state = self.vehicle.step_speeds(u=action)
         return self.state, None, None, None

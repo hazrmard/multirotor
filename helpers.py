@@ -315,6 +315,13 @@ class DataLog:
                 setattr(self, arg, np.asarray(getattr(self, '_' + arg)))
         self._arrayed = True
 
+
+    def __len__(self):
+        if len(self._states)==0:
+            if self.states is not None:
+                return len(self.states)
+        return len(self._states)
+
         
     @property
     def position(self):
@@ -337,6 +344,15 @@ class DataLog:
     def orientation(self):
         self._make_arrays()
         return self.states[:, 6:9]
+    @property
+    def roll(self):
+        return self.orientation[:, 0].reshape(-1)
+    @property
+    def pitch(self):
+        return self.orientation[:, 1].reshape(-1)
+    @property
+    def yaw(self):
+        return self.orientation[:, 2].reshape(-1)
     @property
     def angular_rate(self):
         self._make_arrays()

@@ -4,8 +4,6 @@ import numpy as np
 from numba import njit
 from scipy.optimize import fsolve
 
-from .coords import body_to_inertial, direction_cosine_matrix
-
 
 
 @njit

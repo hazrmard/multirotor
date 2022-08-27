@@ -360,7 +360,7 @@ class Multirotor:
         return forces, torques
 
 
-    def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray):
+    def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray, params=None):
         """
         Calculate the rate of change of state given the dynamics (forces, torques)
         acting on the system.
@@ -391,7 +391,7 @@ class Multirotor:
         return np.around(xdot, self.dxdt_decimals)
 
 
-    def dxdt_speeds(self, t: float, x: np.ndarray, u: np.ndarray):
+    def dxdt_speeds(self, t: float, x: np.ndarray, u: np.ndarray, params=None):
         """
         Calculate the rate of change of state given the propeller speeds on the
         system (rad/s).
@@ -499,27 +499,81 @@ class Multirotor:
         )
 
 
-    def nonlinear_dynamics_controls_system(self):
+    def nonlinear_dynamics_controls_system(
+        self, linearize: bool=False, perturbation: float=1e-1,
+        about_state: np.ndarray=0, about_action: np.ndarray=0
+    ):
+        """
+        Create a system representation using the python controls library. The
+        system takes net forces and torques as input.
+
+        Parameters
+        ----------
+        linearize : bool, optional
+            Whether to linearize the system about a state/action, by default False
+        perturbation : float, optional
+            The change in time to use to calculate dx/dt, by default 1e-1
+        about_state : np.ndarray, optional
+            The state about which to linearize, by default 0
+        about_action : np.ndarray, optional
+            The action about which to linearize, by default 0
+
+        Returns
+        -------
+        Union[control.LinearIOSystem, control.NonlinearIOSystem]
+            The system object
+        """
         import control
         sys = control.NonlinearIOSystem(
             updfcn=self.dxdt_dynamics,
             inputs=['fx','fy','fz','tx','ty','tz'],
-            outputs=['x','y','z',
+            states=['x','y','z',
                     'vx','vy','vz',
                     'roll','pitch','yaw',
                     'xrate', 'yrate', 'zrate']
         )
+        if linearize:
+            x0 = np.zeros(12) if about_state==0 else about_state
+            u0 = np.zeros(6) if about_action==0 else about_action
+            sys = sys.linearize(eps=perturbation, x0=x0, u0=x0)
         return sys
     
 
-    def nonlinear_speeds_controls_system(self):
+    def nonlinear_speeds_controls_system(
+        self, linearize: bool=False, perturbation: float=1e-1,
+        about_state: np.ndarray=0, about_action: np.ndarray=0
+    ):
+        """
+        Create a system representation using the python controls library. The
+        system takes propeller speed signals as input.
+
+        Parameters
+        ----------
+        linearize : bool, optional
+            Whether to linearize the system about a state/action, by default False
+        perturbation : float, optional
+            The change in time to use to calculate dx/dt, by default 1e-1
+        about_state : np.ndarray, optional
+            The state about which to linearize, by default 0
+        about_action : np.ndarray, optional
+            The action about which to linearize, by default 0
+
+        Returns
+        -------
+        Union[control.LinearIOSystem, control.NonlinearIOSystem]
+            The system object
+        """
         import control
         sys = control.NonlinearIOSystem(
             updfcn=self.dxdt_speeds,
             inputs=['w%d' % i for i in range(len(self.propellers))],
-            outputs=['x','y','z',
+            states=['x','y','z',
                     'vx','vy','vz',
                     'roll','pitch','yaw',
                     'xrate', 'yrate', 'zrate']
         )
+        if linearize:
+            x0 = np.zeros(12) if about_state==0 else about_state
+            u0 = np.zeros(len(self.propellers)) if about_action==0 else about_action
+            sys = sys.linearize(eps=perturbation, x0=x0, u0=x0)
         return sys
