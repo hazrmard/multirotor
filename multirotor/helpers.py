@@ -293,7 +293,7 @@ class DataLog:
             
     def done_logging(self):
         """
-        Indicate that no more logs are goingto be put so the python lists are converted
+        Indicate that no more logs are going to be put so the python lists are converted
         to numpy arrays and discarded.
         """
         self._make_arrays()
