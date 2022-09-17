@@ -225,6 +225,8 @@ class Multirotor:
         ----------
         params : VehicleParams
             The vehicle parameters. These completely describe the vehicle's properties.
+            The parameters are copied by this class, so any changes made to the params
+            object is isolated from this instance.
         simulation : SimulationParams
             The simulation parameters.
         """
@@ -238,6 +240,8 @@ class Multirotor:
         self.propellers = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
+        self.dtype = self.params.inertia_matrix.dtype if simulation.dtype is None \
+                     else simulation.dtype
         self.reset()
 
 
@@ -259,12 +263,13 @@ class Multirotor:
         x = cos(self.params.angles) * self.params.distances
         y = sin(self.params.angles) * self.params.distances
         z = np.zeros_like(y)
-        self.propeller_vectors = np.vstack((x, y, z))
+        self.propeller_vectors = np.vstack((x, y, z)).astype(self.dtype)
 
-        self.inertial_matrix_inverse = np.asmatrix(np.linalg.inv(self.params.inertia_matrix))
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
-
-        self.state = np.zeros(12)
+        self.alloc = self.alloc.astype(self.dtype)
+        self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
+        self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
+        self.state = np.zeros(12, dtype=self.dtype)
         return self.state
 
 
@@ -335,7 +340,7 @@ class Multirotor:
             linear_vel_body,
             angular_vel_body)
 
-        thrust_vec = np.zeros((3, len(self.propellers)))
+        thrust_vec = np.zeros((3, len(self.propellers)), dtype=self.dtype)
         torque_vec = np.zeros_like(thrust_vec)
 
         for i, (speed, prop, clockwise) in enumerate(zip(
@@ -413,7 +418,8 @@ class Multirotor:
         # This method must not have any side-effects. It should not change the
         # state of the vehicle. This method is called multiple times from the 
         # same state by the odeint() function, and the results should be consistent.
-        forces, torques = self.get_forces_torques(u, x)
+        forces, torques = self.get_forces_torques(
+            u, x)
         xdot = apply_forces_torques(
             forces, torques, x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
@@ -438,7 +444,8 @@ class Multirotor:
         """
         self.t += self.simulation.dt
         self.state = odeint(
-            self.dxdt_dynamics, self.state, (0, self.simulation.dt), args=(u,),
+            self.dxdt_dynamics, self.state, (0, self.simulation.dt),
+            args=(u,),
             rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
         self.state = np.around(self.state, 4)
@@ -533,9 +540,9 @@ class Multirotor:
                     'xrate', 'yrate', 'zrate']
         )
         if linearize:
-            x0 = np.zeros(12) if about_state==0 else about_state
-            u0 = np.zeros(6) if about_action==0 else about_action
-            sys = sys.linearize(eps=perturbation, x0=x0, u0=x0)
+            x0 = (np.zeros(12) if about_state==0 else about_state)
+            u0 = (np.zeros(6) if about_action==0 else about_action)
+            sys = sys.linearize(eps=perturbation, x0=x0, u0=u0)
         return sys
     
 
@@ -573,7 +580,7 @@ class Multirotor:
                     'xrate', 'yrate', 'zrate']
         )
         if linearize:
-            x0 = np.zeros(12) if about_state==0 else about_state
-            u0 = np.zeros(len(self.propellers)) if about_action==0 else about_action
-            sys = sys.linearize(eps=perturbation, x0=x0, u0=x0)
+            x0 = (np.zeros(12) if about_state==0 else about_state)
+            u0 = (np.zeros(len(self.propellers)) if about_action==0 else about_action)
+            sys = sys.linearize(eps=perturbation, x0=x0, u0=u0)
         return sys

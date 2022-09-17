@@ -229,7 +229,7 @@ class DataLog:
     """
     def __init__(
         self, vehicle: 'Multirotor'=None, controller: 'Controller'=None,
-        *other_vars
+        other_vars=None
     ):
         """
         Parameters
@@ -239,15 +239,15 @@ class DataLog:
         controller : Controller, optional
             The controller instance to track, by default None
         """
-        return self.track(vehicle, controller, *other_vars)
+        return self.track(vehicle, controller, other_vars)
 
 
-    def track(self, vehicle, controller, *other_vars):
+    def track(self, vehicle, controller, other_vars=None):
         """
         Register Multirotor and Controller instances to track, along with names
         of any other variables to be manually added.
 
-        >>> DataLog.track(Multirotor(), Controller(), 'error')
+        >>> DataLog.track(Multirotor(), Controller(), other_vars=('error',))
 
         Parameters
         ----------
@@ -266,7 +266,7 @@ class DataLog:
         self.states = None
         self._actions = []
         self.actions = None
-        self._args = other_vars
+        self._args = () if other_vars is None else other_vars
         for arg in self._args:
             setattr(self, arg, None)
             setattr(self, '_' + str(arg), [])
@@ -286,7 +286,7 @@ class DataLog:
         if self.vehicle is not None:
             self._states.append(self.vehicle.state)
         if self.controller is not None:
-            self._actions.append(self.controller.state)
+            self._actions.append(self.controller.action)
         for key, value in kwargs.items():
             getattr(self, '_' + key).append(value)
 
@@ -365,3 +365,4 @@ class DataLog:
     def torques(self):
         self._make_arrays()
         return self.actions[:, 1:4]
+    # TODO: add properties for controller state

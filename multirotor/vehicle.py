@@ -121,6 +121,8 @@ class SimulationParams:
     """Gravitational acceleration"""
     rho: float = 1.225
     "Air density kg/m^3 at MSL"
+    dtype: type = None
+    "Default data type for arrays. If None, inferred from VehicleParams inertia_matrix."
 
 
 
