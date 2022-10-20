@@ -357,12 +357,4 @@ class DataLog:
     def angular_rate(self):
         self._make_arrays()
         return self.states[:, 9:12]
-    @property
-    def thrust(self):
-        self._make_arrays()
-        return self.actions[:, :1].reshape(-1)
-    @property
-    def torques(self):
-        self._make_arrays()
-        return self.actions[:, 1:4]
     # TODO: add properties for controller state

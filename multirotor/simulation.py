@@ -260,13 +260,10 @@ class Multirotor:
         self.t = 0.
         for p in self.propellers:
             p.reset()
-        x = cos(self.params.angles) * self.params.distances
-        y = sin(self.params.angles) * self.params.distances
-        z = np.zeros_like(y)
-        self.propeller_vectors = np.vstack((x, y, z)).astype(self.dtype)
 
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.alloc = self.alloc.astype(self.dtype)
+        self.params.propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self.state = np.zeros(12, dtype=self.dtype)
@@ -336,7 +333,7 @@ class Multirotor:
         linear_vel_body = state[:3]
         angular_vel_body = state[3:6]
         airstream_velocity_inertial = rotating_frame_derivative(
-            self.propeller_vectors,
+            self.params.propeller_vectors,
             linear_vel_body,
             angular_vel_body)
 
@@ -355,7 +352,7 @@ class Multirotor:
                 speed, airstream_velocity_inertial[:, i]
             )
             torque_vec[:, i] = torque(
-                self.propeller_vectors[:,i], thrust_vec[:,i],
+                self.params.propeller_vectors[:,i], thrust_vec[:,i],
                 prop.params.moment_of_inertia, angular_acc,
                 prop.params.k_drag, speed,
                 clockwise
@@ -483,7 +480,7 @@ class Multirotor:
 
     def allocate_control(self, thrust: float, torques: np.ndarray) -> np.ndarray:
         """
-        Allocate control to propellers by converting presscribed forces and torqes
+        Allocate control to propellers by converting prescribed forces and torqes
         into propeller speeds. Uses the control allocation matrix.
 
         Parameters

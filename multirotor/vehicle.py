@@ -99,12 +99,18 @@ class VehicleParams:
     Defaults to alternating clockwise/anti-clockwise."""
 
     mass: float = 1.
+    # TODO: Should moments of inertia of propeller motors be added to this matrix
+    # manually? Currently we assume this represents the whole vehicle.
     inertia_matrix: np.matrix = np.eye(3)
 
 
     def __post_init__(self):
         self.distances = self.distances.astype(float)
         self.inertia_matrix_inverse = np.linalg.inv(self.inertia_matrix)
+        x = np.cos(self.angles) * self.distances
+        y = np.sin(self.angles) * self.distances
+        z = np.zeros_like(y)
+        self.propeller_vectors = np.vstack((x, y, z))
         if self.clockwise is None:
             self.clockwise = np.ones(len(self.propellers), dtype=int)
             self.clockwise[::2] = 1
@@ -131,3 +137,37 @@ class BatteryParams:
 
     max_voltage: float = 20
     "Maximum voltage of the battery"
+
+
+
+@dataclass
+class AttControllerParams:
+
+    k_p: np.ndarray
+    k_i: np.ndarray
+    k_d: np.ndarray
+    max_err_i: np.ndarray = np.atleast_1d([1])
+
+
+
+@dataclass
+class AltControllerParams(AttControllerParams):
+    pass
+
+
+
+@dataclass
+class PosControllerParams(AttControllerParams):
+    max_tilt: float = np.pi / 18
+    "Maximum tilt angle in radians"
+    max_velocity: float = 5.
+    "Maximum velocity in m/s"
+
+
+
+@dataclass
+class ControllerParams:
+
+    att: AttControllerParams
+    alt: AltControllerParams
+    pos: PosControllerParams

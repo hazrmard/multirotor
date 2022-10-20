@@ -62,9 +62,11 @@ def torque(
     Parameters
     ----------
     position_vector : np.ndarray
-        Position vector of force, relative to center of mass.
+        Position vector of force, relative to center of mass. If multiple vectors,
+        should be in shape 3 x n_vectors.
     force : np.ndarray
-        Force vector acting at that position (nominally thrust).
+        Force vector acting at that position (nominally thrust). If multiple vectors,
+        should be in shape 3 x n_vectors.
     moment_of_inertia : float
         Moment of inertia of the body.
     prop_angular_acceleration : float
@@ -87,12 +89,14 @@ def torque(
     # yaw moments
     # tau = I . d omega/dt
     tau_rot = (
+        # angular acceleration of propellers is assumed to be negligible
         # clockwise * moment_of_inertia * prop_angular_acceleration + 
         clockwise * drag_coefficient * prop_angular_velocity**2
     )
     # tau = r x F
-    tau = np.cross(position_vector, force)
-    # print(moment_of_inertia, prop_angular_acceleration)
+    # numba does not support axis arguments for cross(), so taking transpose and
+    # then undoing it for result:
+    tau = np.cross(position_vector.T, force.T).T
     tau[2] = tau[2] + tau_rot
     return tau
 

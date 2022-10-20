@@ -1,20 +1,62 @@
-import numpy as np
-from multirotor.simulation import Multirotor
+from collections import namedtuple
+from typing import Iterable
 
+import numpy as np
+from pyscurve import ScurvePlanner
+
+from multirotor.simulation import Multirotor
 from multirotor.vehicle import VehicleParams, SimulationParams, PropellerParams
 from multirotor.helpers import control_allocation_matrix
-
+from multirotor.physics import torque
 
 
 def get_vehicle_ability(
-    vp: VehicleParams, sp: SimulationParams, max_tilt: float=np.pi/12
+    vp: VehicleParams, sp: SimulationParams,
+    max_tilt: float=np.pi/12,
+    max_angular_acc: float=5,
+    max_rads: float=600
 ):
     alloc, alloc_inverse = control_allocation_matrix(vp)
     I_roll, I_pitch, I_yaw = vp.inertia_matrix.diagonal()
+    n = len(vp.propellers)
+
+    thrusts = [p.k_thrust * max_rads**2 for p in vp.propellers]
+    max_f = sum(thrusts)
+    max_acc_z = (max_f - (vp.mass * sp.g)) / vp.mass
+    
+    # Thrust produced at max_tilt to keep vehicle altitude constant.
+    # Use that to calculate lateral component of thrust and lateral acceleration
+    tilt_hover_thrust = (vp.mass * sp.g) / (n * np.cos(max_tilt))
+    # Thrust is limited by what is possible by the propellers
+    tilt_hover_thrust = min(max_f, tilt_hover_thrust)
+    max_acc_xy = n * tilt_hover_thrust * np.sin(max_tilt) / vp.mass
+
+    thrust_vec = np.zeros((3, n))
+    thrust_vec[2] = np.asarray(thrusts)
+    k_drag_vec = np.asarray([p.k_drag for p in vp.propellers])
+    inertia_vec = np.asarray([p.moment_of_inertia for p in vp.propellers])
+    torques = torque(
+        position_vector=vp.propeller_vectors,
+        force=thrust_vec,
+        clockwise=np.asarray(vp.clockwise).astype(float),
+        drag_coefficient=k_drag_vec,
+        moment_of_inertia=inertia_vec,
+        prop_angular_acceleration=0,
+        prop_angular_velocity=max_rads
+    )
+    I = vp.inertia_matrix.diagonal()
+    ang_acc = None
+
+    res = dict(
+        max_acc_xy=max_acc_xy,
+        max_acc_z=max_acc_z,
+    )
+    return res
     # T = I . d_omega
     # s = 0.5 d_omega t^2
     # time to reach max tilt (s):
-    # t_m = sqrt(2 s / d_omega) = t = sqrt(2 s I / T)
+    # t_m = np.sqrt(2 s / d_omega) = t = sqrt(2 s I / T)
+    time_max_tilt = np.sqrt(2 * max_tilt / max_angular_acc)
     # max_torque = from propellers x geometry
     # t_m = np.sqrt(2 * max_tilt * vp.inertia_matrix.diagonal() / max_torque)
     # max lateral thrust
@@ -47,7 +89,7 @@ class Trajectory:
 
 
     def __init__(
-        self, points: np.ndarray, vehicle: Multirotor=None, proximity: float=None,
+        self, points: np.ndarray, vehicle: Multirotor, proximity: float=None,
         resolution: float=None    
     ):
         """
@@ -55,8 +97,8 @@ class Trajectory:
         ----------
         points : np.ndarray
             A list of 3D coordinates.
-        vehicle : Multirotor, optional
-            The vehicle to track. Required if proximity is provided, by default None
+        vehicle : Multirotor
+            The vehicle to track.
         proximity : float, optional
             The distance from current waypoint at which to send the next waypoint,
             by default None. If None, simply iterates over provided points.
@@ -82,18 +124,16 @@ class Trajectory:
 
     def __iter__(self):
         self._points, self._durations = self.generate_trajectory(self.vehicle.position)
-        if self.proximity is not None and self.vehicle is not None:
+        if self.proximity is not None:
             for i in range(len(self)):
                 while np.linalg.norm((self.vehicle.position - self[i])) >= self.proximity:
                         yield self[i]
                 for _ in range(self._durations[i] - 1):
                         yield self[i]
-        elif self.proximity is None:
+        else:
             for i in range(len(self)):
                 for _ in range(self._durations[i]):
                         yield self[i]
-        else:
-            raise ValueError('Vehicle must be provided if a proximity value is given.')
 
 
     def generate_trajectory(self, curr_pos=None):
@@ -116,3 +156,82 @@ class Trajectory:
             _points = points
             _durations = durations
         return _points, _durations
+
+
+    def add_waypoint(self, point: np.ndarray):
+        pass
+
+
+    def next_waypoint(self):
+        pass
+
+
+
+class GuidedTrajectory:
+    # Guided mode call stack overview
+    # https://ardupilot.org/dev/docs/apmcopter-code-overview.html
+    # Square-root controller for pos control, sets P value
+    # https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Math/control.cpp#L286
+
+    def __init__(self, vehicle: Multirotor, waypoints: Iterable[np.ndarray],
+        interval: int=10, proximity: float=1., max_velocity: float=5, max_acceleration: float=10,
+        max_jerk: float=20) -> None:
+        self.vehicle = vehicle
+        self.waypoints = np.asarray(waypoints)
+        self.interval = int(interval)
+        self.proximity = float(proximity)
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
+        self.max_jerk = float(max_jerk)
+        self.trajectory = None
+        self.trajs = []
+
+
+    def _setup(self):
+        if self.interval is None:
+            dt = self.vehicle.simulation.dt
+            # default run at 100Hz
+            self.interval = int(max(1, 0.01 / dt))
+
+
+    def __iter__(self):
+        # TODO refresh after interval
+        # TODO max velocity vector
+        # TODO leashing
+        i = 0  # step
+        planner = ScurvePlanner(debug=False)
+        self._ref = None
+        for wp in self.waypoints:
+            r1 = wp[:2]
+            v1 = np.zeros(2)
+            while not self.reached(wp):
+                # Refresh trajectory plan
+                if i % self.interval == 0:
+                    r0 = self.vehicle.position[:2]
+                    v0 = self.vehicle.velocity[:2]
+                    # Planner's max_velocity looks at velocity along each axis
+                    # and not the magnitude of velocity vector
+                    # assert np.all(v0 <= self.max_velocity), 'Moving faster than trajectory planning limit.'
+                    try:
+                        self.trajectory = planner.plan_trajectory(
+                            q0=r0, q1=r1, v0=v0, v1=v1,
+                            v_max=self.max_velocity / 2,
+                            a_max=self.max_acceleration, j_max=self.max_jerk
+                        )
+                        self.trajs.append(self.trajectory)
+                    except Exception as e:
+                        raise e
+                for j in range(self.interval):
+                    if self.reached(wp):
+                        break
+                    target = self.trajectory(self.vehicle.simulation.dt * j)
+                    point = target[:, 2]
+                    velocity = target[:, 1]
+                    acceleration = target[:, 0]
+                    self._ref = np.concatenate((point, wp[2:], [0])) # position, yaw
+                    i += 1
+                    yield self._ref
+
+
+    def reached(self, wp: np.ndarray) -> bool:
+        return np.linalg.norm(self.vehicle.position - wp) <= self.proximity
