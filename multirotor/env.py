@@ -21,12 +21,16 @@ class BaseMultirotorEnv(gym.Env):
             shape=(12,)
         )
         self.vehicle = vehicle
-        self.state : np.ndarray = None
+
+
+    @property
+    def state(self) -> np.ndarray:
+        return self.vehicle.state
 
 
     def reset(self):
         if self.vehicle is not None:
-            self.state = self.vehicle.reset()
+            self.vehicle.reset()
         return self.state
 
 
@@ -61,12 +65,12 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
             speeds = np.clip(speeds, a_min=0, a_max=self.max_rads)
             forces, torques = self.vehicle.get_forces_torques(speeds, self.vehicle.state)
             action = np.concatenate((forces, torques))
-        self.state = self.vehicle.step_dynamics(u=action)
+        self.vehicle.step_dynamics(u=action)
         return self.state, None, None, None
 
 
 
-class SpeedsMultirotorEnv(gym.Env):
+class SpeedsMultirotorEnv(BaseMultirotorEnv):
 
 
     def __init__(self, vehicle: Multirotor=None, max_rads=None) -> None:
@@ -83,5 +87,5 @@ class SpeedsMultirotorEnv(gym.Env):
 
     def step(self, action: np.ndarray):
         action = np.clip(action, a_min=0, a_max=self.max_rads)
-        self.state = self.vehicle.step_speeds(u=action)
+        self.vehicle.step_speeds(u=action)
         return self.state, None, None, None

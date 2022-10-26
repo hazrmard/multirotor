@@ -134,6 +134,7 @@ class Motor:
         self._last_angular_acc = 0.
 
 
+
     def apply_speed(self, u: float) -> float:
         """
         Apply a voltage speed signal to the motor. This method is pure and doesn't
@@ -177,6 +178,7 @@ class Motor:
             The speed of the motor (rad /s)
         """
         self.voltage = self.params.speed_voltage_scaling * u
+        # self.current = max(0, (self.voltage - self.speed * self.params.k_emf) / self.params.resistance)
         self.current = (self.voltage - self.speed * self.params.k_emf) / self.params.resistance
         torque = self.params.k_torque * self.current
         # Subtract drag torque and dynamic friction from electrical torque
@@ -232,16 +234,17 @@ class Multirotor:
         """
         self.params: VehicleParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
+        self.dtype = self.params.inertia_matrix.dtype if simulation.dtype is None \
+                     else simulation.dtype
         self.state: np.ndarray = None
         self.propellers: List[Propeller] = None
         self.propeller_vectors: np.ndarray = None
         self.t: float = 0.
+        self._dxdt = None
         self.dxdt_decimals = max(1, 1 - int(np.log10(self.simulation.dt)))
         self.propellers = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
-        self.dtype = self.params.inertia_matrix.dtype if simulation.dtype is None \
-                     else simulation.dtype
         self.reset()
 
 
@@ -267,6 +270,7 @@ class Multirotor:
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self.state = np.zeros(12, dtype=self.dtype)
+        self._dxdt = np.zeros_like(self.state)
         return self.state
 
 
@@ -283,11 +287,26 @@ class Multirotor:
 
 
     @property
-    def world_velocity(self) -> np.ndarray:
+    def inertial_velocity(self) -> np.ndarray:
         """Velocity in the intertial frame."""
         dcm = direction_cosine_matrix(*self.orientation)
         v_inertial = body_to_inertial(self.velocity, dcm)
         return v_inertial
+
+
+    @property
+    def acceleration(self) -> np.ndarray:
+        """Body-frame acceleration"""
+        return self._dxdt[3:6]
+
+
+    @property
+    def inertial_acceleration(self) -> np.ndarray:
+        """Acceleration in the intertial frame."""
+        dcm = direction_cosine_matrix(*self.orientation)
+        a_inertial = body_to_inertial(self.acceleration, dcm)
+        return a_inertial
+
 
 
     @property
@@ -440,6 +459,7 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
+        self._dxdt = self.dxdt_dynamics(t=self.t, x=self.state, u=u)
         self.state = odeint(
             self.dxdt_dynamics, self.state, (0, self.simulation.dt),
             args=(u,),
@@ -468,6 +488,7 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
+        self._dxdt = self.dxdt_speeds(t=self.t, x=self.state, u=u)
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
             rtol=1e-4, atol=1e-4, tfirst=True

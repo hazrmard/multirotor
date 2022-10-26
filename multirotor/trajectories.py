@@ -3,6 +3,7 @@ from typing import Iterable
 
 import numpy as np
 from pyscurve import ScurvePlanner
+from pyscurve.trajectory import PlanningError
 
 from multirotor.simulation import Multirotor
 from multirotor.vehicle import VehicleParams, SimulationParams, PropellerParams
@@ -52,20 +53,6 @@ def get_vehicle_ability(
         max_acc_z=max_acc_z,
     )
     return res
-    # T = I . d_omega
-    # s = 0.5 d_omega t^2
-    # time to reach max tilt (s):
-    # t_m = np.sqrt(2 s / d_omega) = t = sqrt(2 s I / T)
-    time_max_tilt = np.sqrt(2 * max_tilt / max_angular_acc)
-    # max_torque = from propellers x geometry
-    # t_m = np.sqrt(2 * max_tilt * vp.inertia_matrix.diagonal() / max_torque)
-    # max lateral thrust
-    # T_l = Thrust sin(max_tilt)
-    # max lateral acc
-    # a = T_l / m
-    # avg velocity = dist / time
-    # x / (t_m + sqrt(2 (x/2) m / T_l) + 2 t_m + sqrt(2 (x/2) m / T_l))
-    #      tilt   acc half way          tilt reverse   dec half way to stop
 
 
 
@@ -89,16 +76,16 @@ class Trajectory:
 
 
     def __init__(
-        self, points: np.ndarray, vehicle: Multirotor, proximity: float=None,
+        self, vehicle: Multirotor, points: np.ndarray, proximity: float=None,
         resolution: float=None    
     ):
         """
         Parameters
         ----------
-        points : np.ndarray
-            A list of 3D coordinates.
         vehicle : Multirotor
             The vehicle to track.
+        points : np.ndarray
+            A list of 3D coordinates.
         proximity : float, optional
             The distance from current waypoint at which to send the next waypoint,
             by default None. If None, simply iterates over provided points.
@@ -127,13 +114,13 @@ class Trajectory:
         if self.proximity is not None:
             for i in range(len(self)):
                 while np.linalg.norm((self.vehicle.position - self[i])) >= self.proximity:
-                        yield self[i]
+                        yield self[i], None
                 for _ in range(self._durations[i] - 1):
-                        yield self[i]
+                        yield self[i], None
         else:
             for i in range(len(self)):
                 for _ in range(self._durations[i]):
-                        yield self[i]
+                        yield self[i], None
 
 
     def generate_trajectory(self, curr_pos=None):
@@ -174,8 +161,8 @@ class GuidedTrajectory:
     # https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Math/control.cpp#L286
 
     def __init__(self, vehicle: Multirotor, waypoints: Iterable[np.ndarray],
-        interval: int=10, proximity: float=1., max_velocity: float=5, max_acceleration: float=10,
-        max_jerk: float=20) -> None:
+        interval: int=10, proximity: float=2., max_velocity: float=5., max_acceleration: float=3.,
+        max_jerk: float=100, turn_factor: float=(1/np.sqrt(2))) -> None:
         self.vehicle = vehicle
         self.waypoints = np.asarray(waypoints)
         self.interval = int(interval)
@@ -183,6 +170,7 @@ class GuidedTrajectory:
         self.max_velocity = float(max_velocity)
         self.max_acceleration = float(max_acceleration)
         self.max_jerk = float(max_jerk)
+        self.turn_factor = turn_factor
         self.trajectory = None
         self.trajs = []
 
@@ -195,42 +183,68 @@ class GuidedTrajectory:
 
 
     def __iter__(self):
-        # TODO refresh after interval
-        # TODO max velocity vector
-        # TODO leashing
-        i = 0  # step
+        # https://www.youtube.com/watch?v=MQiNDJGJDWs
+        self._setup()
+        i = 0 # steps since beginning of trajectory
+        j = 0 # steps since last trajectory replan
+        k = 0 # waypoint index
         planner = ScurvePlanner(debug=False)
         self._ref = None
-        for wp in self.waypoints:
-            r1 = wp[:2]
-            v1 = np.zeros(2)
+        for k, wp in enumerate(self.waypoints):
+            print('WP @ i=%d' % i, wp)
+            replan = True # new waypoint, so replan immediately
             while not self.reached(wp):
                 # Refresh trajectory plan
-                if i % self.interval == 0:
+                if i % self.interval == 0 or replan:
                     r0 = self.vehicle.position[:2]
                     v0 = self.vehicle.velocity[:2]
-                    # Planner's max_velocity looks at velocity along each axis
-                    # and not the magnitude of velocity vector
-                    # assert np.all(v0 <= self.max_velocity), 'Moving faster than trajectory planning limit.'
+                    r1 = wp[:2]
+                    # Assume that destination velocity is 0
+                    v1 = np.zeros(2)
+                    # Unless there is another leg of flight, in which case
+                    # target velocity should depend on the sharpness of turn
+                    if k < len(self.waypoints)-1:
+                        r2 = self.waypoints[k+1][:2]
+                        r01 = r1 - r0 # current desired heading vector
+                        # r01 = v0
+                        r12 = r2 - r1 # next desired heading vector
+                        r01_ = r01 / np.linalg.norm(r01)
+                        r12_ = r12 / np.linalg.norm(r12)
+                        # Projection of vectors. If projection is <0,
+                        # means vehicle needs to reverse. So clip to 0 so it comes
+                        # to a stop at the waypoint.
+                        projection = max(0, np.dot(r12_, r01_))
+                        v1 = self.max_velocity * self.turn_factor * projection * r01_
                     try:
                         self.trajectory = planner.plan_trajectory(
                             q0=r0, q1=r1, v0=v0, v1=v1,
-                            v_max=self.max_velocity / 2,
-                            a_max=self.max_acceleration, j_max=self.max_jerk
+                            v_max=self.max_velocity,
+                            a_max=self.max_acceleration,
+                            j_max=self.max_jerk
                         )
                         self.trajs.append(self.trajectory)
-                    except Exception as e:
-                        raise e
-                for j in range(self.interval):
-                    if self.reached(wp):
-                        break
+                        replan = False # once replanned, wait for next waypoint or interval
+                        j = 0 # reset steps since replan
+                    except PlanningError as e:
+                        # If planning error was on a new point/or replanning was
+                        # requested. When not choosing to raise exception, trust
+                        # that the vehicle can catch up and later on the trajectory
+                        # can become feasible again.
+                        if replan:
+                            # print('r0', r0, 'r1', r1)
+                            # print('Err: %s' % e)
+                            # raise e
+                            pass
+                        replan = True # after error, replan at next interval
+                # Simulate trajectory plan over time
+                for _ in range(self.interval):
                     target = self.trajectory(self.vehicle.simulation.dt * j)
                     point = target[:, 2]
                     velocity = target[:, 1]
-                    acceleration = target[:, 0]
                     self._ref = np.concatenate((point, wp[2:], [0])) # position, yaw
-                    i += 1
-                    yield self._ref
+                    i += 1 # steps since beginning of trajectory
+                    j += 1 # steps since last trajectory replan
+                    yield self._ref, velocity
 
 
     def reached(self, wp: np.ndarray) -> bool:
