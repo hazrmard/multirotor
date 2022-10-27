@@ -47,7 +47,22 @@ class BaseMultirotorEnv(gym.Env):
 class DynamicsMultirotorEnv(BaseMultirotorEnv):
 
 
-    def __init__(self, vehicle: Multirotor=None, allocate: bool=False, max_rads=None) -> None:
+    def __init__(
+        self, vehicle: Multirotor=None, allocate: bool=False, max_rads: float=np.inf
+    ) -> None:
+        """
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The `Multirotor` vehicle to use as the environment
+        max_rads: float, optional
+            The maximum allocated speed of propellers, if `allocate==True`.
+        allocate: bool, optional
+            Whether the actions are the requested dynamics, in which case control
+            allocation will be used to calculate the best possible propeller speeds.
+            Otherwise, the forces and torques are directly applied to the system.
+            By default False
+        """
         super().__init__(vehicle=vehicle)
         
         self.action_space = gym.spaces.Box(
@@ -94,9 +109,34 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
 
 
 class SpeedsMultirotorEnv(BaseMultirotorEnv):
+    """
+    A multirotor environment that uses speed signals as action inputs. The speed
+    signals can be one of two kinds:
+
+      1. Actual speeds (rad/s).
+
+        a. If the multirotor's propellers have `Motor` instances, then the 
+        `MotorParams.speed_voltage_scaling` parameter should be provided. It 
+        converts speed to voltage signal used for speed calculations. The 
+        `helpers.learn_speed_voltage_scaling` function can be used for this.
+
+        b. Else, if the propellers do not have a motor, then the parameter
+        need not be provided.
+
+      2. Voltage signals (V). In this case, propellers should have a `Motor` instance
+      with the `speed_voltage_scaling` parameter equal to 1 (no need to learn it,
+      since voltage is already being given).
+    """
 
 
-    def __init__(self, vehicle: Multirotor=None) -> None:
+    def __init__(self, vehicle) -> None:
+        """
+
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The `Multirotor` vehicle to use as the environment
+        """
         super().__init__(vehicle=vehicle)
         
         self.action_space = gym.spaces.Box(

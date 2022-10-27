@@ -17,7 +17,7 @@ class MotorParams:
     "Back-EMF constant k_e, relates motor speed induced voltage, back_emf = k_e * omega"
     k_torque: float = None
     "Torque constant k_q, where torque Q = k_q * current. Equal to k_e"
-    k_drag: float = None
+    k_drag: float = None # overwritten by PropellerParams, if provided there
     "Aerodynamic drag coefficient, where torque = k_drag * omega^2"
     moment_of_inertia: float = 0.
     "Moment of inertia about rotational axis"
@@ -87,6 +87,14 @@ class PropellerParams:
 
 
 @dataclass
+class BatteryParams:
+
+    max_voltage: float = np.inf
+    "Maximum voltage of the battery"
+
+
+
+@dataclass
 class VehicleParams:
 
     propellers: List[PropellerParams]
@@ -98,10 +106,13 @@ class VehicleParams:
     """1 if motor spins clockwise, -1 if anti-clockwise, looking from the top.
     Defaults to alternating clockwise/anti-clockwise."""
 
+    battery: BatteryParams = None
+    "The battery parameters"
     mass: float = 1.
     # TODO: Should moments of inertia of propeller motors be added to this matrix
     # manually? Currently we assume this represents the whole vehicle.
     inertia_matrix: np.matrix = np.eye(3)
+    "3x3 intertia matrix describing the rotational properties of the body."
 
 
     def __post_init__(self):
@@ -129,14 +140,6 @@ class SimulationParams:
     "Air density kg/m^3 at MSL"
     dtype: type = None
     "Default data type for arrays. If None, inferred from VehicleParams inertia_matrix."
-
-
-
-@dataclass
-class BatteryParams:
-
-    max_voltage: float = 20
-    "Maximum voltage of the battery"
 
 
 

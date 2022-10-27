@@ -2,7 +2,6 @@ from typing import Callable, List, Tuple
 from copy import deepcopy
 
 import numpy as np
-from numpy import (cos, sin)
 from scipy.integrate import odeint, trapezoid
 
 from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams, BatteryParams
@@ -45,7 +44,7 @@ class Propeller:
             self.motor.reset()
 
 
-    def apply_speed(self, u: float) -> float:
+    def apply_speed(self, u: float, **kwargs) -> float:
         """
         Calculate the actual speed of the propeller after the speed signal is
         given. This method is *pure* and does not change the state of the propeller.
@@ -62,11 +61,11 @@ class Propeller:
             The actual speed
         """
         if self.motor is not None:
-            return self.motor.apply_speed(u)
+            return self.motor.apply_speed(u, **kwargs)
         return u
 
 
-    def step(self, u: float) -> float:
+    def step(self, u: float, **kwargs) -> float:
         """
         Step through the speed command. This method changes the state of the 
         propeller.
@@ -82,7 +81,7 @@ class Propeller:
             The actual speed achieved.
         """
         if self.motor is not None:
-            self.speed = self.motor.step(u)
+            self.speed = self.motor.step(u, **kwargs)
         else:
             self.speed = u
         return self.speed
@@ -135,7 +134,7 @@ class Motor:
 
 
 
-    def apply_speed(self, u: float) -> float:
+    def apply_speed(self, u: float, max_voltage: float=np.inf) -> float:
         """
         Apply a voltage speed signal to the motor. This method is pure and doesn't
         change the state of the motor.
@@ -144,6 +143,8 @@ class Motor:
         ----------
         u : float
             Voltage signal.
+        max_voltage : float, optional
+            The maximum voltage supply from power source. By default infinite.
 
         Returns
         -------
@@ -155,14 +156,14 @@ class Motor:
         voltage, current, last_acc, last_speed = \
             self.voltage, self.current, self._last_angular_acc, self.speed
 
-        speed = self.step(u)
+        speed = self.step(u, max_voltage=max_voltage)
 
         self.voltage, self.current, self._last_angular_acc, self.speed = \
             voltage, current, last_acc, last_speed
         return speed
 
 
-    def step(self, u: float) -> float:
+    def step(self, u: float, max_voltage: float=np.inf) -> float:
         """
         Apply a voltage speed signal to the motor. This method changes the state
         of the motor.
@@ -171,15 +172,16 @@ class Motor:
         ----------
         u : float
             Voltage signal.
+        max_voltage : float, optional
+            The maximum voltage supply from power source. By default infinite.
 
         Returns
         -------
         float
             The speed of the motor (rad /s)
         """
-        self.voltage = self.params.speed_voltage_scaling * u
-        # self.current = max(0, (self.voltage - self.speed * self.params.k_emf) / self.params.resistance)
-        self.current = (self.voltage - self.speed * self.params.k_emf) / self.params.resistance
+        self.voltage = np.clip(self.params.speed_voltage_scaling * u, 0, max_voltage)
+        self.current = max(0, (self.voltage - self.speed * self.params.k_emf) / self.params.resistance)
         torque = self.params.k_torque * self.current
         # Subtract drag torque and dynamic friction from electrical torque
         net_torque = torque - \
@@ -200,7 +202,7 @@ class Battery:
     """
     Models the state of charge of the battery of the Multirotor.
     """
-    # TODO
+
 
     def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
         self.params = deepcopy(params)
@@ -208,7 +210,13 @@ class Battery:
 
 
     def reset(self):
-        pass
+        self.voltage = self.params.max_voltage
+        return self.voltage
+
+
+    @property
+    def state(self) -> float:
+        return self.voltage
 
 
     def step(self):
@@ -237,14 +245,20 @@ class Multirotor:
         self.dtype = self.params.inertia_matrix.dtype if simulation.dtype is None \
                      else simulation.dtype
         self.state: np.ndarray = None
-        self.propellers: List[Propeller] = None
-        self.propeller_vectors: np.ndarray = None
         self.t: float = 0.
         self._dxdt = None
         self.dxdt_decimals = max(1, 1 - int(np.log10(self.simulation.dt)))
+
+        self.propellers: List[Propeller] = None
+        self.propeller_vectors: np.ndarray = None
         self.propellers = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
+
+        if self.params.battery is not None:
+            self.battery = Battery(self.params.battery, self.simulation)
+        else:
+            self.battery = Battery(BatteryParams(max_voltage=np.inf), self.simulation)
         self.reset()
 
 
@@ -263,6 +277,8 @@ class Multirotor:
         self.t = 0.
         for p in self.propellers:
             p.reset()
+        if self.battery is not None:
+            self.battery.reset()
 
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.alloc = self.alloc.astype(self.dtype)
@@ -365,7 +381,7 @@ class Multirotor:
                 self.params.clockwise)
         ):
             last_speed = prop.speed
-            speed = prop.apply_speed(speed)
+            speed = prop.apply_speed(speed, max_voltage=self.battery.voltage)
             angular_acc = (speed - last_speed) / self.simulation.dt
             thrust_vec[2, i] = prop.thrust(
                 speed, airstream_velocity_inertial[:, i]
@@ -511,6 +527,7 @@ class Multirotor:
         self.state = np.around(self.state, 4)
         for u_, prop in zip(u, self.propellers):
             prop.step(u_)
+        self.battery.step()
         return self.state
 
 

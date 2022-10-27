@@ -196,8 +196,8 @@ class GuidedTrajectory:
             while not self.reached(wp):
                 # Refresh trajectory plan
                 if i % self.interval == 0 or replan:
-                    r0 = self.vehicle.position[:2]
-                    v0 = self.vehicle.velocity[:2]
+                    r0 = rx = self.vehicle.position[:2]
+                    v0 = vx = self.vehicle.velocity[:2]
                     r1 = wp[:2]
                     # Assume that destination velocity is 0
                     v1 = np.zeros(2)
