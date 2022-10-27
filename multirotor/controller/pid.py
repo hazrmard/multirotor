@@ -149,7 +149,7 @@ class PosController(PIDController):
     "Maximum jerk in m/s/s/s"
     square_root_scaling: bool = True
     "Whether to scale P-gain with the square root of the error"
-    leashing: bool = True
+    leashing: bool = False
     "Whether to limit proportional position error"
 
 

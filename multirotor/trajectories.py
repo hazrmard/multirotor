@@ -205,12 +205,16 @@ class GuidedTrajectory:
                     # target velocity should depend on the sharpness of turn
                     if k < len(self.waypoints)-1:
                         r2 = self.waypoints[k+1][:2]
+                        # TODO: should this be the shortest path to the trajectory
+                        # instead of the next waypoint? I.e prioritize returning
+                        # to planned path, instead of taking the shortest diagonal path
+                        # to the destination?
                         r01 = r1 - r0 # current desired heading vector
                         # r01 = v0
                         r12 = r2 - r1 # next desired heading vector
                         r01_ = r01 / np.linalg.norm(r01)
                         r12_ = r12 / np.linalg.norm(r12)
-                        # Projection of vectors. If projection is <0,
+                        # Projection of vectors along current leg. If projection is <0,
                         # means vehicle needs to reverse. So clip to 0 so it comes
                         # to a stop at the waypoint.
                         projection = max(0, np.dot(r12_, r01_))
@@ -218,7 +222,7 @@ class GuidedTrajectory:
                     try:
                         self.trajectory = planner.plan_trajectory(
                             q0=r0, q1=r1, v0=v0, v1=v1,
-                            v_max=self.max_velocity,
+                            v_max=max(self.max_velocity, np.linalg.norm(v0)),
                             a_max=self.max_acceleration,
                             j_max=self.max_jerk
                         )
