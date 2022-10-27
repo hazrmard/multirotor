@@ -412,7 +412,10 @@ class Multirotor:
         return np.around(xdot, self.dxdt_decimals)
 
 
-    def dxdt_speeds(self, t: float, x: np.ndarray, u: np.ndarray, params=None):
+    def dxdt_speeds(
+        self, t: float, x: np.ndarray, u: np.ndarray,
+        disturb_forces: np.ndarray=0., disturb_torques: np.ndarray=0., params=None
+    ):
         """
         Calculate the rate of change of state given the propeller speeds on the
         system (rad/s).
@@ -425,6 +428,10 @@ class Multirotor:
             State of the vehicle.
         u : np.ndarray
             A p-vector of propeller speeds (rad/s), where p=number of propellers.
+        disturb_forces : np.ndarray, optional
+            Disturbinng x,y,z forces in the vehicle's local frame, by default 0.
+        disturb_torques : np.ndarray, optional
+            Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 
         Returns
         -------
@@ -437,7 +444,7 @@ class Multirotor:
         forces, torques = self.get_forces_torques(
             u, x)
         xdot = apply_forces_torques(
-            forces, torques, x, self.simulation.g,
+            forces+disturb_forces, torques+disturb_torques, x, self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
         return np.around(xdot, self.dxdt_decimals)
 
@@ -470,7 +477,10 @@ class Multirotor:
         return self.state
 
 
-    def step_speeds(self, u: np.ndarray) -> np.ndarray:
+    def step_speeds(
+        self, u: np.ndarray, disturb_forces: np.ndarray=0.,
+        disturb_torques: np.ndarray=0.
+    ) -> np.ndarray:
         """
         Given the n-vector of propeller speed signals, calculate
         the next state of the vehicle. Where n is number of propellers.
@@ -481,6 +491,10 @@ class Multirotor:
             The speed signals to be sent to each propeller's step() method. Can
             be the actual speed (rad/s) or the voltage signal (V) if a motor
             is used and MotorParams.speed_voltage_scaling constant is set.
+        disturb_forces : np.ndarray, optional
+            Disturbinng x,y,z forces in the vehicle's local frame, by default 0.
+        disturb_torques : np.ndarray, optional
+            Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 
         Returns
         -------
@@ -490,7 +504,8 @@ class Multirotor:
         self.t += self.simulation.dt
         self._dxdt = self.dxdt_speeds(t=self.t, x=self.state, u=u)
         self.state = odeint(
-            self.dxdt_speeds, self.state, (0, self.simulation.dt), args=(u,),
+            self.dxdt_speeds, self.state, (0, self.simulation.dt),
+            args=(u, disturb_forces, disturb_torques),
             rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
         self.state = np.around(self.state, 4)
