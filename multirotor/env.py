@@ -129,7 +129,7 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
     """
 
 
-    def __init__(self, vehicle) -> None:
+    def __init__(self, vehicle: Multirotor) -> None:
         """
 
         Parameters

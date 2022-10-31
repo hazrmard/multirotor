@@ -133,6 +133,24 @@ class Motor:
         self._last_angular_acc = 0.
 
 
+    def current_average(self, max_voltage: float) -> float:
+        """
+        Average current consumption given the duty cycle of the speed controller.
+        Duty cycle depends on max voltage which causes 100% duty cycle.
+
+        Parameters
+        ----------
+        max_voltage : float
+            The peak voltage corresponding to 100% duty cycle.
+
+        Returns
+        -------
+        float
+            Current consumption
+        """
+        duty_cycle = self.voltage / max_voltage
+        return self.current * duty_cycle
+
 
     def apply_speed(self, u: float, max_voltage: float=np.inf) -> float:
         """
@@ -181,7 +199,7 @@ class Motor:
             The speed of the motor (rad /s)
         """
         self.voltage = np.clip(self.params.speed_voltage_scaling * u, 0, max_voltage)
-        self.current = max(0, (self.voltage - self.speed * self.params.k_emf) / self.params.resistance)
+        self.current = np.clip((self.voltage - self.speed * self.params.k_emf) / self.params.resistance, 0, self.params.max_current)
         torque = self.params.k_torque * self.current
         # Subtract drag torque and dynamic friction from electrical torque
         net_torque = torque - \
@@ -346,6 +364,16 @@ class Multirotor:
     @property
     def weight(self) -> float:
         return self.simulation.g * self.params.mass
+
+
+    @property
+    def current_average(self) -> float:
+        """Duty-cucle adjusted currrent draw from battery."""
+        peak_voltage = self.battery.params.max_voltage
+        currents = np.asarray([p.motor.current for p in self.propellers])
+        voltages = np.asarray([p.motor.voltage for p in self.propellers])
+        duty_cycle = voltages / peak_voltage
+        return np.sum(duty_cycle * currents)
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -518,7 +546,10 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
-        self._dxdt = self.dxdt_speeds(t=self.t, x=self.state, u=u)
+        self._dxdt = self.dxdt_speeds(
+            t=self.t, x=self.state, u=u,
+            disturb_forces=disturb_forces, disturb_torques=disturb_torques
+        )
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt),
             args=(u, disturb_forces, disturb_torques),

@@ -27,6 +27,8 @@ class MotorParams:
     speed_voltage_scaling: float = 1.
     """Scaling constant to convert speed signal (rad/s) into speed controller voltage (V).
     If 1, means input action is same as Voltage"""
+    max_current: float = np.inf
+    "Max allowed current"
 
 
     def __post_init__(self):

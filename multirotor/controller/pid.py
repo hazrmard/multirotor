@@ -147,7 +147,7 @@ class PosController(PIDController):
     "Maximum acceleration in m/s/s"
     max_jerk: float = 100.0
     "Maximum jerk in m/s/s/s"
-    square_root_scaling: bool = True
+    square_root_scaling: bool = False
     "Whether to scale P-gain with the square root of the error"
     leashing: bool = False
     "Whether to limit proportional position error"
@@ -158,35 +158,43 @@ class PosController(PIDController):
         # Att angle controller is strictly a P controller
         self.k_i = np.zeros(2) * np.asarray(self.k_i)
         self.k_d = np.zeros(2) * np.asarray(self.k_d)
-        self.leash = 0 if self.leashing else np.inf
+        if self.leashing or self.square_root_scaling:
+            self.k_p[:] = 0.5 * self.max_jerk / self.max_acceleration
         super().__post_init__()
+
+
+    @property
+    def leash(self) -> float:
+        if not self.leashing:
+            return np.inf
+        # https://nrotella.github.io/journal/arducopter-flight-controllers.html
+        acc = self.vehicle.inertial_acceleration[:2]
+        acc_mag = np.linalg.norm(acc)
+        vel = self.vehicle.inertial_velocity[:2]
+        vel_mag = np.linalg.norm(vel)
+        leash = np.abs(acc_mag / (2 * self.k_p[0]**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
+        leash = np.inf if leash==0 else leash
+        return leash
 
 
     def step(self, reference, measurement):
         # inertial frame velocity
         err = reference - measurement
         err_len = np.linalg.norm(err)
-        k_p = 0.5 * self.max_jerk / self.max_acceleration
         if self.leashing:
-            # https://nrotella.github.io/journal/arducopter-flight-controllers.html
-            acc = self.vehicle.inertial_acceleration[:2]
-            acc_mag = np.linalg.norm(acc)
-            vel = self.vehicle.inertial_velocity[:2]
-            vel_mag = np.linalg.norm(vel)
-            self.leash = np.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
-            self.leash = np.inf if self.leash==0 else self.leash
             err_unit = err / (err_len + 1e-6)
             err_len = min(err_len, self.leash)
             err = err_unit * err_len
             self.err = err
-            velocity = k_p * err
+            velocity = self.err_p = self.k_p * err
         if err_len > 0. and self.square_root_scaling:
             velocity = np.zeros_like(self.k_p)
-            velocity[0] = sqrt_control(err[0], k_p, self.max_acceleration, self.dt)
-            velocity[1] = sqrt_control(err[1], k_p, self.max_acceleration, self.dt)
+            velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, self.dt)
+            velocity[1] = sqrt_control(err[1], self.k_p[1], self.max_acceleration, self.dt)
             # scale velocity correction by error size
             # velocity = (np.abs(err) / err_len) * velocity
             self.err = err
+            self.err_p = velocity
         else:
             velocity = super().step(reference, measurement)
         # convert to body-frame velocity

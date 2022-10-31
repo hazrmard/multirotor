@@ -12,8 +12,99 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Line3D
 
 from .coords import body_to_inertial, direction_cosine_matrix
-from .helpers import vehicle_params_factory
 from .simulation import Multirotor
+from .helpers import DataLog
+
+
+
+def plot_datalog(log: DataLog, figsize=(21,10.5)):
+    """
+    Plot recorded values from a Multirotor's flight. Including:
+
+    1. Position and orientation,
+    2. Motor speeds,
+    3. Velocity in world frame,
+    4. Control allocation,
+    5. Allocation errors,
+    6. 2D x-y position plot
+
+    Parameters
+    ----------
+    log : DataLog
+        The datalog, where `datalog.done_logging()` has been called.
+    figsize : tuple, optional
+        The x/y dimensions of the figure, by default (21,10.5)
+    """
+    plt.figure(figsize=figsize)
+    plot_grid = (3,3)
+    plt.subplot(*plot_grid,1)
+
+    n = len(log)
+
+    plt.plot(log.x, label='x', c='r')
+    plt.plot(log.target[:, 0], c='r', ls=':')
+    plt.plot(log.y, label='y', c='g')
+    plt.plot(log.target[:, 1], c='g', ls=':')
+    plt.plot(log.z, label='z', c='b')
+    lines = plt.gca().lines[::2]
+    plt.ylabel('Position /m')
+    plt.twinx()
+    plt.plot(log.roll * (180 / np.pi), label='roll', c='c', ls=':')
+    plt.plot(log.pitch * (180 / np.pi), label='pitch', c='m', ls=':')
+    plt.plot(log.yaw * (180 / np.pi), label='yaw', c='y', ls=':')
+    plt.ylabel('Orientation /deg')
+    plt.legend(handles=plt.gca().lines + lines, ncol=2)
+    plt.title('Position and Orientation')
+
+    plt.subplot(*plot_grid,2)
+    for i in range(log.speeds.shape[1]):
+        l, = plt.plot(log.speeds[:,i], label='prop %d' % i)
+    #     plt.plot(speeds[:,i], c=l.get_c())
+    lines = plt.gca().lines
+    plt.legend(handles=lines, ncol=2)
+    plt.title('Motor speeds /rad/s')
+
+
+    plt.subplot(*plot_grid,3)
+    v_world = np.zeros_like(log.velocity)
+    for i, (v, o) in enumerate(zip(log.velocity, log.orientation)):
+        dcm = direction_cosine_matrix(*o)
+        v_world[i] = body_to_inertial(v, dcm)
+    for i, c, a in zip(range(3), 'rgb', 'xyz'):
+        plt.plot(v_world[:,i], label='Velocity %s' % a, c=c)
+    #     plt.plot(velocities[:,i], label='Velocity %s' % a, c=c)
+    plt.legend()
+    plt.title('Velocities')
+
+    plt.subplot(*plot_grid,4)
+    plt.title('Controller allocated dynamics')
+    l = plt.plot(log.actions[:,0], label='Ctrl Thrust')
+    plt.ylabel('Force /N')
+    plt.twinx()
+    for i, c, a in zip(range(3), 'rgb', 'xyz'):
+        plt.plot(log.actions[:,1+i], label='Ctrl Torque %s' % a, c=c)
+    plt.ylabel('Torque /Nm')
+    plt.legend(handles=plt.gca().lines + l, ncol=2)
+
+    plt.subplot(*plot_grid,5)
+    lines = plt.plot(log.alloc_errs[:, 0], label='Thrust err', c='b')
+    plt.ylabel('Thrust /N')
+    plt.twinx()
+    plt.plot(log.alloc_errs[:, 1], label='Torque x err', ls=':')
+    plt.plot(log.alloc_errs[:, 2], label='Torque y err', ls=':')
+    plt.plot(log.alloc_errs[:, 3], label='Torque z err', ls=':')
+    plt.legend(handles = plt.gca().lines + lines, ncol=2)
+    plt.ylabel('Torque /Nm')
+    plt.title('Allocation Errors')
+
+    plt.subplot(*plot_grid,6)
+    plt.plot(log.target[:,0], log.target[:,1], label='Prescribed traj')
+    plt.plot(log.x, log.y, label='Actual traj', ls=':')
+    plt.gca().set_aspect('equal', 'box')
+    plt.title('XY positions /m')
+    plt.legend()
+
+    plt.tight_layout()
 
 
 
