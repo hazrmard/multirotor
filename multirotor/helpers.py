@@ -243,6 +243,10 @@ class DataLog:
             The Multirotor to track, by default None
         controller : Controller, optional
             The controller instance to track, by default None
+        other_vars : Iterable[str]
+            A list of names representing other variables to log. The names
+            become attributes of this class and can be called as DataLog.NAME.
+            By default None.
         """
         return self.track(vehicle, controller, other_vars)
 
@@ -271,6 +275,8 @@ class DataLog:
         self.states = None
         self._actions = []
         self.actions = None
+        self.times = None
+        self._times = []
         self._args = () if other_vars is None else other_vars
         for arg in self._args:
             setattr(self, arg, None)
@@ -290,6 +296,7 @@ class DataLog:
         self._arrayed = False
         if self.vehicle is not None:
             self._states.append(self.vehicle.state)
+            self._times.append(self.vehicle.t)
         if self.controller is not None:
             self._actions.append(self.controller.action)
         for key, value in kwargs.items():
@@ -316,6 +323,7 @@ class DataLog:
         if not self._arrayed:
             self.states = np.asarray(self._states)
             self.actions = np.asarray(self._actions)
+            self.times = np.asarray(self._times)
             for arg in self._args:
                 setattr(self, arg, np.asarray(getattr(self, '_' + arg)))
         self._arrayed = True
@@ -328,6 +336,10 @@ class DataLog:
         return len(self._states)
 
         
+    @property
+    def t(self):
+        self._make_arrays()
+        return self.times
     @property
     def position(self):
         self._make_arrays()

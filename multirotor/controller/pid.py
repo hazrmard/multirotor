@@ -65,11 +65,8 @@ class PIDController:
     "Derivative constant"
     max_err_i: np.ndarray
     "Maximum accumulated error"
-    dt: float
-    "Simulation parameters to set timestep"
 
     def __post_init__(self):
-        self.action = None
         self.err_p = np.atleast_1d(np.zeros_like(self.k_p))
         self.err_i = np.atleast_1d(np.zeros_like(self.k_i))
         self.err_d = np.atleast_1d(np.zeros_like(self.k_d))
@@ -78,10 +75,11 @@ class PIDController:
             self.max_err_i = np.inf
         else:
             self.max_err_i = np.asarray(self.max_err_i, dtype=self.err.dtype)
+        self.action = np.zeros_like(self.err)
 
 
     def reset(self):
-        self.action = None
+        self.action = np.zeros_like(self.err)
         self.err *= 0
         self.err_p *= 0
         self.err_i *= 0
@@ -98,7 +96,7 @@ class PIDController:
 
 
     def step(
-        self, reference: np.ndarray, measurement: np.ndarray, ref_is_error: bool=False
+        self, reference: np.ndarray, measurement: np.ndarray, dt: float=1., ref_is_error: bool=False
     ) -> np.ndarray:
         """
         Calculate the output, based on the current measurement and the reference
@@ -124,10 +122,10 @@ class PIDController:
             err = reference - measurement
         self.err_p = self.k_p * err
         self.err_i = self.k_i * np.clip(
-            self.err_i + trapezoid((self.err, err), dx=self.dt, axis=0),
+            self.err_i + trapezoid((self.err, err), dx=dt, axis=0),
             a_min=-self.max_err_i, a_max=self.max_err_i
         )
-        self.err_d = self.k_d * (err - self.err) / self.dt
+        self.err_d = self.k_d * (err - self.err) / dt
         self.err = err
         self.action = self.err_p + self.err_i + self.err_d
         return self.action
@@ -173,11 +171,14 @@ class PosController(PIDController):
         vel = self.vehicle.inertial_velocity[:2]
         vel_mag = np.linalg.norm(vel)
         leash = np.abs(acc_mag / (2 * self.k_p[0]**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
-        leash = np.inf if leash==0 else leash
+        # if leash is very small such that vehicle will cover that distance under
+        # current velocity, then a leash is not needed. It is more useful for
+        # larger errors and bigger speeds.
+        leash = np.inf if leash <= (vel_mag * self.vehicle.simulation.dt) else leash
         return leash
 
 
-    def step(self, reference, measurement):
+    def step(self, reference, measurement, dt):
         # inertial frame velocity
         err = reference - measurement
         err_len = np.linalg.norm(err)
@@ -189,14 +190,12 @@ class PosController(PIDController):
             velocity = self.err_p = self.k_p * err
         if err_len > 0. and self.square_root_scaling:
             velocity = np.zeros_like(self.k_p)
-            velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, self.dt)
-            velocity[1] = sqrt_control(err[1], self.k_p[1], self.max_acceleration, self.dt)
-            # scale velocity correction by error size
-            # velocity = (np.abs(err) / err_len) * velocity
+            velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, dt)
+            velocity[1] = sqrt_control(err[1], self.k_p[1], self.max_acceleration, dt)
             self.err = err
             self.err_p = velocity
         else:
-            velocity = super().step(reference, measurement)
+            velocity = super().step(reference, measurement, dt=dt)
         # convert to body-frame velocity
         roll, pitch, yaw = self.vehicle.orientation
         rot = np.asarray([
@@ -204,9 +203,9 @@ class PosController(PIDController):
             [-np.sin(yaw),  np.cos(yaw)],
         ])
         ref_velocity = rot @ velocity
-        abs_max_vel = np.abs((ref_velocity / (np.linalg.norm(ref_velocity) + 1e-6)) * self.max_velocity)
-        ref_velocity = np.clip(ref_velocity, a_min=-abs_max_vel, a_max=abs_max_vel)
-        self.action = ref_velocity
+        ref_velocity_mag = np.linalg.norm(ref_velocity)
+        ref_velocity_unit = ref_velocity / ref_velocity_mag
+        self.action = ref_velocity_unit * min(ref_velocity_mag, self.max_velocity)
         return self.action
 
 
@@ -235,9 +234,9 @@ class VelController(PIDController):
         super().__post_init__()
 
 
-    def step(self, reference, measurement):
+    def step(self, reference, measurement, dt):
         # desired pitch, roll
-        pitch_roll = super().step(reference, measurement)
+        pitch_roll = super().step(reference, measurement, dt=dt)
         # ctrl[0] -> x dir -> pitch -> forward
         # ctrl[1] -> y dir -> roll -> lateral
         pitch_roll[0:2] = np.clip(pitch_roll[0:2], a_min=-self.max_tilt, a_max=self.max_tilt)
@@ -249,11 +248,15 @@ class VelController(PIDController):
 
 @dataclass
 class AttController(PIDController):
+    """
+    Attitude controller. Convert velocity reference into angular rate control
+    signal.
+    """
 
     vehicle: Multirotor
     max_acceleration: float = 0.2
     "Maximum acceleration in rad/s/s"
-    max_jerk: float = 10.0
+    max_jerk: float = 100.0
     "Maximum jerk in rad/s/s/s"
     square_root_scaling: bool = False
     "Whether to scale P-gain with the square root of the error"
@@ -264,23 +267,24 @@ class AttController(PIDController):
         # Att angle controller is strictly a P controller
         self.k_i = np.zeros(3) * np.asarray(self.k_i)
         self.k_d = np.zeros(3) * np.asarray(self.k_d)
+        if self.square_root_scaling:
+            self.k_p[:] = self.max_jerk / self.max_acceleration
         super().__post_init__()
 
 
-    def step(self, reference, measurement):
+    def step(self, reference, measurement, dt):
         err = reference - measurement
         err_len = np.linalg.norm(err)
         if self.square_root_scaling and err_len > 0:
-            k_p = self.max_jerk / self.max_acceleration
             velocity = np.zeros_like(self.k_p)
-            velocity[0] = sqrt_control(err[0], k_p, self.max_acceleration, self.dt)
-            velocity[1] = sqrt_control(err[1], k_p, self.max_acceleration, self.dt)
-            velocity[2] = sqrt_control(err[2], k_p, self.max_acceleration, self.dt)
+            velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, dt)
+            velocity[1] = sqrt_control(err[1], self.k_p[1], self.max_acceleration, dt)
+            velocity[2] = sqrt_control(err[2], self.k_p[2], self.max_acceleration, dt)
             # velocity = (np.abs(err) / err_len) * velocity
             self.err = err
             self.err_p = velocity
         else:
-            velocity = super().step(reference=reference, measurement=measurement)
+            velocity = super().step(reference=reference, measurement=measurement, dt=dt)
         self.action = velocity
         return self.action
 
@@ -298,6 +302,9 @@ class RateController(PIDController):
     """
 
     vehicle: Multirotor
+    # TODO: check max acceleration limits from ardupilot
+    max_acceleration: float = 0.2
+    "Maximum acceleration in rad/s/s"
 
 
     def __post_init__(self):
@@ -307,13 +314,18 @@ class RateController(PIDController):
         super().__post_init__()
 
 
-    def step(self, reference, measurement):
-        # desired change in angular velocity
+    def step(self, reference, measurement, dt):
+        # desired angular velocity
         ref = euler_to_angular_rate(reference, self.vehicle.orientation)
+        # ref = reference
         # actual change in angular velocity
-        mea = euler_to_angular_rate(measurement, self.vehicle.orientation)
+        # mea = euler_to_angular_rate(measurement, self.vehicle.orientation)
+        mea = measurement
         # prescribed change in velocity i.e. angular acc
-        acceleration = super().step(reference=ref, measurement=mea)
+        acceleration = np.clip(
+            super().step(reference=ref, measurement=mea, dt=dt),
+            -self.max_acceleration, self.max_acceleration
+        )
         # torque = moment of inertia . angular_acceleration
         self.action = self.vehicle.params.inertia_matrix.dot(acceleration)
         return self.action
@@ -351,10 +363,10 @@ class AltRateController(PIDController):
     vehicle: Multirotor
 
 
-    def step(self, reference, measurement):
+    def step(self, reference, measurement, dt):
             roll, pitch, yaw = self.vehicle.orientation
             # change in velocity i.e. acceleration
-            ctrl = super().step(reference=reference, measurement=measurement)
+            ctrl = super().step(reference=reference, measurement=measurement, dt=dt)
             # convert acceleration to required z-force, given orientation
             ctrl = self.vehicle.params.mass * (
                     ctrl / (np.cos(roll) * np.cos(pitch))
@@ -379,7 +391,9 @@ class Controller:
         ctrl_p: PosController, ctrl_v: VelController,
         ctrl_a: AttController, ctrl_r: RateController,
         ctrl_z: AltController, ctrl_vz: AltRateController,
-        interval: float=None
+        interval_p: float=1.,
+        interval_a: float=1.,
+        interval_z: float=1.
     ):
         """
         Parameters
@@ -396,11 +410,11 @@ class Controller:
             The altitude controller
         ctrl_vz : AltRateController
             The altitude rate controller
-        interval : float, optional
-            The time resolution of the controller. The controller will only renew
-            an action after this interval has passed. Otherwise it will apply
-            the last action. For e.g. if interval=1, and vehicle dt=0.1, a
-            new action will only be applied every 10 steps. by default None
+        interval_[p | a | z] : float, optional
+            The time resolution of the [position | attitude | altitude] controller.
+            The controller will only renew an action after this interval has passed.
+            Otherwise it will apply the last action. For e.g. if interval=1, and vehicle dt=0.1, a
+            new action will only be applied every interval/dt=10 steps. by default 1
         """
         self.ctrl_p = ctrl_p
         self.ctrl_v = ctrl_v
@@ -409,23 +423,34 @@ class Controller:
         self.ctrl_z = ctrl_z
         self.ctrl_vz = ctrl_vz
         self.vehicle = self.ctrl_a.vehicle
-        self.interval = self.ctrl_a.vehicle.simulation.dt if interval is None else interval
-        self.interval_n = int(self.interval // self.ctrl_a.vehicle.simulation.dt)
-        self.action = None
-        self.n = 0
+        self.interval_p = interval_p
+        self.interval_a = interval_a
+        self.interval_z = interval_z
+        self.steps_p = int(self.interval_p // self.vehicle.simulation.dt)
+        self.steps_a = int(self.interval_a // self.vehicle.simulation.dt)
+        self.steps_z = int(self.interval_z // self.vehicle.simulation.dt)
         assert self.ctrl_a.vehicle is self.ctrl_p.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_v.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_r.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_z.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_vz.vehicle, "Vehicle instances different."
+        self.reset()
 
 
     def reset(self):
-        self.n = 0
         self.action = None
-        self.ctrl_a.reset()
+        self.thrust = None
+        self.torques = None
+        self._ref_vel = np.zeros(2, self.vehicle.dtype)
+        self._pitch_roll = np.zeros(2, self.vehicle.dtype)
+        self.n = 0
+        self.t = self.vehicle.t
         self.ctrl_p.reset()
+        self.ctrl_v.reset()
+        self.ctrl_a.reset()
+        self.ctrl_r.reset()
         self.ctrl_z.reset()
+        self.ctrl_vz.reset()
         return self.state
 
 
@@ -440,9 +465,9 @@ class Controller:
         self, reference: np.ndarray, measurement=None, ref_is_error: bool=False,
         feed_forward_velocity: np.ndarray=None
     ):
-        if self.n % self.interval_n != 0:
-            self.n += 1
-            return self.action
+        # if self.n % self.interval_n != 0:
+        #     self.n += 1
+        #     return self.action
         # If the reference argument is the relative error, and not the absolute
         # value. Using the relationship error = reference - measurement to
         # get absolute reference values
@@ -456,18 +481,26 @@ class Controller:
             ref_z = reference[2]
             ref_yaw = reference[3]
 
-        ref_vel_z = self.ctrl_z.step(ref_z, self.vehicle.position[2:])
-        thrust = self.ctrl_vz.step(ref_vel_z, self.vehicle.inertial_velocity[2:])
+        if self.n % self.steps_z == 0:
+            dt = self.steps_z * self.vehicle.simulation.dt
+            ref_vel_z = self.ctrl_z.step(ref_z, self.vehicle.position[2:], dt=dt)
+            self.thrust = self.ctrl_vz.step(ref_vel_z, self.vehicle.inertial_velocity[2:], dt=dt)
 
-        ref_vel = self.ctrl_p.step(ref_xy, self.vehicle.position[:2])
-        if feed_forward_velocity is not None:
-            ref_vel += feed_forward_velocity
-            ref_vel = np.clip(ref_vel, -self.ctrl_p.max_velocity, self.ctrl_p.max_velocity)
-        pitch_roll = self.ctrl_v.step(ref_vel, self.vehicle.velocity[:2])
-        ref_orientation = np.asarray([pitch_roll[1], pitch_roll[0], ref_yaw])
-        ref_rate = self.ctrl_a.step(ref_orientation, self.vehicle.orientation)
-        torques = self.ctrl_a.step(ref_rate, self.vehicle.euler_rate)
+        if self.n % self.steps_p == 0:
+            dt = self.steps_p * self.vehicle.simulation.dt
+            self._ref_vel = self.ctrl_p.step(ref_xy, self.vehicle.position[:2], dt=dt)
+            if feed_forward_velocity is not None:
+                self._ref_vel += feed_forward_velocity
+                self._ref_vel = np.clip(self._ref_vel, -self.ctrl_p.max_velocity, self.ctrl_p.max_velocity)
+        
+        if self.n % self.steps_a == 0:
+            dt = self.steps_a * self.vehicle.simulation.dt
+            self._pitch_roll = self.ctrl_v.step(self._ref_vel, self.vehicle.velocity[:2], dt=dt)
+            ref_orientation = np.asarray([self._pitch_roll[1], self._pitch_roll[0], ref_yaw])
+            ref_rate = self.ctrl_a.step(ref_orientation, self.vehicle.orientation, dt=dt)
+            self.torques = self.ctrl_r.step(ref_rate, self.vehicle.angular_rate, dt=dt)
 
-        self.action = np.asarray([*thrust, *torques])
+        self.action = np.asarray([*self.thrust, *self.torques])
         self.n += 1
+        self.t = self.vehicle.t
         return self.action

@@ -110,39 +110,29 @@ class Trajectory:
 
 
     def __iter__(self):
-        self._points, self._durations = self.generate_trajectory(self.vehicle.position)
+        self._points = self.generate_trajectory(self.vehicle.position)
         if self.proximity is not None:
             for i in range(len(self)):
                 while np.linalg.norm((self.vehicle.position - self[i])) >= self.proximity:
                         yield self[i], None
-                for _ in range(self._durations[i] - 1):
-                        yield self[i], None
         else:
             for i in range(len(self)):
-                for _ in range(self._durations[i]):
                         yield self[i], None
 
 
     def generate_trajectory(self, curr_pos=None):
         if curr_pos is not None:
             points = [curr_pos, *self.points]
-        durations = [1 if len(p)==3 else p[-1] for p in points]
         points = np.asarray([p[:3] for p in points])
         if self.resolution is not None:
             _points = []
-            _durations = []
             for i, (p1, p2) in enumerate(zip(points[:-1], points[1:])):
                 dist = np.linalg.norm(p2 - p1)
                 num = int(dist / self.resolution) + 1
                 _points.extend(np.linspace(p1, p2, num=num, endpoint=True))
-                dur = np.ones(num, dtype=int)
-                dur[0] = durations[i]
-                _durations.extend(dur)
-            _durations[-1] = durations[-1]
         else:
             _points = points
-            _durations = durations
-        return _points, _durations
+        return _points
 
 
     def add_waypoint(self, point: np.ndarray):
@@ -153,6 +143,10 @@ class Trajectory:
         pass
 
 
+    def reached(self, wp: np.ndarray) -> bool:
+        return np.linalg.norm(self.vehicle.position - wp) <= self.proximity
+
+
 
 class GuidedTrajectory:
     # Guided mode call stack overview
@@ -161,7 +155,7 @@ class GuidedTrajectory:
     # https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Math/control.cpp#L286
 
     def __init__(self, vehicle: Multirotor, waypoints: Iterable[np.ndarray],
-        interval: int=10, proximity: float=2., max_velocity: float=5., max_acceleration: float=3.,
+        interval: int=10, proximity: float=2., max_velocity: float=7., max_acceleration: float=3.,
         max_jerk: float=100, turn_factor: float=(1/np.sqrt(2))) -> None:
         self.vehicle = vehicle
         self.waypoints = np.asarray(waypoints)

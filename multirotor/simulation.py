@@ -368,7 +368,7 @@ class Multirotor:
 
     @property
     def current_average(self) -> float:
-        """Duty-cucle adjusted currrent draw from battery."""
+        """Duty-cycle adjusted currrent draw from battery."""
         peak_voltage = self.battery.params.max_voltage
         currents = np.asarray([p.motor.current for p in self.propellers])
         voltages = np.asarray([p.motor.voltage for p in self.propellers])
@@ -557,7 +557,7 @@ class Multirotor:
         )[-1]
         self.state = np.around(self.state, 4)
         for u_, prop in zip(u, self.propellers):
-            prop.step(u_)
+            prop.step(u_, max_voltage=self.battery.voltage)
         self.battery.step()
         return self.state
 
