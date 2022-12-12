@@ -204,7 +204,7 @@ class PosController(PIDController):
         ])
         ref_velocity = rot @ velocity
         ref_velocity_mag = np.linalg.norm(ref_velocity)
-        ref_velocity_unit = ref_velocity / ref_velocity_mag
+        ref_velocity_unit = ref_velocity / (ref_velocity_mag + 1e-6)
         self.action = ref_velocity_unit * min(ref_velocity_mag, self.max_velocity)
         return self.action
 
@@ -285,7 +285,7 @@ class AttController(PIDController):
             self.err_p = velocity
         else:
             velocity = super().step(reference=reference, measurement=measurement, dt=dt)
-        self.action = velocity
+        self.action = velocity # Euler rate
         return self.action
 
 
@@ -319,15 +319,15 @@ class RateController(PIDController):
         ref = euler_to_angular_rate(reference, self.vehicle.orientation)
         # ref = reference
         # actual change in angular velocity
-        # mea = euler_to_angular_rate(measurement, self.vehicle.orientation)
-        mea = measurement
+        mea = euler_to_angular_rate(measurement, self.vehicle.orientation)
+        # mea = measurement
         # prescribed change in velocity i.e. angular acc
         acceleration = np.clip(
             super().step(reference=ref, measurement=mea, dt=dt),
             -self.max_acceleration, self.max_acceleration
         )
         # torque = moment of inertia . angular_acceleration
-        self.action = self.vehicle.params.inertia_matrix.dot(acceleration)
+        # self.action = self.vehicle.params.inertia_matrix.dot(acceleration)
         return self.action
 
 
@@ -465,12 +465,6 @@ class Controller:
         self, reference: np.ndarray, measurement=None, ref_is_error: bool=False,
         feed_forward_velocity: np.ndarray=None
     ):
-        # if self.n % self.interval_n != 0:
-        #     self.n += 1
-        #     return self.action
-        # If the reference argument is the relative error, and not the absolute
-        # value. Using the relationship error = reference - measurement to
-        # get absolute reference values
         if ref_is_error:
             error = reference
             ref_xy = self.vehicle.position[:2] + error[:2]
@@ -498,7 +492,7 @@ class Controller:
             self._pitch_roll = self.ctrl_v.step(self._ref_vel, self.vehicle.velocity[:2], dt=dt)
             ref_orientation = np.asarray([self._pitch_roll[1], self._pitch_roll[0], ref_yaw])
             ref_rate = self.ctrl_a.step(ref_orientation, self.vehicle.orientation, dt=dt)
-            self.torques = self.ctrl_r.step(ref_rate, self.vehicle.angular_rate, dt=dt)
+            self.torques = self.ctrl_r.step(ref_rate, self.vehicle.euler_rate, dt=dt)
 
         self.action = np.asarray([*self.thrust, *self.torques])
         self.n += 1
