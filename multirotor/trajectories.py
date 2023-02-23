@@ -99,6 +99,7 @@ class Trajectory:
         self.vehicle = vehicle
         self.proximity = proximity
         self.resolution = resolution
+        self.ref = None
         
 
     def __len__(self):
@@ -114,10 +115,12 @@ class Trajectory:
         if self.proximity is not None:
             for i in range(len(self)):
                 while np.linalg.norm((self.vehicle.position - self[i])) >= self.proximity:
-                        yield self[i], None
+                        self.ref = self[i]
+                        yield self.ref, None
         else:
             for i in range(len(self)):
-                        yield self[i], None
+                self.ref = self[i]
+                yield self.ref, None
 
 
     def generate_trajectory(self, curr_pos=None):

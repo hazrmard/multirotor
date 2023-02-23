@@ -2,6 +2,7 @@ from typing import Callable, Iterable, Tuple
 
 import numpy as np
 from scipy.optimize import fsolve
+from tqdm.autonotebook import tqdm
 
 from .vehicle import PropellerParams, VehicleParams
 

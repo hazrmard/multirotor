@@ -96,7 +96,8 @@ class PIDController:
 
 
     def step(
-        self, reference: np.ndarray, measurement: np.ndarray, dt: float=1., ref_is_error: bool=False
+        self, reference: np.ndarray, measurement: np.ndarray, dt: float=1.,
+        ref_is_error: bool=False
     ) -> np.ndarray:
         """
         Calculate the output, based on the current measurement and the reference
@@ -153,9 +154,8 @@ class PosController(PIDController):
 
     def __post_init__(self):
         self.k_p = np.ones(2) * np.asarray(self.k_p)
-        # Att angle controller is strictly a P controller
-        self.k_i = np.zeros(2) * np.asarray(self.k_i)
-        self.k_d = np.zeros(2) * np.asarray(self.k_d)
+        self.k_i = np.ones(2) * np.asarray(self.k_i)
+        self.k_d = np.ones(2) * np.asarray(self.k_d)
         if self.leashing or self.square_root_scaling:
             self.k_p[:] = 0.5 * self.max_jerk / self.max_acceleration
         super().__post_init__()
@@ -182,6 +182,7 @@ class PosController(PIDController):
         # inertial frame velocity
         err = reference - measurement
         err_len = np.linalg.norm(err)
+        # TODO check conditional logic
         if self.leashing:
             err_unit = err / (err_len + 1e-6)
             err_len = min(err_len, self.leash)
@@ -198,9 +199,10 @@ class PosController(PIDController):
             velocity = super().step(reference, measurement, dt=dt)
         # convert to body-frame velocity
         roll, pitch, yaw = self.vehicle.orientation
+        cos, sin = np.cos(yaw), np.sin(yaw)
         rot = np.asarray([
-            [np.cos(yaw),   np.sin(yaw)],
-            [-np.sin(yaw),  np.cos(yaw)],
+            [cos,   sin],
+            [-sin, cos],
         ])
         ref_velocity = rot @ velocity
         ref_velocity_mag = np.linalg.norm(ref_velocity)
@@ -264,9 +266,8 @@ class AttController(PIDController):
 
     def __post_init__(self):
         self.k_p = np.ones(3) * np.asarray(self.k_p)
-        # Att angle controller is strictly a P controller
-        self.k_i = np.zeros(3) * np.asarray(self.k_i)
-        self.k_d = np.zeros(3) * np.asarray(self.k_d)
+        self.k_i = np.ones(3) * np.asarray(self.k_i)
+        self.k_d = np.ones(3) * np.asarray(self.k_d)
         if self.square_root_scaling:
             self.k_p[:] = self.max_jerk / self.max_acceleration
         super().__post_init__()
@@ -322,12 +323,12 @@ class RateController(PIDController):
         mea = euler_to_angular_rate(measurement, self.vehicle.orientation)
         # mea = measurement
         # prescribed change in velocity i.e. angular acc
-        acceleration = np.clip(
+        self.action = np.clip(
             super().step(reference=ref, measurement=mea, dt=dt),
             -self.max_acceleration, self.max_acceleration
         )
         # torque = moment of inertia . angular_acceleration
-        # self.action = self.vehicle.params.inertia_matrix.dot(acceleration)
+        self.action = self.vehicle.params.inertia_matrix.dot(self.action)
         return self.action
 
 
@@ -343,6 +344,7 @@ class AltController(PIDController):
     """
 
     vehicle: Multirotor
+    max_velocity: float = 5
 
 
     def __post_init__(self):
@@ -351,6 +353,14 @@ class AltController(PIDController):
         self.k_i = np.zeros(1) * np.asarray(self.k_i)
         self.k_d = np.zeros(1) * np.asarray(self.k_d)
         super().__post_init__()
+
+
+    def step(
+        self, reference: np.ndarray, measurement: np.ndarray, dt: float = 1
+    ) -> np.ndarray:
+        self.action = super().step(reference, measurement, dt)
+        self.action = np.clip(self.action, a_min=-self.max_velocity, a_max=self.max_velocity)
+        return self.action
 
 
             
@@ -438,7 +448,7 @@ class Controller:
 
 
     def reset(self):
-        self.action = None
+        self.action = np.zeros(4, self.vehicle.dtype)
         self.thrust = None
         self.torques = None
         self._ref_vel = np.zeros(2, self.vehicle.dtype)
@@ -498,3 +508,7 @@ class Controller:
         self.n += 1
         self.t = self.vehicle.t
         return self.action
+
+
+    def predict(self, ref, deterministic=True):
+        return self.step(reference=ref)
