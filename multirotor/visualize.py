@@ -20,7 +20,9 @@ from .helpers import DataLog
 
 
 
-def plot_datalog(log: DataLog, figsize=(21,10.5)):
+def plot_datalog(log: DataLog, figsize=(21,10.5),
+    plots=('pos', 'vel', 'ctrl', 'traj'),
+    nrows=2, ncols=None):
     """
     Plot recorded values from a Multirotor's flight. Including:
 
@@ -38,75 +40,81 @@ def plot_datalog(log: DataLog, figsize=(21,10.5)):
     figsize : tuple, optional
         The x/y dimensions of the figure, by default (21,10.5)
     """
+    nplots = len(plots)
+    if nrows is None and ncols is not None:
+        nrows = nplots // ncols + (nplots % ncols !=0)
+    elif nrows is not None and ncols is None:
+        ncols = nplots // nrows + (nplots % nrows !=0)
+
     plt.figure(figsize=figsize)
-    plot_grid = (3,3)
+    plot_grid = (nrows, ncols)
 
     n = len(log)
+    hasctrl = log.controller is not None
+    plot_number = 1
 
     # Positions
-    plt.subplot(*plot_grid,1)
-    plt.plot(log.t, log.x, label='x', c='r')
-    plt.plot(log.t, log.target[:, 0], c='r', ls=':')
-    plt.plot(log.t, log.y, label='y', c='g')
-    plt.plot(log.t, log.target[:, 1], c='g', ls=':')
-    plt.plot(log.t, log.z, label='z', c='b')
-    lines = plt.gca().lines[::2]
-    plt.ylabel('Position /m')
-    plt.twinx()
-    plt.plot(log.t, log.roll * (180 / np.pi), label='roll', c='c', ls=':')
-    plt.plot(log.t, log.pitch * (180 / np.pi), label='pitch', c='m', ls=':')
-    plt.plot(log.t, log.yaw * (180 / np.pi), label='yaw', c='y', ls=':')
-    plt.ylabel('Orientation /deg')
-    plt.legend(handles=plt.gca().lines + lines, ncol=2)
-    plt.title('Position and Orientation')
+    if 'pos' in plots:
+        plt.subplot(*plot_grid,plot_number)
+        plt.plot(log.t, log.x, label='x', c='r')
+        plt.plot(log.t, log.y, label='y', c='g')
+        plt.plot(log.t, log.z, label='z', c='b')
+        if hasctrl:
+            plt.plot(log.t, log.target.position[:, 0], c='r', ls=':')
+            plt.plot(log.t, log.target.position[:, 1], c='g', ls=':')
+        lines = plt.gca().lines[:3]
+        plt.ylabel('Position /m')
+        plt.twinx()
+        plt.plot(log.t, log.roll * (180 / np.pi), label='roll', c='c')
+        plt.plot(log.t, log.pitch * (180 / np.pi), label='pitch', c='m')
+        plt.plot(log.t, log.yaw * (180 / np.pi), label='yaw', c='y')
+        if hasctrl:
+            plt.plot(log.t, log.target.orientation[:,0] * (180 / np.pi), c='c', ls=':')
+            plt.plot(log.t, log.target.orientation[:,1] * (180 / np.pi), c='m', ls=':')
+            plt.plot(log.t, log.target.orientation[:,2] * (180 / np.pi), c='y', ls=':')
+        plt.ylabel('Orientation /deg')
+        plt.legend(handles=plt.gca().lines[:3] + lines, ncol=2)
+        plt.title('Position and Orientation')
+        plot_number += 1
 
-    plt.subplot(*plot_grid,2)
-    for i in range(log.speeds.shape[1]):
-        l, = plt.plot(log.t, log.speeds[:,i], label='prop %d' % i)
-    #     plt.plot(speeds[:,i], c=l.get_c())
-    lines = plt.gca().lines
-    plt.legend(handles=lines, ncol=2)
-    plt.title('Motor speeds /rad/s')
+    if 'vel' in plots:
+        plt.subplot(*plot_grid, plot_number)
+        v_world, v_ref = np.zeros_like(log.velocity), np.zeros_like(log.velocity)
+        for i, (v, o) in enumerate(zip(log.velocity, log.orientation)):
+            dcm = direction_cosine_matrix(*o)
+            v_world[i] = body_to_inertial(v, dcm)
+            if hasctrl:
+                v_ref[i] = body_to_inertial(log.target.velocity[i], dcm)
+            # v_ref[i] = body_to_inertial(np.concatenate((log.ctrl_p.action, log.ctrl_z.action)), dcm)
+        for i, c, a in zip(range(3), 'rgb', 'xyz'):
+            l, = plt.plot(log.t, v_world[:,i], label='Velocity %s' % a, c=c)
+            if hasctrl:
+                plt.plot(log.t, v_ref[:,i], ls=':', c=l.get_c())
+        #     plt.plot(velocities[:,i], label='Velocity %s' % a, c=c)
+        plt.legend()
+        plt.title('Velocities')
+        plot_number += 1
 
+    if 'ctrl' in plots:
+        plt.subplot(*plot_grid, plot_number)
+        plt.title('Controller allocated dynamics')
+        l = plt.plot(log.t, log.actions[:,0], label='Ctrl Thrust')
+        plt.ylabel('Force /N')
+        plt.twinx()
+        for i, c, a in zip(range(3), 'rgb', 'xyz'):
+            plt.plot(log.t, log.actions[:,1+i], label='Ctrl Torque %s' % a, c=c)
+        plt.ylabel('Torque /Nm')
+        plt.legend(handles=plt.gca().lines + l, ncol=2)
+        plot_number += 1
 
-    plt.subplot(*plot_grid,3)
-    v_world = np.zeros_like(log.velocity)
-    for i, (v, o) in enumerate(zip(log.velocity, log.orientation)):
-        dcm = direction_cosine_matrix(*o)
-        v_world[i] = body_to_inertial(v, dcm)
-    for i, c, a in zip(range(3), 'rgb', 'xyz'):
-        plt.plot(log.t, v_world[:,i], label='Velocity %s' % a, c=c)
-    #     plt.plot(velocities[:,i], label='Velocity %s' % a, c=c)
-    plt.legend()
-    plt.title('Velocities')
-
-    plt.subplot(*plot_grid,4)
-    plt.title('Controller allocated dynamics')
-    l = plt.plot(log.t, log.actions[:,0], label='Ctrl Thrust')
-    plt.ylabel('Force /N')
-    plt.twinx()
-    for i, c, a in zip(range(3), 'rgb', 'xyz'):
-        plt.plot(log.t, log.actions[:,1+i], label='Ctrl Torque %s' % a, c=c)
-    plt.ylabel('Torque /Nm')
-    plt.legend(handles=plt.gca().lines + l, ncol=2)
-
-    plt.subplot(*plot_grid,5)
-    lines = plt.plot(log.t, log.alloc_errs[:, 0], label='Thrust err', c='b')
-    plt.ylabel('Thrust /N')
-    plt.twinx()
-    plt.plot(log.t, log.alloc_errs[:, 1], label='Torque x err', ls=':')
-    plt.plot(log.t, log.alloc_errs[:, 2], label='Torque y err', ls=':')
-    plt.plot(log.t, log.alloc_errs[:, 3], label='Torque z err', ls=':')
-    plt.legend(handles = plt.gca().lines + lines, ncol=2)
-    plt.ylabel('Torque /Nm')
-    plt.title('Allocation Errors')
-
-    plt.subplot(*plot_grid,6)
-    plt.plot(log.target[:,0], log.target[:,1], label='Prescribed traj')
-    plt.plot(log.x, log.y, label='Actual traj', ls=':')
-    plt.gca().set_aspect('equal', 'box')
-    plt.title('XY positions /m')
-    plt.legend()
+    if 'traj' in plots:
+        plt.subplot(*plot_grid, plot_number)
+        plt.plot(log.target.position[:,0], log.target.position[:,1], label='Prescribed traj')
+        plt.plot(log.x, log.y, label='Actual traj', ls=':')
+        plt.gca().set_aspect('equal', 'box')
+        plt.title('XY positions /m')
+        plt.legend()
+        plot_number += 1
 
     plt.tight_layout()
 

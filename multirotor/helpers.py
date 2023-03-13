@@ -1,10 +1,11 @@
 from typing import Callable, Iterable, Tuple
+from types import SimpleNamespace
 
 import numpy as np
 from scipy.optimize import fsolve
-from tqdm.autonotebook import tqdm
 
-from .vehicle import PropellerParams, VehicleParams
+from .vehicle import PropellerParams, VehicleParams, SimulationParams
+from .physics import torque
 
 
 
@@ -228,6 +229,55 @@ def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.nda
 
 
 
+def get_vehicle_ability(
+    vp: VehicleParams, sp: SimulationParams,
+    max_tilt: float=np.pi/12,
+    max_angular_acc: float=5,
+    max_rads: float=600
+):
+    alloc, alloc_inverse = control_allocation_matrix(vp)
+    I_roll, I_pitch, I_yaw = vp.inertia_matrix.diagonal()
+    n = len(vp.propellers)
+
+    thrusts = [p.k_thrust * max_rads**2 for p in vp.propellers]
+    max_f = sum(thrusts)
+    max_acc_z = (max_f - (vp.mass * sp.g)) / vp.mass
+    
+    # Thrust produced at max_tilt to keep vehicle altitude constant.
+    # Use that to calculate lateral component of thrust and lateral acceleration
+    tilt_hover_thrust = (vp.mass * sp.g) / (n * np.cos(max_tilt))
+    # Thrust is limited by what is possible by the propellers
+    tilt_hover_thrust = min(max_f, tilt_hover_thrust)
+    max_acc_xy = n * tilt_hover_thrust * np.sin(max_tilt) / vp.mass
+
+    thrust_vec = np.zeros((3, n))
+    # excessive thrust (above weight) that can contribute to torque
+    thrust_vec[2] = np.asarray(thrusts) - (vp.mass * sp.g / n)
+    k_drag_vec = np.asarray([p.k_drag for p in vp.propellers])
+    inertia_vec = np.asarray([p.moment_of_inertia for p in vp.propellers])
+    torques = torque(
+        position_vector=vp.propeller_vectors,
+        force=thrust_vec,
+        clockwise=np.asarray(vp.clockwise).astype(float),
+        drag_coefficient=k_drag_vec,
+        moment_of_inertia=inertia_vec,
+        prop_angular_acceleration=0,
+        prop_angular_velocity=max_rads
+    )
+    torques = (torques * (torques > 0)).sum(axis=1)
+    I = vp.inertia_matrix.diagonal()
+    # t = i a
+    ang_acc = torques / I
+
+    res = dict(
+        max_acc_xy=max_acc_xy,
+        max_acc_z=max_acc_z,
+        max_ang_acc=max(ang_acc)
+    )
+    return res
+
+
+
 class DataLog:
     """
     Records state and action variables for a multirotor and controller for each
@@ -282,6 +332,9 @@ class DataLog:
         for arg in self._args:
             setattr(self, arg, None)
             setattr(self, '_' + str(arg), [])
+        self._target = dict(
+            position=[], velocity=[], orientation=[], rate=[]
+        )
         self.vehicle = vehicle
         self.controller = controller
 
@@ -300,6 +353,18 @@ class DataLog:
             self._times.append(self.vehicle.t)
         if self.controller is not None:
             self._actions.append(self.controller.action)
+            self._target['position'].append(
+                self.controller.reference[:3]
+            )
+            self._target['velocity'].append(
+                np.concatenate((self.controller.ctrl_v.reference, self.controller.ctrl_z.action))
+            )
+            self._target['orientation'].append(
+                np.concatenate((self.controller.ctrl_a.reference, self.controller.reference[3:4]))
+            )
+            self._target['rate'].append(
+                self.controller.ctrl_r.reference
+            )
         for key, value in kwargs.items():
             getattr(self, '_' + key).append(value)
 
@@ -312,21 +377,70 @@ class DataLog:
         self._make_arrays()
         self._states = []
         self._actions = []
+        self._times = []
         for arg in self._args:
             setattr(self, '_' + arg, [])
+        self._target = dict(
+            position=[], velocity=[], orientation=[], rate=[]
+        )
+
+
+    def append(self, log: 'DataLog', relative=True):
+        assert set(self._args) == set(log._args), 'Inconsistent logged variables'
+        old_len = len(self)
+        self._states.extend(log._states)
+        self._actions.extend(log._actions)
+        self._times.extend(log._times)
+        if self._arrayed and log._arrayed:
+            self.states = np.concatenate((self.states, log.states), dtype=self.vehicle.dtype)
+            self.actions = np.concatenate((self.actions, log.actions), dtype=self.vehicle.dtype)
+            self.times = np.concatenate((self.times, log.times), dtype=self.vehicle.dtype)
+
+        for arg in self._args:
+            lst = getattr(self, '_' + arg, [])
+            otherlst = getattr(log, '_' + arg, [])
+            lst.extend(otherlst)
+            setattr(self, '_' + arg, lst)
+            if self._arrayed and log._arrayed:
+                arr = getattr(self, arg)
+                otherarr = getattr(log, arg)
+                arr = np.concatenate((arr, otherarr), dtype=self.vehicle.dtype)
+                setattr(self, arg, arr)
+
+        self._target = {name: lst + log._target[name] for name, lst in self._target.items()}
+        if self._arrayed and log._arrayed:
+            d = {}
+            for k in self._target.keys():
+                a1 = getattr(self.target, k)
+                a2 = getattr(log.target, k)
+                a = np.concatenate((a1, a2), dtype=self.vehicle.dtype)
+                d[k] = a
+            self.target = SimpleNamespace(**d)
+
+        if relative:
+            last_time = self.times[old_len - 1]
+            # last_pos = self.position[old_len - 1]
+            if not self._arrayed:
+                for i in range(old_len, len(self)):
+                        # self._states[i][:3] += last_pos
+                        self._times[i] += last_time
+            elif self._arrayed:
+                # self.states[old_len:,:3] += last_pos
+                self.times[old_len:] += last_time
 
             
-    def _make_arrays(self):
+    def _make_arrays(self, relative_to=None):
         """
         Convert python list to array and put up a flag that all arrays are up
         to date.
         """
         if not self._arrayed:
-            self.states = np.asarray(self._states)
-            self.actions = np.asarray(self._actions)
-            self.times = np.asarray(self._times)
+            self.states = np.asarray(self._states, self.vehicle.dtype)
+            self.actions = np.asarray(self._actions, self.vehicle.dtype)
+            self.times = np.asarray(self._times, self.vehicle.dtype)
             for arg in self._args:
-                setattr(self, arg, np.asarray(getattr(self, '_' + arg)))
+                setattr(self, arg, np.asarray(getattr(self, '_' + arg), self.vehicle.dtype))
+            self.target = SimpleNamespace(**{k: np.asarray(v, self.vehicle.dtype) for k, v in self._target.items()})
         self._arrayed = True
 
 
