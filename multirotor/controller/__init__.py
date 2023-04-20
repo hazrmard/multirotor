@@ -8,3 +8,8 @@ from .pid import (
     AltRateController,
     Controller
 )
+try:
+    import pyscurve
+    from .scurves import SCurveController
+except ImportError:
+    pass
