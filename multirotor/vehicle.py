@@ -118,6 +118,8 @@ class VehicleParams:
 
 
     def __post_init__(self):
+        self.nprops = len(self.propellers)
+        "Number of propellers"
         self.distances = self.distances.astype(float)
         self.inertia_matrix_inverse = np.linalg.inv(self.inertia_matrix)
         x = np.cos(self.angles) * self.distances
@@ -142,37 +144,3 @@ class SimulationParams:
     "Air density kg/m^3 at MSL"
     dtype: type = None
     "Default data type for arrays. If None, inferred from VehicleParams inertia_matrix."
-
-
-
-@dataclass
-class AttControllerParams:
-
-    k_p: np.ndarray
-    k_i: np.ndarray
-    k_d: np.ndarray
-    max_err_i: np.ndarray = np.atleast_1d([1])
-
-
-
-@dataclass
-class AltControllerParams(AttControllerParams):
-    pass
-
-
-
-@dataclass
-class PosControllerParams(AttControllerParams):
-    max_tilt: float = np.pi / 18
-    "Maximum tilt angle in radians"
-    max_velocity: float = 5.
-    "Maximum velocity in m/s"
-
-
-
-@dataclass
-class ControllerParams:
-
-    att: AttControllerParams
-    alt: AltControllerParams
-    pos: PosControllerParams

@@ -48,7 +48,11 @@ class Trajectory:
             create intermediate points a distance 2 apart.
         """
         self.vehicle = vehicle
-        self.points = np.asarray(points, self.vehicle.dtype)
+        if self.vehicle is not None:
+            dtype = self.vehicle.dtype
+        else:
+            dtype = np.float32
+        self.points = np.asarray(points, dtype)
         self.proximity = proximity
         self.resolution = resolution
         self.ref = None
@@ -95,9 +99,18 @@ class Trajectory:
         if self.resolution is not None:
             _points = []
             for i, (p1, p2) in enumerate(zip(points[:-1], points[1:])):
-                dist = np.linalg.norm(p2 - p1)
-                num = int(dist / self.resolution) + 1
-                _points.extend(np.linspace(p1, p2, num=num, endpoint=True))
+                pos_vec = p2 - p1
+                dist = np.linalg.norm(pos_vec)
+                unit_vec = pos_vec / dist
+                # num = int(dist / self.resolution) + 1
+                number = dist // self.resolution
+                remainder  = dist % self.resolution
+                pts = p1 + unit_vec * self.resolution * np.arange(0, number+1, step=1).reshape(-1,1)
+                if remainder > 0 and i==len(points)-2: # if leftover distance and last point
+                    pts = np.concatenate((pts, (p2,)))
+                # pts = p1 + unit_vec * np.arange(0, dist + self.resolution, step=self.resolution).reshape(-1,1)
+                # _points.extend(np.linspace(p1, p2, num=num, endpoint=True))
+                _points.extend(pts)
         else:
             _points = points
         return _points

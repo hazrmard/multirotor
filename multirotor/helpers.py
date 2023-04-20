@@ -232,11 +232,8 @@ def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.nda
 def get_vehicle_ability(
     vp: VehicleParams, sp: SimulationParams,
     max_tilt: float=np.pi/12,
-    max_angular_acc: float=5,
     max_rads: float=600
 ):
-    alloc, alloc_inverse = control_allocation_matrix(vp)
-    I_roll, I_pitch, I_yaw = vp.inertia_matrix.diagonal()
     n = len(vp.propellers)
 
     thrusts = [p.k_thrust * max_rads**2 for p in vp.propellers]
@@ -316,11 +313,6 @@ class DataLog:
         controller : Controller
             The controller to track.
         """
-        self._states_names = ('x','y','z',
-                              'vx','vy','vz',
-                              'roll','pitch','yaw',
-                              'xrate', 'yrate', 'zrate')
-        self._action_names = ('thrust', 'torque_x', 'torque_y', 'torque_z')
         self._arrayed = False
         self._states = []
         self.states = None
@@ -329,6 +321,13 @@ class DataLog:
         self.times = None
         self._times = []
         self._args = () if other_vars is None else other_vars
+        own_vars = ('arrayed', 'states', 'actions', 'times', 'args', 'target')
+        not_allowed = [v for v in own_vars if v in self._args]
+        if len(not_allowed) > 0:
+            raise AttributeError(
+                ('The following `other_vars` are not allowed since they are attributes '
+                  ', '.join(not_allowed))
+            )
         for arg in self._args:
             setattr(self, arg, None)
             setattr(self, '_' + str(arg), [])

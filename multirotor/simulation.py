@@ -189,7 +189,7 @@ class Motor:
         Parameters
         ----------
         u : float
-            Voltage signal.
+            Speed signal (rad/s).
         max_voltage : float, optional
             The maximum voltage supply from power source. By default infinite.
 
@@ -267,9 +267,7 @@ class Multirotor:
         self._dxdt = None
         self.dxdt_decimals = max(1, 1 - int(np.log10(self.simulation.dt)))
 
-        self.propellers: List[Propeller] = None
-        self.propeller_vectors: np.ndarray = None
-        self.propellers = []
+        self.propellers: List[Propeller] = []
         for params in self.params.propellers:
             self.propellers.append(Propeller(params, self.simulation))
 
@@ -302,6 +300,7 @@ class Multirotor:
         self.alloc = self.alloc.astype(self.dtype)
         self.params.propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
+        self.params.inertia_matrix = self.params.inertia_matrix.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self.state = np.zeros(12, dtype=self.dtype)
         self._dxdt = np.zeros_like(self.state)
@@ -450,10 +449,10 @@ class Multirotor:
         # Do not need to get forces/torques on body, since the action array
         # already is a 6d vector of forces/torques.
         # forces, torques = self.get_forces_torques(u, x)
-        xdot = apply_forces_torques(
-            u[:3], u[3:], x, self.simulation.g,
+        dxdt = apply_forces_torques(
+            u[:3], u[3:], x.astype(self.dtype), self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, self.dxdt_decimals)
+        return np.around(dxdt, self.dxdt_decimals)
 
 
     def dxdt_speeds(
@@ -487,10 +486,12 @@ class Multirotor:
         # same state by the odeint() function, and the results should be consistent.
         forces, torques = self.get_forces_torques(
             u, x)
-        xdot = apply_forces_torques(
-            forces+disturb_forces, torques+disturb_torques, x, self.simulation.g,
+        # print('dxdt-x', self.t // self.simulation.dt, x.dtype)
+        dxdt = apply_forces_torques(
+            forces+disturb_forces, torques+disturb_torques, x.astype(self.dtype), self.simulation.g,
             self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(xdot, self.dxdt_decimals)
+        # print('dxdt', self.t // self.simulation.dt, dxdt.dtype)
+        return np.around(dxdt, self.dxdt_decimals)
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -516,7 +517,7 @@ class Multirotor:
             args=(u,),
             rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
-        self.state = np.around(self.state, 4)
+        self.state = np.around(self.state, 4).astype(self.dtype)
         # TODO: inverse solve for speed = forces to set propeller speeds
         return self.state
 
@@ -550,12 +551,14 @@ class Multirotor:
             t=self.t, x=self.state, u=u,
             disturb_forces=disturb_forces, disturb_torques=disturb_torques
         )
+        # print('pre-x', self.t // self.simulation.dt, self.state.dtype)
         self.state = odeint(
             self.dxdt_speeds, self.state, (0, self.simulation.dt),
             args=(u, disturb_forces, disturb_torques),
             rtol=1e-4, atol=1e-4, tfirst=True
         )[-1]
-        self.state = np.around(self.state, 4)
+        self.state = np.around(self.state, 4).astype(self.dtype)
+        # print('post-x', self.t // self.simulation.dt, self.state.dtype)
         for u_, prop in zip(u, self.propellers):
             prop.step(u_, max_voltage=self.battery.voltage)
         self.battery.step()
@@ -580,7 +583,7 @@ class Multirotor:
             The prescribed propeller speeds (rad /s)
         """
         # TODO: njit it? np.linalg.lstsq can be compiled
-        vec = np.asarray([thrust, *torques])
+        vec = np.asarray([thrust, *torques], self.dtype)
         # return np.sqrt(np.linalg.lstsq(self.alloc, vec, rcond=None)[0])
         return np.sqrt(
             np.clip(self.alloc_inverse @ vec, a_min=0., a_max=None)
