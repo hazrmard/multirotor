@@ -337,6 +337,13 @@ class DataLog:
         self.vehicle = vehicle
         self.controller = controller
 
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            d = DataLog(other_vars=self._args)
+            pass
+        # TODO: Finish. Return a DataLog with the requested slice
+
         
     def log(self, **kwargs):
         """
@@ -417,13 +424,14 @@ class DataLog:
             self.target = SimpleNamespace(**d)
 
         if relative:
-            last_time = self.times[old_len - 1]
             # last_pos = self.position[old_len - 1]
             if not self._arrayed:
+                last_time = self._times[old_len - 1]
                 for i in range(old_len, len(self)):
                         # self._states[i][:3] += last_pos
                         self._times[i] += last_time
             elif self._arrayed:
+                last_time = self.times[old_len - 1]
                 # self.states[old_len:,:3] += last_pos
                 self.times[old_len:] += last_time
 

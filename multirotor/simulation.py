@@ -275,6 +275,7 @@ class Multirotor:
             self.battery = Battery(self.params.battery, self.simulation)
         else:
             self.battery = Battery(BatteryParams(max_voltage=np.inf), self.simulation)
+        self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
 
@@ -296,10 +297,9 @@ class Multirotor:
         if self.battery is not None:
             self.battery.reset()
 
-        self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.alloc = self.alloc.astype(self.dtype)
-        self.params.propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
+        self.params.propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
         self.params.inertia_matrix = self.params.inertia_matrix.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self.state = np.zeros(12, dtype=self.dtype)
@@ -373,6 +373,15 @@ class Multirotor:
         voltages = np.asarray([p.motor.voltage for p in self.propellers])
         duty_cycle = voltages / peak_voltage
         return np.sum(duty_cycle * currents)
+
+
+    @property
+    def speeds(self) -> np.ndarray:
+        return np.asarray([p.speed for p in self.propellers], self.dtype)
+    @speeds.setter
+    def speeds(self, speeds: np.ndarray):
+        for s, p in zip(speeds, self.propellers):
+            p.step(s, max_voltage=self.battery.voltage)
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:

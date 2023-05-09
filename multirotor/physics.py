@@ -102,8 +102,8 @@ def torque(
 
 
 
-@njit
-def apply_forces_torques(
+# @njit
+def _apply_forces_torques(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
@@ -185,3 +185,6 @@ def apply_forces_torques(
     xdot[9:12] = I_inv @ (torques - gyro)
     
     return xdot
+
+
+apply_forces_torques = njit(_apply_forces_torques)

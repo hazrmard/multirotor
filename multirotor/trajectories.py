@@ -101,7 +101,7 @@ class Trajectory:
             for i, (p1, p2) in enumerate(zip(points[:-1], points[1:])):
                 pos_vec = p2 - p1
                 dist = np.linalg.norm(pos_vec)
-                unit_vec = pos_vec / dist
+                unit_vec = pos_vec / (dist + 1e-6)
                 # num = int(dist / self.resolution) + 1
                 number = dist // self.resolution
                 remainder  = dist % self.resolution
@@ -227,3 +227,28 @@ class GuidedTrajectory:
 
     def reached(self, wp: np.ndarray) -> bool:
         return np.linalg.norm(self.vehicle.position - wp) <= self.proximity
+
+
+
+def eight_curve(a: float=10, N:int=20) -> np.ndarray:
+    """
+    Generate a list of points following the Eight curve pattern.
+
+    Parameters
+    ----------
+    a : int, optional
+        The scale of the curve, by default 50
+    N : int, optional
+        Number of points to generate, by default 20
+
+    Returns
+    -------
+    np.ndarray
+        A Nx3 array of points.
+    """
+    wp = np.zeros((N, 3), np.float32)
+    t = np.linspace(0, 2 * np.pi, N)
+    wp[:,0] = a * np.sin(t)
+    wp[:,1] = a * np.sin(t) * np.cos(t)
+    wp[:,2] = np.zeros(N)
+    return wp

@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Tuple, Union, Dict
 import threading as th
 import multiprocessing as mp
 import queue
@@ -7,22 +7,21 @@ import time
 
 import numpy as np
 import matplotlib.pyplot as plt
-from tqdm.autonotebook import tqdm
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Line3D
+from matplotlib.lines import Line2D
 
 from .coords import body_to_inertial, direction_cosine_matrix
 from .simulation import Multirotor
-from .trajectories import Trajectory, GuidedTrajectory
-from .controller import Controller
+from .vehicle import VehicleParams
 from .helpers import DataLog
 
 
 
 def plot_datalog(log: DataLog, figsize=(21,10.5),
     plots=('pos', 'vel', 'ctrl', 'traj'),
-    nrows=2, ncols=None):
+    nrows=2, ncols=None) -> Dict[str, plt.Axes]:
     """
     Plot recorded values from a Multirotor's flight. Including:
 
@@ -39,6 +38,11 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         The datalog, where `datalog.done_logging()` has been called.
     figsize : tuple, optional
         The x/y dimensions of the figure, by default (21,10.5)
+    
+    Returns
+    -------
+    Dict : Dict[str, plt.Axes]
+        A dictionary of plot names mapping to Axes
     """
     nplots = len(plots)
     if nrows is None and ncols is not None:
@@ -52,6 +56,7 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
     n = len(log)
     hasctrl = log.controller is not None
     plot_number = 1
+    axes = {}
 
     # Positions
     if 'pos' in plots:
@@ -76,6 +81,7 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         plt.legend(handles=plt.gca().lines[:3] + lines, ncol=2)
         plt.title('Position and Orientation')
         plot_number += 1
+        axes['pos'] = plt.gca()
 
     if 'vel' in plots:
         plt.subplot(*plot_grid, plot_number)
@@ -94,6 +100,7 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         plt.legend()
         plt.title('Velocities')
         plot_number += 1
+        axes['vel'] = plt.gca()
 
     if 'ctrl' in plots:
         plt.subplot(*plot_grid, plot_number)
@@ -106,6 +113,7 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         plt.ylabel('Torque /Nm')
         plt.legend(handles=plt.gca().lines + l, ncol=2)
         plot_number += 1
+        axes['ctrl'] = plt.gca()
 
     if 'traj' in plots:
         plt.subplot(*plot_grid, plot_number)
@@ -117,8 +125,50 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         plt.ylabel('Y /m')
         plt.legend()
         plot_number += 1
+        axes['traj'] = plt.gca()
 
     plt.tight_layout()
+    return axes
+
+
+
+def get_wind_quiver(heading: str, ax: plt.Axes, n=5, dim=2):
+    """
+    Create arrays of x,y,z coordinates for a quiver plot of wind.
+
+    Parameters
+    ----------
+    heading : str
+        The heading of the wind, e.g. '5@45' for 5N wind from 45 degrees.
+    ax : plt.Axes
+        The axes on which to plot the quiver.
+    n : int, optional
+        Size of arrays, by default 5
+    dim : int, optional
+        Dimension of quiver (2 or 3), by default 2
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        x,y,[z],dx,dy,[dz] coordinates for quiver plot.
+    """
+    magnitude, angle = heading.split('@')
+    magnitude = float(magnitude)
+    if magnitude==0:
+        return (0,0,0,0) if dim==2 else (0,0,0,0,0,0)
+    angle = float(angle) * np.pi / 180
+    dx, dy = -np.cos(angle), -np.sin(angle)
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    if dim==3:
+        zlim = ax.get_zlim()
+        dz = 0
+        x,y,z = np.meshgrid(np.linspace(*xlim, num=n), np.linspace(*ylim, num=n), np.linspace(*zlim, num=n),
+                      indexing='xy')
+        return x,y,z,dx,dy,dz
+    else:
+        x,y = np.meshgrid(np.linspace(*xlim, num=n), np.linspace(*ylim, num=n),
+                      indexing='xy')
+        return x,y,dx,dy
 
 
 
@@ -138,7 +188,7 @@ class VehicleDrawing:
         self.arm_lines, self.arm_lines_points, \
         self.trajectory_line, \
         self.axis_lines, self.axis_lines_points = \
-            make_drawing(self, self.body_axes)
+            make_drawing(self.params, self.body_axes)
         self.trajectory = [[], [], []] # [[X,..], [Y,...], [Z,...]]
 
 
@@ -260,39 +310,42 @@ class VehicleDrawing:
         
 
 
-def make_drawing(drawing: VehicleDrawing, body_axes: bool=False):
-    params = drawing.params
-    arm_lines_points = np.zeros((len(params.propellers) * 2, 3)) # [2 points/ propeller, axis]
+def make_drawing(params: VehicleParams, body_axes: bool=False, make_2d: bool=False, scale_arms=1.):
+    Line = Line3D if not make_2d else Line2D
+    arm_lines_points = np.zeros((len(params.propellers) * 2, 2 if make_2d else 3)) # [2 points/ propeller, axis]
     x = params.distances * np.cos(params.angles)
     y = params.distances * np.sin(params.angles)
     arm_lines_points[1::2,0] = x
     arm_lines_points[1::2,1] = y
+    arm_lines_points *=  scale_arms
     arm_lines = []
     for i in range(len(params.propellers)):
         arm_lines.append(
-            Line3D(
+            Line(
                 arm_lines_points[2*i:2*i+2,0],
                 arm_lines_points[2*i:2*i+2,1],
-                arm_lines_points[2*i:2*i+2,2],
-                antialiased=False))
+                antialiased=False),
+                **({'zs':arm_lines_points[2*i:2*i+2,2]} if not make_2d else {}),
+            )
 
-    trajectory_line = Line3D([], [], [], linewidth=0.5, color='black', linestyle=':')
+    trajectory_line = Line([], [], linewidth=0.5, color='black', linestyle=':',
+                           **({'zs':[]} if not make_2d else {}))
 
     axis_lines_points = np.zeros((6, 3)) # [2 points/ axis, axis]
     axis_lines_points[1::2] = np.eye(3)
     axis_lines = []
     for i, c in enumerate(['r', 'g', 'b']):
         if body_axes:
-            axis_lines.append(Line3D(
+            axis_lines.append(Line(
                 axis_lines_points[2*i:2*i+2,0],
                 axis_lines_points[2*i:2*i+2,1],
-                axis_lines_points[2*i:2*i+2,2],
                 antialiased=False,
                 linewidth=0.5,
-                color=c
+                color=c,
+                **({'zs':axis_lines_points[2*i:2*i+2,2]} if not make_2d else {}),
             )) 
         else:
-            axis_lines.append(Line3D([], [], []))
+            axis_lines.append(Line([], [], **({'zs':[]} if not make_2d else {})))
 
     return arm_lines, arm_lines_points, trajectory_line, axis_lines, axis_lines_points
 
