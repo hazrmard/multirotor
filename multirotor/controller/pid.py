@@ -490,6 +490,14 @@ class Controller:
             The controller will only renew an action after this interval has passed.
             Otherwise it will apply the last action. For e.g. if interval=1, and vehicle dt=0.1, a
             new action will only be applied every interval/dt=10 steps. by default 1
+        feedforward_weight: float, optional
+            The weight to assign to a separately specified velocity reference,
+            which overrides the velocity signal given by the position controller.
+        
+        Attributes
+        ----------
+        vehicle: Multirotor
+            The vehicle being controlled.
         """
         self.ctrl_p = ctrl_p
         self.ctrl_v = ctrl_v
@@ -569,6 +577,17 @@ class Controller:
             (self.ctrl_p.state, self.ctrl_v.state, self.ctrl_a.state,
             self.ctrl_r.state, self.ctrl_z.state, self.ctrl_vz.state)
         )
+    @property
+    def vehicle(self) -> Multirotor:
+        return self.ctrl_p.vehicle
+    @vehicle.setter
+    def vehicle(self, v: Multirotor):
+        self.ctrl_p.vehicle = v
+        self.ctrl_v.vehicle = v
+        self.ctrl_a.vehicle = v
+        self.ctrl_r.vehicle = v
+        self.ctrl_z.vehicle = v
+        self.ctrl_vz.vehicle = v
 
 
     def step(
