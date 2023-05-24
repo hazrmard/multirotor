@@ -77,12 +77,14 @@ class PIDController:
             self.max_err_i = np.atleast_1d(np.inf, self.dtype)
         else:
             self.max_err_i = np.asarray(self.max_err_i, dtype=self.err.dtype)
+        self.reference = np.zeros_like(self.err)
         self.action = np.zeros_like(self.err)
         self._params = ('k_p', 'k_i', 'k_d', 'max_err_i')
 
 
     def reset(self):
         self.action = np.zeros_like(self.err, self.dtype)
+        self.reference *= 0
         self.err *= 0
         self.err_p *= 0
         self.err_i *= 0
@@ -155,7 +157,7 @@ class PIDController:
             a_min=-self.max_err_i, a_max=self.max_err_i
         )
         err_d = self.k_d * (err - self.err) / dt
-        action = self.err_p + self.err_i + self.err_d
+        action = err_p + err_i + err_d
         if persist:
             self.err_p, self.err_i, self.err_d, self.action = \
                 err_p, err_i, err_d, action
