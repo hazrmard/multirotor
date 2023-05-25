@@ -1,3 +1,4 @@
 sphinx
 sphinx-autoapi
 numpydoc
+myst_parser
