@@ -2,7 +2,7 @@
 This module defines OpenAI Gym compatible classes based on the Multirotor class.
 """
 
-from typing import Tuple
+from typing import Tuple, List, Union
 import numpy as np
 import gym
 
@@ -11,9 +11,23 @@ from .helpers import find_nominal_speed
 
 
 class BaseMultirotorEnv(gym.Env):
+    """
+    The base environment class, defining the episode, and reward function.
+    """
+
+    max_angle = np.pi/12
+    """The max tilt angle in radians."""
+    proximity = 0.5
+    """Distance from the waypoint at which to consider it has been reached."""
+    period = 10
+    """Maximum duration of the episode (seconds)."""
+    bounding_box = 20
+    """Size of the cube in which the vehicle can fly, centered at origin."""
+    motion_reward_scaling = bounding_box / 2
+    bonus = bounding_box * 20
 
 
-    def __init__(self, vehicle: Multirotor=None) -> None:
+    def __init__(self, vehicle: Multirotor=None, seed: int=None) -> None:
         # pos, vel, att, ang vel
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
@@ -22,21 +36,77 @@ class BaseMultirotorEnv(gym.Env):
             shape=(12,)
         )
         self.vehicle = vehicle
+        self.seed(seed=seed, _seed_with_none=True)
+
+
+    def seed(self, seed: int=None, _seed_with_none: bool=False) -> List[Union[int,tuple]]:
+        if isinstance(seed, (int, float)):
+            self.random = np.random.RandomState(seed)
+            self._seeds = (seed,)
+        elif seed is None and _seed_with_none:
+            self.random = np.random.RandomState()
+            self._seeds = (self.random.get_state())
+        elif isinstance(seed, tuple):
+            self.random = np.random.RandomState()
+            self.random.set_state(seed)
+            self._seeds = (self.random.get_state(),)
+        return list(self._seeds)
 
 
     @property
     def state(self) -> np.ndarray:
         return self.vehicle.state
+    @state.setter
+    def state(self, x: np.ndarray):
+        self.vehicle.state = np.asarray(x, self.vehicle.dtype)
 
 
-    def reset(self):
+    def reset(self, x: np.ndarray=None) -> np.ndarray:
+        """
+        Reset the vehicle to a random initial position.
+
+        Parameters
+        ----------
+        x : np.ndarray, optional
+            A state to set the vehicle to, by default None
+
+        Returns
+        -------
+        np.ndarray
+            The state vector of the vehicle.
+        """
         if self.vehicle is not None:
             self.vehicle.reset()
+            position = (self.random.rand(3) - 0.5) * self.bounding_box * 0.75
+            position[(0<position) & (position<self.proximity)] = self.proximity
+            position[(-self.proximity<position) & (position<0)] = -self.proximity
+            self.vehicle.state[:3] = position
+            if x is not None:
+                self.vehicle.state = np.asarray(x, self.vehicle.dtype)
+        # needed by reward() to calculate deviation from straight line
+        self._des_unit_vec = - self.state[:3] / np.linalg.norm(self.state[:3])
         return self.state
 
 
-    def reward(self, state, action, nstate):
-        raise NotImplementedError
+    def reward(self, state: np.ndarray, action: np.ndarray, nstate: np.ndarray) -> float:
+        dist = np.linalg.norm(nstate[:3])
+        self._reached = dist <= self.proximity
+        self._outofbounds = np.any(np.abs(state[:3]) > self.bounding_box / 2)
+        self._outoftime = self.vehicle.t >= self.period
+        self._tipped = np.any(np.abs(state[6:9]) > self.max_angle)
+        self._done = self._outoftime or self._outofbounds or self._reached or self._tipped
+        delta_pos = (nstate[:3] - state[:3])
+        advance = np.linalg.norm(delta_pos)
+        cross = np.linalg.norm(np.cross(delta_pos, self._des_unit_vec))
+        delta_turn = np.abs(nstate[8]) - np.abs(state[8])
+        reward = ((advance - cross - delta_turn) * self.motion_reward_scaling) - self.vehicle.simulation.dt
+        if self._reached:
+            reward += self.bonus
+        elif self._tipped or self._outofbounds:
+            reward -= self.bonus
+        elif self._outoftime:
+            reward -= (dist / self.bounding_box) * self.bonus
+        return reward
 
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
@@ -78,7 +148,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
     def step(
         self, action: np.ndarray, disturb_forces: np.ndarray=0.,
         disturb_torques: np.ndarray=0.
-    ) -> Tuple[np.ndarray, float, bool, bool, dict]:
+    ) -> Tuple[np.ndarray, float, bool, dict]:
         """
         Step environment by providing dynamics acting in local frame.
 
@@ -93,7 +163,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
 
         Returns
         -------
-        Tuple[np.ndarray, None, None, None]
+        Tuple[np.ndarray, float, bool, dict]
             The state and other environment variables.
         """
         if self.allocate:
@@ -103,8 +173,10 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
             action = np.concatenate((forces, torques))
         action[:3] += disturb_forces
         action[3:] += disturb_torques
-        self.vehicle.step_dynamics(u=action)
-        return self.state, 0., False, False, {}
+        state = self.state
+        nstate = self.vehicle.step_dynamics(u=action)
+        reward = self.reward(state, action, nstate)
+        return nstate, reward, self._done, {}
 
 
 
@@ -150,7 +222,7 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
     def step(
         self, action: np.ndarray, disturb_forces: np.ndarray=0.,
         disturb_torques: np.ndarray=0.
-    ) -> Tuple[np.ndarray, float, bool, bool, dict]:
+    ) -> Tuple[np.ndarray, float, bool, dict]:
         """
         Step environment by providing speed signal.
 
@@ -165,12 +237,14 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
 
         Returns
         -------
-        Tuple[np.ndarray, None, None, None]
+        Tuple[np.ndarray, float, bool, dict]
             The state and other environment variables.
         """
-        self.vehicle.step_speeds(
+        state = self.state
+        nstate = self.vehicle.step_speeds(
             u=action,
             disturb_forces=disturb_forces,
             disturb_torques=disturb_torques
         )
-        return self.state, 0., False, False, {}
+        reward = self.reward(state, action, nstate)
+        return nstate, reward, self._done, {}

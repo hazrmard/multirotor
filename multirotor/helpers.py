@@ -266,6 +266,9 @@ def get_vehicle_ability(
     # t = i a
     ang_acc = torques / I
 
+    # TODO: max angular velocity such that can accelerate to and decelerate from it
+    # to 0
+
     res = dict(
         max_acc_xy=max_acc_xy,
         max_acc_z=max_acc_z,
