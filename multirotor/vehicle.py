@@ -99,6 +99,12 @@ class BatteryParams:
 @dataclass
 class VehicleParams:
 
+    mass: float
+    "The total mass of the vehicle"
+    # TODO: Should moments of inertia of propeller motors be added to this matrix
+    # manually? Currently we assume this represents the whole vehicle.
+    inertia_matrix: np.ndarray
+    "3x3 intertia matrix describing the rotational properties of the body."
     propellers: List[PropellerParams]
     angles: np.ndarray
     "Angle (radians) of propeller arm from the positive x-axis (forward) of the body frame."
@@ -107,14 +113,8 @@ class VehicleParams:
     clockwise: np.ndarray = None
     """1 if motor spins clockwise, -1 if anti-clockwise, looking from the top.
     Defaults to alternating clockwise/anti-clockwise."""
-
     battery: BatteryParams = None
     "The battery parameters"
-    mass: float = 1.
-    # TODO: Should moments of inertia of propeller motors be added to this matrix
-    # manually? Currently we assume this represents the whole vehicle.
-    inertia_matrix: np.matrix = np.eye(3)
-    "3x3 intertia matrix describing the rotational properties of the body."
 
 
     def __post_init__(self):
