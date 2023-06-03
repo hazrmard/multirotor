@@ -70,7 +70,7 @@ def run_sim(
 ) -> DataLog:
     """
     Run a single episode, where the environment is controlled by the `Controller`
-    object.
+    object. The `env` object must be `reset()` before calling.
 
     Parameters
     ----------

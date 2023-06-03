@@ -23,8 +23,11 @@ extensions.append('autoapi.extension')
 autoapi_type = 'python'
 autoapi_dirs = ['../multirotor']
 
-# readme.md
-extensions.append('myst_parser')
+# for adding notebooks to the documentation
+extensions.append('myst_nb')
+# the above already registers the following:
+# # for embedding readme.md into main documentation
+# extensions.append('myst_parser')
 
 
 

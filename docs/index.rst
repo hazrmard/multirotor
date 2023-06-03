@@ -10,6 +10,10 @@ multirotor - UAV simulation in python
    :maxdepth: 2
    :caption: Contents:
 
+   ..
+      Demo.ipynb
+      TODO: Make a demo.ipynb in docs/
+
 .. include:: ../README.md
    :parser: myst_parser.sphinx_
 
