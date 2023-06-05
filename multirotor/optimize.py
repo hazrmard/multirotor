@@ -22,8 +22,6 @@ from .controller import (
 
 
 DEFAULTS = Namespace(
-    # ntrials = 1000,
-    # nprocs = 5,
     bounding_box = 20,
     max_velocity = 5,
     max_acceleration = 2.5,
@@ -228,16 +226,16 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
             max_acceleration = np.asarray((r_pitch_roll_max_acc, r_pitch_roll_max_acc, r_yaw_max_acc)),
             max_err_i = np.asarray((r_pitch_roll_max_acc, r_pitch_roll_max_acc, r_yaw_max_acc)),
         ),
-        # ctrl_z = dict(
-        #     k_p = trial.suggest_float('z.k_p', 0.1, 50),
-        #     k_i = trial.suggest_float('z.k_i', 0.1, 10),
-        #     k_d = trial.suggest_float('z.k_d', 1, 250),
-        # ),
-        # ctrl_vz = dict(
-        #     k_p = trial.suggest_float('vz.k_p', 0.1, 50),
-        #     k_i = trial.suggest_float('vz.k_i', 0.1, 10),
-        #     k_d = trial.suggest_float('vz.k_d', 1, 250),
-        # ),
+        ctrl_z = dict(
+            k_p = trial.suggest_float('z.k_p', 0.1, 50),
+            k_i = trial.suggest_float('z.k_i', 0.1, 10),
+            k_d = trial.suggest_float('z.k_d', 1, 250),
+        ),
+        ctrl_vz = dict(
+            k_p = trial.suggest_float('vz.k_p', 0.1, 50),
+            k_i = trial.suggest_float('vz.k_i', 0.1, 10),
+            k_d = trial.suggest_float('vz.k_d', 1, 250),
+        ),
     )
     if args.scurve:
         params.update({prefix + 'feedforward_weight': trial.suggest_float(prefix + 'feedforward_weight', 0.1, 1.0, step=0.1)})
