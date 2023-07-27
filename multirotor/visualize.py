@@ -117,7 +117,8 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
 
     if 'traj' in plots:
         plt.subplot(*plot_grid, plot_number)
-        plt.plot(log.target.position[:,0], log.target.position[:,1], label='Prescribed traj', ls=':')
+        if len(log.target.position) > 0:
+            plt.plot(log.target.position[:,0], log.target.position[:,1], label='Prescribed traj', ls=':')
         plt.plot(log.x, log.y, label='Actual traj', ls='-')
         plt.gca().set_aspect('equal', 'box')
         plt.title('XY positions /m')

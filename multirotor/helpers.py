@@ -300,6 +300,10 @@ class DataLog:
             By default None.
         """
         return self.track(vehicle, controller, other_vars)
+    
+
+    def __bool__(self):
+        return True
 
 
     def track(self, vehicle, controller, other_vars=None):
@@ -429,12 +433,12 @@ class DataLog:
         if relative:
             # last_pos = self.position[old_len - 1]
             if not self._arrayed:
-                last_time = self._times[old_len - 1]
+                last_time = self._times[old_len - 1] if old_len > 0 else 0
                 for i in range(old_len, len(self)):
                         # self._states[i][:3] += last_pos
                         self._times[i] += last_time
             elif self._arrayed:
-                last_time = self.times[old_len - 1]
+                last_time = self.times[old_len - 1] if old_len > 0 else 0
                 # self.states[old_len:,:3] += last_pos
                 self.times[old_len:] += last_time
 
