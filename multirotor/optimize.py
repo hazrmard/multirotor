@@ -300,6 +300,8 @@ def optimize(
     ntrials: int=1000,
     args: Namespace=DEFAULTS, seed: int=0,
     study_name: str=None,
+    n_jobs: int=1,
+    timeout: float=None,
     verbosity=optuna.logging.WARNING
 ) -> optuna.Study:
     """
@@ -317,6 +319,10 @@ def optimize(
        Optimization seed, by default 0
     study_name : str, optional
         Name of study to be saved in `studies/study_name.db`, by default None
+    n_jobs: int, optional
+        Number of parallel optimization jobs to run. If -1, sets to number of processors. By default 1
+    timeout: float, optional
+        Number of seconds to run the study for. By default, run until n_trials reached
     verbosity : _type_, optional
         Logging level of `optuna.optimize()`, by default optuna.logging.WARNING
 
@@ -329,7 +335,13 @@ def optimize(
     """
     optuna.logging.set_verbosity(verbosity)
     study = get_study(study_name, seed=seed)
-    study.optimize(make_objective(vp, sp, args), n_trials=ntrials, show_progress_bar=True)
+    study.optimize(
+        make_objective(vp, sp, args),
+        n_trials=ntrials,
+        show_progress_bar=True,
+        n_jobs=n_jobs,
+        timeout=timeout
+    )
     return study
 
 
