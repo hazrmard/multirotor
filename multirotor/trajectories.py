@@ -1,8 +1,12 @@
 from typing import Iterable
 
 import numpy as np
-from pyscurve import ScurvePlanner
-from pyscurve.trajectory import PlanningError
+try:
+    from pyscurve import ScurvePlanner
+    from pyscurve.trajectory import PlanningError
+except ImportError:
+    ScurvePlanner = False
+    PlanningError = Exception
 
 from multirotor.simulation import Multirotor
 
@@ -56,7 +60,7 @@ class Trajectory:
         self.proximity = proximity
         self.resolution = resolution
         self.ref = None
-        
+
 
     def __len__(self):
         return len(self._points)
@@ -70,7 +74,7 @@ class Trajectory:
         return dict(
             proximity=self.proximity, resolution=self.resolution
         )
-    
+
 
     def set_params(self, **params):
         self.proximity = params.get('proximity', self.proximity)
@@ -82,8 +86,8 @@ class Trajectory:
         if self.proximity is not None:
             for i in range(1, len(self)):
                 while not self.reached(self[i]):
-                        self.ref = self[i]
-                        yield self.ref, None
+                    self.ref = self[i]
+                    yield self.ref, None
         else:
             for i in range(1, len(self)):
                 self.ref = self[i]
@@ -138,6 +142,8 @@ class GuidedTrajectory:
     def __init__(self, vehicle: Multirotor, waypoints: Iterable[np.ndarray],
         steps: int=10, proximity: float=2., max_velocity: float=7., max_acceleration: float=3.,
         max_jerk: float=100, turn_factor: float=(1/np.sqrt(2))) -> None:
+        if not ScurvePlanner:
+            raise ImportError('Py-Scurve is not installed.')
         self.vehicle = vehicle
         self.waypoints = np.asarray(waypoints)
         self.steps = int(steps)
