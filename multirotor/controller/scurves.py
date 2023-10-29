@@ -4,14 +4,20 @@ from typing import Dict, Union
 
 from .pid import Controller
 from ..helpers import get_vehicle_ability
-from pyscurve import ScurvePlanner
-from pyscurve.scurve import PlanningError
+try:
+    from pyscurve import ScurvePlanner
+    from pyscurve.scurve import PlanningError
+except ImportError:
+    ScurvePlanner = False
+    PlanningError = Exception
 
 
 
 class SCurveController:
 
     def __init__(self, ctrl: Controller):
+        if not ScurvePlanner:
+            raise ImportError('Py-Scurve not installed')
         self.ctrl = ctrl
         self.vehicle = self.ctrl.vehicle
         self.ctrl_p = self.ctrl.ctrl_p
