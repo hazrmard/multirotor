@@ -2,7 +2,6 @@ from typing import Tuple, Union, Dict
 import threading as th
 import multiprocessing as mp
 import queue
-from dataclasses import dataclass
 import time
 
 import numpy as np
@@ -173,15 +172,39 @@ def get_wind_quiver(heading: str, ax: plt.Axes, n=5, dim=2):
 
 
 
-@dataclass
 class VehicleDrawing:
-    vehicle: Multirotor
-    axis: Axes3D = None
-    max_frames_per_second: float = 30.
-    trace: bool = False
-    body_axes: bool = False
+    """
+    A 3D representation of the vehicle.
+    """
 
-    def __post_init__(self):
+    def __init__(self,
+        vehicle: Multirotor,
+        axis: Axes3D = None,
+        max_frames_per_second: float = 30.,
+        trace: bool = False,
+        body_axes: bool = False,
+    ):
+        """
+
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The vehicle instance to draw
+        axis : Axes3D, optional
+            The axes on which to draw, by default None
+        max_frames_per_second : float, optional
+            Maximum update interval of plot, by default 30.
+        trace : bool, optional
+            Whether to draw a dotted line showing past positions, by default False
+        body_axes : bool, optional
+            Whether to draw the body-frame axes, by default False
+        """
+        self.vehicle = vehicle
+        self.axis = axis
+        self.max_frames_per_second = max_frames_per_second
+        self.trace = trace
+        self.body_axes = body_axes
+
         self.t = self.vehicle.t
         self.params = self.vehicle.params
         self.interval = 1 / self.max_frames_per_second
@@ -194,6 +217,19 @@ class VehicleDrawing:
 
 
     def connect(self, via: str ='animation') -> Union[FuncAnimation, th.Thread]:
+        """Create a drawing that updates with the `self.vehicle` instance.
+
+        Parameters
+        ----------
+        via : str, optional
+            The drawing update method, either 'animation' (using matplotlib FuncAnimation), or
+            'thread' using python threading, by default 'animation'
+
+        Returns
+        -------
+        Union[FuncAnimation, th.Thread]
+            The `FuncAnimation` or `Thread` class being used to update the plot.
+        """
         self.connection_via = via
         self.ev_cancel = mp.Event()
         self.queue = mp.Queue(maxsize=1)
@@ -212,6 +248,14 @@ class VehicleDrawing:
 
 
     def disconnect(self, force=False):
+        """Disconnect the plot from the update function. Should be called after no interaction
+        is needed.
+
+        Parameters
+        ----------
+        force : bool, optional
+            Whether to force disconnection. Not implemented, by default False
+        """
         self.ev_cancel.set()
         if self.connection_via == 'thread':
             # self.thread.join(timeout=1.5 * self.interval)
@@ -325,9 +369,10 @@ def make_drawing(params: VehicleParams, body_axes: bool=False, make_2d: bool=Fal
             Line(
                 arm_lines_points[2*i:2*i+2,0],
                 arm_lines_points[2*i:2*i+2,1],
-                antialiased=False),
+                antialiased=False,
                 **({'zs':arm_lines_points[2*i:2*i+2,2]} if not make_2d else {}),
             )
+        )
 
     trajectory_line = Line([], [], linewidth=0.5, color='black', linestyle=':',
                            **({'zs':[]} if not make_2d else {}))
@@ -383,7 +428,23 @@ def update_drawing(drawing: VehicleDrawing, position: np.ndarray, orientation: n
 
 
 
-def make_fig(xlim, ylim, zlim) -> Tuple[plt.Figure, Axes3D]:
+def make_fig(
+        xlim: Tuple[float, float],
+        ylim: Tuple[float, float],
+        zlim: Tuple[float, float]
+    ) -> Tuple[plt.Figure, Axes3D]:
+    """Convenience function for creating a 3D axis.
+
+    Parameters
+    ----------
+    xlim/ylim/zlim : Tuple[float, float]
+        Min/max coordinates in plot
+
+    Returns
+    -------
+    Tuple[plt.Figure, Axes3D]
+        The figure and Axes3D instance
+    """
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d', xlim=xlim, ylim=ylim, zlim=zlim)
     ax.set_xlabel('x')
