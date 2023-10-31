@@ -213,6 +213,8 @@ class VehicleDrawing:
         self.trajectory_line, \
         self.axis_lines, self.axis_lines_points = \
             make_drawing(self.params, self.body_axes)
+        self.figure: plt.Figure = None
+        self.axis: Axes3D = None
         self.trajectory = [[], [], []] # [[X,..], [Y,...], [Z,...]]
 
 
@@ -278,6 +280,8 @@ class VehicleDrawing:
         for l in self.arm_lines:
                 self.axis.add_line(l)
         self.axis.add_line(self.trajectory_line)
+        self.trajectory_line.set_data([self.vehicle.position[0]], [self.vehicle.position[1]])
+        self.trajectory_line.set_3d_properties([self.vehicle.position[2]])
         for l in self.axis_lines:
             self.axis.add_line(l)
         return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
@@ -291,11 +295,12 @@ class VehicleDrawing:
             raise th.ThreadError('Canceling animation update.')
         if vehicle_t != self.t:
             if vehicle_t < self.t:
-                self.trajectory = [[], [], []] # likely vehicle is reset, so reset trajectory
+                self.trajectory = [[position[0]], [position[1]], [position[2]]] # likely vehicle is reset, so reset trajectory
             self.t = vehicle_t
-            return update_drawing(self, position, orientation)
-        else:
-            return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
+            # return update_drawing(self, position, orientation)
+        # else:
+        return update_drawing(self, position, orientation)
+            # return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
 
 
     def _worker(self):
