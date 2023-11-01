@@ -5,6 +5,8 @@ First, import the dependencies:
 
 ```python
 %matplotlib widget
+%reload_ext autoreload
+%autoreload 2
 import numpy as np
 from multirotor.simulation import Multirotor, Propeller
 from multirotor.vehicle import VehicleParams, PropellerParams, SimulationParams
@@ -84,12 +86,13 @@ i = 0
 ```
 
 ```python
-for j in range(100):
+for j in range(1000):
     vehicle.step_dynamics(np.asarray(
         [0.1, np.sin(i*np.pi/100), vehicle.params.mass*sp.g +  np.cos(i*2*np.pi/1000),
          0,0,0],
         dtype=vehicle.dtype))
     drawing.axis.set_title(f'pos:{vehicle.position}')
+    # drawing.update()
     i += 1
 ```
 
@@ -98,5 +101,5 @@ drawing.disconnect()
 ```
 
 ```python
-drawing.trajectory
+len(drawing.trajectory[0])
 ```

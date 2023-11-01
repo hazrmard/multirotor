@@ -249,6 +249,13 @@ class VehicleDrawing:
             raise NotImplementedError()
 
 
+    def update(self):
+        self.queue.put(
+            (self.vehicle.t, self.vehicle.position, self.vehicle.orientation),
+            timeout=None
+        )
+
+
     def disconnect(self, force=False):
         """Disconnect the plot from the update function. Should be called after no interaction
         is needed.
@@ -262,16 +269,19 @@ class VehicleDrawing:
         if self.connection_via == 'thread':
             # self.thread.join(timeout=1.5 * self.interval)
             self.update_thread.join(timeout=1.5 * self.interval)
-            del self.queue
-            del self.update_thread
+            try:
+                del self.queue
+                del self.update_thread
+            except AttributeError:
+                pass # Means queue and update_thread are already deleted
         elif self.connection_via=='animation':
             try:
                 self.anim.pause()
+                del self.anim
             except AttributeError:
                 # If the interactive jupyter figure is closed, this error is
                 # raised if disconnect is called after.
                 pass
-            del self.anim
         elif self.connection_via=='process':
             raise NotImplementedError()
 
@@ -280,6 +290,7 @@ class VehicleDrawing:
         for l in self.arm_lines:
                 self.axis.add_line(l)
         self.axis.add_line(self.trajectory_line)
+        self.trajectory = [[self.vehicle.position[0]],[self.vehicle.position[1]], [self.vehicle.position[0]]]
         self.trajectory_line.set_data([self.vehicle.position[0]], [self.vehicle.position[1]])
         self.trajectory_line.set_3d_properties([self.vehicle.position[2]])
         for l in self.axis_lines:
@@ -288,19 +299,21 @@ class VehicleDrawing:
 
 
     def _update_func(self, frame: int=None):
-        vehicle_t, position, orientation = self.queue.get()
         if self.ev_cancel.is_set():
             # This function is called repeatedly so it needs to quit the calling
             # function (FuncAnimation(), _worker, when it gets the signal.
             raise th.ThreadError('Canceling animation update.')
+        # while not self.queue.empty():   # get latest element in queue
+        vehicle_t, position, orientation = self.queue.get()
         if vehicle_t != self.t:
             if vehicle_t < self.t:
                 self.trajectory = [[position[0]], [position[1]], [position[2]]] # likely vehicle is reset, so reset trajectory
             self.t = vehicle_t
-            # return update_drawing(self, position, orientation)
-        # else:
-        return update_drawing(self, position, orientation)
-            # return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
+            res = update_drawing(self, position, orientation)
+        else:
+            # if there is no change in time, then return the old lines
+            res = (*self.arm_lines, self.trajectory_line, *self.axis_lines)
+        return res
 
 
     def _worker(self):
