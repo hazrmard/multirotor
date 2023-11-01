@@ -180,9 +180,10 @@ class VehicleDrawing:
     def __init__(self,
         vehicle: Multirotor,
         axis: Axes3D = None,
-        max_frames_per_second: float = 30.,
+        updates_per_second: float = 30.,
         trace: bool = False,
         body_axes: bool = False,
+        connection_via: str = 'animation'
     ):
         """
 
@@ -192,68 +193,65 @@ class VehicleDrawing:
             The vehicle instance to draw
         axis : Axes3D, optional
             The axes on which to draw, by default None
-        max_frames_per_second : float, optional
+        updates_per_second : float, optional
             Maximum update interval of plot, by default 30.
         trace : bool, optional
             Whether to draw a dotted line showing past positions, by default False
         body_axes : bool, optional
             Whether to draw the body-frame axes, by default False
+        connection_via : str, optional
+            The drawing update method, either 'animation' (using matplotlib FuncAnimation), or
+            'thread' using python threading, by default 'animation'
         """
         self.vehicle = vehicle
         self.axis = axis
-        self.max_frames_per_second = max_frames_per_second
+        self.updates_per_second = updates_per_second
         self.trace = trace
         self.body_axes = body_axes
+        self.connection_via = connection_via
 
         self.t = self.vehicle.t
-        self.params = self.vehicle.params
-        self.interval = 1 / self.max_frames_per_second
+        self.interval = 1 / self.updates_per_second
         self.is_terminal = is_terminal()
-        self.arm_lines, self.arm_lines_points, \
-        self.trajectory_line, \
+        self.arm_lines, self.arm_lines_points, self.trajectory_line, \
         self.axis_lines, self.axis_lines_points = \
-            make_drawing(self.params, self.body_axes)
-        self.figure: plt.Figure = None
-        self.axis: Axes3D = None
+            make_drawing(self.vehicle.params, self.body_axes)
+        if self.axis is None:
+            self.figure, self.axis = make_fig((-10,10), (-10,10), (-10,10))
+        else:
+            self.figure = self.axis.figure, self.axis = axis
         self.trajectory = [[], [], []] # [[X,..], [Y,...], [Z,...]]
+        self.ev_cancel = th.Event()
+        self.ev_new = th.Event()
+        self.queue = queue.Queue(maxsize=1)
+        self.sync = False
+        self.update_thread = th.Thread(target=self._update_worker, daemon=True, name='update_thread')
+        self.update_thread.start()
+        # self.animate_thread = th.Thread(target=self._animator, daemon=True, name='animate_thread')
+        # self.animate_thread.start()
+        self._animator()
 
 
-    def connect(self, via: str ='animation') -> Union[FuncAnimation, th.Thread]:
+    def connect(self) -> Union[FuncAnimation, th.Thread]:
         """Create a drawing that updates with the `self.vehicle` instance.
-
-        Parameters
-        ----------
-        via : str, optional
-            The drawing update method, either 'animation' (using matplotlib FuncAnimation), or
-            'thread' using python threading, by default 'animation'
 
         Returns
         -------
         Union[FuncAnimation, th.Thread]
             The `FuncAnimation` or `Thread` class being used to update the plot.
         """
-        self.connection_via = via
-        self.ev_cancel = mp.Event()
-        self.queue = mp.Queue(maxsize=1)
-        self.update_thread = th.Thread(target=self._update_worker)
-        self.update_thread.start()
-        if via=='animation':
+        # self.update_thread.start()
+        self.sync = True
+        self.ev_new.set()
+        return
+        if self.connection_via=='animation':
             return self._animator()
-        elif via=='thread':
-            # self.thread = th.Thread(target=self._worker, daemon=True)
-            # self.thread.start()
-            # return self.thread
-            return self._worker()
-        elif via=='process':
-            pr = mp.Process(target=self._worker)
+        else:
             raise NotImplementedError()
 
 
     def update(self):
-        self.queue.put(
-            (self.vehicle.t, self.vehicle.position, self.vehicle.orientation),
-            timeout=None
-        )
+        self.ev_new.set()
 
 
     def disconnect(self, force=False):
@@ -286,9 +284,16 @@ class VehicleDrawing:
             raise NotImplementedError()
 
 
-    def _init_func(self):
+    def _init_func(self) -> Tuple[Line3D]:
+        """Add vehicle and trajectory lines to plot by initializing the Artist objects
+        in `self.axis`.
+
+        Returns
+        -------
+        Tuple[Line3d]
+        """
         for l in self.arm_lines:
-                self.axis.add_line(l)
+            self.axis.add_line(l)
         self.axis.add_line(self.trajectory_line)
         self.trajectory = [[self.vehicle.position[0]],[self.vehicle.position[1]], [self.vehicle.position[0]]]
         self.trajectory_line.set_data([self.vehicle.position[0]], [self.vehicle.position[1]])
@@ -298,38 +303,31 @@ class VehicleDrawing:
         return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
 
 
-    def _update_func(self, frame: int=None):
-        if self.ev_cancel.is_set():
-            # This function is called repeatedly so it needs to quit the calling
-            # function (FuncAnimation(), _worker, when it gets the signal.
-            raise th.ThreadError('Canceling animation update.')
-        # while not self.queue.empty():   # get latest element in queue
-        vehicle_t, position, orientation = self.queue.get()
-        if vehicle_t != self.t:
-            if vehicle_t < self.t:
-                self.trajectory = [[position[0]], [position[1]], [position[2]]] # likely vehicle is reset, so reset trajectory
-            self.t = vehicle_t
-            res = update_drawing(self, position, orientation)
-        else:
-            # if there is no change in time, then return the old lines
+    def _update_drawing_from_queue(self, frame: int=None):
+        try:
+            vehicle_t, position, orientation = self.queue.get(block=False)
+            if vehicle_t != self.t:
+                if vehicle_t < self.t:
+                    self.trajectory = [[position[0]], [position[1]], [position[2]]] # likely vehicle is reset, so reset trajectory
+                self.t = vehicle_t
+                res = update_drawing(self, position, orientation)
+            else:
+                # if there is no change in time, then return the old lines
+                res = (*self.arm_lines, self.trajectory_line, *self.axis_lines)
+            self.queue.task_done()
+        except queue.Empty:
             res = (*self.arm_lines, self.trajectory_line, *self.axis_lines)
         return res
 
 
-    def _worker(self):
-        # To be run in main thread. The vehicle control should be in a separate
-        # thread that controls self.vehicle
-        if self.axis is None:
-            self.figure, self.axis = make_fig((-10,10), (-10,10), (0,20))
-        else:
-            self.figure = self.axis.figure
-
-        self._init_func()
+    def _generator(self):
+        while not self.ev_cancel.is_set():
+            yield self._update_drawing_from_queue()
 
         i = 0
         while not self.ev_cancel.is_set():
             start = time.time()
-            self._update_func(i)
+            self._update_drawing_from_queue(i)
             # self.figure.canvas.draw_idle()
             # self.figure.canvas.flush_events()
             i += 1
@@ -340,18 +338,16 @@ class VehicleDrawing:
 
 
     def _animator(self):
-        if self.axis is None:
-            self.figure, self.axis = make_fig((-10,10), (-10,10), (-10,10))
-        else:
-            self.figure = self.axis.figure
-
+        print('Called _animator')
         self.anim = FuncAnimation(
             self.figure,
-            func=self._update_func,
+            func= lambda x: x,
+            frames = self._generator,
             init_func=self._init_func,
             blit=True,
             repeat=False,
-            interval=self.interval * 1000,
+            interval = self.interval * 1000,
+            save_count=0,
             cache_frame_data=False)
         return self.anim
 
@@ -361,15 +357,19 @@ class VehicleDrawing:
         # queue.
         while not self.ev_cancel.is_set():
             start = time.time()
+            if not self.sync:
+                self.ev_new.wait()
             try:
                 self.queue.put(
                     (self.vehicle.t, self.vehicle.position, self.vehicle.orientation),
-                    timeout=self.interval)
+                    timeout=self.interval if self.sync else None)
             except queue.Full:
                 pass
-            end = time.time()
-            self.ev_cancel.wait(max(0, self.interval - (end - start)))
-        self.queue.close()
+            if not self.sync:
+                self.ev_new.clear()
+            else:
+                time.sleep(max(0, self.interval - (start-time.time())))
+            # self.ev_cancel.wait(max(0, self.interval - (end - start)))
         
 
 
