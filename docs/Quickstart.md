@@ -1,9 +1,22 @@
-# Quickstart
+---
+jupytext:
+  text_representation:
+    extension: .md
+    format_name: myst
+    format_version: 0.13
+    jupytext_version: 1.15.2
+kernelspec:
+  display_name: Python 3 (ipykernel)
+  language: python
+  name: python3
+---
+
+# multirotor - Quickstart
 
 
 First, import the dependencies:
 
-```python
+```{code-cell} ipython3
 %matplotlib widget
 %reload_ext autoreload
 %autoreload 2
@@ -20,7 +33,7 @@ A vehicle is represented by a `multirotor.simulation.Multirotor` class, which is
 
 `VehicleParams` itself is parametrized by `PropellerParams` for each propeller. A propeller may optionally have `MotorParams` characterizing the electrical properties. If not, any changes to propeller speeds are instant. Let's create a simple vehicle, ignoring motor dynamics:
 
-```python
+```{code-cell} ipython3
 from multirotor.vehicle import VehicleParams, PropellerParams, SimulationParams
 pp = PropellerParams(
     k_thrust=0.01,
@@ -32,7 +45,6 @@ sp = SimulationParams(
 )
 ```
 
-<!-- #region -->
 The vertical thrust in Newtons $F_z$ is governed by the thrust coefficient. For propeller velocity (radians per second) $\omega$,
 
 $$
@@ -47,9 +59,8 @@ $$
 
 
 `multirotor` has a convenience function for creating a vehicle from simple geometries:
-<!-- #endregion -->
 
-```python
+```{code-cell} ipython3
 from multirotor.helpers import vehicle_params_factory
 from multirotor.simulation import Multirotor
 vp = vp = vehicle_params_factory(
@@ -71,7 +82,7 @@ The `Multirotor` provides a host of methods to manipulate the vehicle. The two m
 
 The vehicle is described by its `.state` attribute. It is a 12-dimensional array containing the position, velocity, orientation, and angular velocity. Individual state components can be accessed by their relevant attributes:
 
-```python
+```{code-cell} ipython3
 # Step using forces/torques
 state = vehicle.step_dynamics(np.asarray([1,2,vehicle.weight,0,0,1], vehicle.dtype))
 # Step using speeds (rad/s)
@@ -95,13 +106,11 @@ print(f'{"Euler rate": >32}', vehicle.euler_rate)
 
 `multirotor.visualize.VehicleDrawing` class is a wrapper around matplotlib. It can interactively visualize the vehicle in 3D.
 
-```python
+```{code-cell} ipython3
 from multirotor.visualize import VehicleDrawing
 vehicle.reset() # resets time/position back to 0
 drawing = VehicleDrawing(vehicle, trace=True)
-```
 
-```python
 for j in range(1000):
     vehicle.step_dynamics(np.asarray(
         [0.4, 2 * np.sin(j*np.pi/100), vehicle.params.mass*sp.g +  np.cos(j*2*np.pi/1000),
@@ -113,7 +122,7 @@ for j in range(1000):
 
 Additionally, the `multirotor.visualize.plot_datalog` function can visualize timeseries measurements from the vehicle:
 
-```python
+```{code-cell} ipython3
 from multirotor.helpers import DataLog
 from multirotor.visualize import plot_datalog
 log = DataLog(vehicle)
@@ -133,7 +142,7 @@ plot_datalog(log, figsize=(8,4));
 
 So far, so good. However, controlling a vehicle is another challenge.`multirotor` provides a `multirotor.controller.Controller` class, which uses PID control to navigate.
 
-```python
+```{code-cell} ipython3
 from multirotor.controller import Controller
 
 ctrl = Controller.make_for(vehicle)
@@ -147,28 +156,28 @@ $$
 
 Let's say we want the vehicle to go up to $z=10$ and $x=20$
 
-```python
+```{code-cell} ipython3
 dynamics = ctrl.step(reference=[20,0,10,0], persist=False)
 print('F_z=%.3f, T_x==%.3f, T_y=%.3f, T_z=%.3f' % (dynamics[0], dynamics[1], dynamics[2], dynamics[3]))
 ```
 
 Now that we have the prescribed dynamics, we must convert them into prescribed speeds (radians / s) for the vehicle propellers. That's where control allocation comes in:
 
-```python
+```{code-cell} ipython3
 speeds = vehicle.allocate_control(dynamics[0], dynamics[1:4])
 print(speeds)
 ```
 
 And finally, the speeds can be applied to the vehicle:
 
-```python
+```{code-cell} ipython3
 state = vehicle.step_speeds(speeds)
 print(state)
 ```
 
 This can then be looped over and over again:
 
-```python
+```{code-cell} ipython3
 vehicle.reset()
 ctrl.reset()
 drawing = VehicleDrawing(
@@ -186,7 +195,7 @@ log.done_logging()
 drawing.axis.view_init(elev=30, azim=-100)
 ```
 
-```python
+```{code-cell} ipython3
 plot_datalog(log, figsize=(8,6));
 ```
 
@@ -195,13 +204,13 @@ plot_datalog(log, figsize=(8,6));
 
 The PID controller has many tunable parameters. Searching for an adequate parametrization for a vehicle is a complex search problem.
 
-```python
+```{code-cell} ipython3
 pprint(ctrl.get_params())
 ```
 
 `multirotor.optimize` provides a convenience function called `optimize()` to search for the best parameters. Parameter search is done using the [optuna](https://optuna.org/) library, which is installed as a dependency.
 
-```python
+```{code-cell} ipython3
 from multirotor.optimize import optimize, run_sim, apply_params
 study = optimize(vp, sp, ctrl, ntrials=100)
 
@@ -211,7 +220,7 @@ plot_parallel_coordinate(study)
 
 Then, the best parameters can be applied to the controller:
 
-```python
+```{code-cell} ipython3
 apply_params(ctrl, study.best_params);
 ```
 
@@ -220,7 +229,7 @@ apply_params(ctrl, study.best_params);
 
 `multirotor.trajectories` defines the `Trajectory` class. It can take a list of waypoints and break them into smaller segments for the controller.
 
-```python
+```{code-cell} ipython3
 from multirotor.trajectories import Trajectory
 from multirotor.env import DynamicsMultirotorEnv
 vehicle.reset()
@@ -243,7 +252,7 @@ for i, (ref, _) in enumerate(traj):
 
 [1]: https://gymnasium.farama.org/api/wrappers/misc_wrappers/#gymnasium.wrappers.StepAPICompatibility
 
-```python
+```{code-cell} ipython3
 from multirotor.env import DynamicsMultirotorEnv
 
 env = DynamicsMultirotorEnv(vehicle, allocate=True)

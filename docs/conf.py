@@ -39,7 +39,7 @@ myst_enable_extensions = [
 ]
 myst_url_schemes = ("http", "https", "mailto")
 nb_execution_excludepatterns = (
-    # 'Detailed Demo.ipynb',
+    'Detailed Demo.ipynb',
     # 'Demo.ipynb'  
 )
 nb_execution_timeout = 180
@@ -50,4 +50,4 @@ nb_execution_timeout = 180
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = 'alabaster'
-html_static_path = ['_static']
+html_static_path = ['../_static']
