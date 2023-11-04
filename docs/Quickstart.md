@@ -80,12 +80,13 @@ The vehicle is described by its `.state` attribute. It is a 12-dimensional array
 
 ```python
 vehicle.reset()
-drawing = VehicleDrawing(vehicle, trace=True, updates_per_second=5)
+drawing = VehicleDrawing(vehicle, trace=True)
 i = 0
 ```
 
 ```python
 import time
+from multirotor.visualize import update_drawing
 for j in range(400):
     vehicle.step_dynamics(np.asarray(
         [0.1, np.sin(i*np.pi/100), vehicle.params.mass*sp.g +  np.cos(i*2*np.pi/1000),
@@ -94,21 +95,4 @@ for j in range(400):
     drawing.axis.set_title(f'pos:{vehicle.position}')
     drawing.update()
     i += 1
-```
-
-```python
-drawing.disconnect()
-```
-
-```python
-for i, o in zip(range(10), drawing._generator()):
-    print(i, o)
-```
-
-```python
-drawing.queue.put((drawing.vehicle.t+2, drawing.vehicle.position+2, drawing.vehicle.orientation), timeout=0.1)
-```
-
-```python
-len(drawing.trajectory[0])
 ```

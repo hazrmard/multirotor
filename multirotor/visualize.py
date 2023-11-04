@@ -1,7 +1,4 @@
-from typing import Tuple, Union, Dict
-import threading as th
-import multiprocessing as mp
-import queue
+from typing import List, Tuple, Dict, Union
 import time
 
 import numpy as np
@@ -180,38 +177,26 @@ class VehicleDrawing:
     def __init__(self,
         vehicle: Multirotor,
         axis: Axes3D = None,
-        updates_per_second: float = 30.,
         trace: bool = False,
         body_axes: bool = False,
-        connection_via: str = 'animation'
     ):
         """
-
         Parameters
         ----------
         vehicle : Multirotor
             The vehicle instance to draw
         axis : Axes3D, optional
             The axes on which to draw, by default None
-        updates_per_second : float, optional
-            Maximum update interval of plot, by default 30.
         trace : bool, optional
             Whether to draw a dotted line showing past positions, by default False
         body_axes : bool, optional
             Whether to draw the body-frame axes, by default False
-        connection_via : str, optional
-            The drawing update method, either 'animation' (using matplotlib FuncAnimation), or
-            'thread' using python threading, by default 'animation'
         """
         self.vehicle = vehicle
         self.axis = axis
-        self.updates_per_second = updates_per_second
         self.trace = trace
         self.body_axes = body_axes
-        self.connection_via = connection_via
 
-        self.t = self.vehicle.t
-        self.interval = 1 / self.updates_per_second
         self.is_terminal = is_terminal()
         self.arm_lines, self.arm_lines_points, self.trajectory_line, \
         self.axis_lines, self.axis_lines_points = \
@@ -221,71 +206,36 @@ class VehicleDrawing:
         else:
             self.figure = self.axis.figure, self.axis = axis
         self.trajectory = [[], [], []] # [[X,..], [Y,...], [Z,...]]
-        self.ev_cancel = th.Event()
-        self.ev_new = th.Event()
-        self.queue = queue.Queue(maxsize=1)
-        self.sync = False
-        self.update_thread = th.Thread(target=self._update_worker, daemon=True, name='update_thread')
-        self.update_thread.start()
-        # self.animate_thread = th.Thread(target=self._animator, daemon=True, name='animate_thread')
-        # self.animate_thread.start()
-        self._animator()
+        self._init_func()
 
 
-    def connect(self) -> Union[FuncAnimation, th.Thread]:
-        """Create a drawing that updates with the `self.vehicle` instance.
+
+    def update(self) -> float:
+        """
+        Draw vehicle position and orientation on the figure.
 
         Returns
         -------
-        Union[FuncAnimation, th.Thread]
-            The `FuncAnimation` or `Thread` class being used to update the plot.
+        float
+            The time (seconds) taken to finish this operation.
         """
-        # self.update_thread.start()
-        self.sync = True
-        self.ev_new.set()
-        return
-        if self.connection_via=='animation':
-            return self._animator()
-        else:
-            raise NotImplementedError()
+        start = time.time()
+        update_drawing(self, self.vehicle.position, self.vehicle.orientation)
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+        return time.time() - start
 
 
-    def update(self):
-        self.ev_new.set()
-
-
-    def disconnect(self, force=False):
-        """Disconnect the plot from the update function. Should be called after no interaction
-        is needed.
-
-        Parameters
-        ----------
-        force : bool, optional
-            Whether to force disconnection. Not implemented, by default False
+    def reset(self):
+        """Clear vehicle's trajectory, and place vehicle at its current position.
         """
-        self.ev_cancel.set()
-        if self.connection_via == 'thread':
-            # self.thread.join(timeout=1.5 * self.interval)
-            self.update_thread.join(timeout=1.5 * self.interval)
-            try:
-                del self.queue
-                del self.update_thread
-            except AttributeError:
-                pass # Means queue and update_thread are already deleted
-        elif self.connection_via=='animation':
-            try:
-                self.anim.pause()
-                del self.anim
-            except AttributeError:
-                # If the interactive jupyter figure is closed, this error is
-                # raised if disconnect is called after.
-                pass
-        elif self.connection_via=='process':
-            raise NotImplementedError()
+        self.trajectory = [[], [], []]
+        self.update()
 
 
     def _init_func(self) -> Tuple[Line3D]:
-        """Add vehicle and trajectory lines to plot by initializing the Artist objects
+        """
+        Add vehicle and trajectory lines to plot by initializing the Artist objects
         in `self.axis`.
 
         Returns
@@ -301,79 +251,37 @@ class VehicleDrawing:
         for l in self.axis_lines:
             self.axis.add_line(l)
         return (*self.arm_lines, self.trajectory_line, *self.axis_lines)
-
-
-    def _update_drawing_from_queue(self, frame: int=None):
-        try:
-            vehicle_t, position, orientation = self.queue.get(block=False)
-            if vehicle_t != self.t:
-                if vehicle_t < self.t:
-                    self.trajectory = [[position[0]], [position[1]], [position[2]]] # likely vehicle is reset, so reset trajectory
-                self.t = vehicle_t
-                res = update_drawing(self, position, orientation)
-            else:
-                # if there is no change in time, then return the old lines
-                res = (*self.arm_lines, self.trajectory_line, *self.axis_lines)
-            self.queue.task_done()
-        except queue.Empty:
-            res = (*self.arm_lines, self.trajectory_line, *self.axis_lines)
-        return res
-
-
-    def _generator(self):
-        while not self.ev_cancel.is_set():
-            yield self._update_drawing_from_queue()
-
-        i = 0
-        while not self.ev_cancel.is_set():
-            start = time.time()
-            self._update_drawing_from_queue(i)
-            # self.figure.canvas.draw_idle()
-            # self.figure.canvas.flush_events()
-            i += 1
-            end = time.time()
-            pause = max(1e-3, self.interval - (end - start))
-            plt.pause(pause)
-            # self.ev_cancel.wait(self.interval - (end - start))
-
-
-    def _animator(self):
-        print('Called _animator')
-        self.anim = FuncAnimation(
-            self.figure,
-            func= lambda x: x,
-            frames = self._generator,
-            init_func=self._init_func,
-            blit=True,
-            repeat=False,
-            interval = self.interval * 1000,
-            save_count=0,
-            cache_frame_data=False)
-        return self.anim
-
-
-    def _update_worker(self):
-        # Thread that puts time, position, orientation into thread-/process-safe
-        # queue.
-        while not self.ev_cancel.is_set():
-            start = time.time()
-            if not self.sync:
-                self.ev_new.wait()
-            try:
-                self.queue.put(
-                    (self.vehicle.t, self.vehicle.position, self.vehicle.orientation),
-                    timeout=self.interval if self.sync else None)
-            except queue.Full:
-                pass
-            if not self.sync:
-                self.ev_new.clear()
-            else:
-                time.sleep(max(0, self.interval - (start-time.time())))
-            # self.ev_cancel.wait(max(0, self.interval - (end - start)))
         
 
 
-def make_drawing(params: VehicleParams, body_axes: bool=False, make_2d: bool=False, scale_arms=1.):
+def make_drawing(
+        params: VehicleParams, body_axes: bool=False, make_2d: bool=False, scale_arms=1.
+    ) -> Tuple[List[Union[Line2D, Line3D]], np.ndarray, Union[Line2D, Line3D], List[Union[Line2D, Line3D]], np.ndarray]:
+    """
+    Create Atrist objects for vehicle arms, trajectory, body-frame axes. These will
+    then be added to the Figure.
+
+    Parameters
+    ----------
+    params : VehicleParams
+        The description of the vehicle.
+    body_axes : bool, optional
+        Whether to draw body-frame x/y/z axes, by default False
+    make_2d : bool, optional
+        Whether to return 2D lines (if using these for some 2D plot), by default False
+    scale_arms : _type_, optional
+        Factor by which to scale arm lengths. Useful when a small vehicle must be made
+        visible in a plot with large bounds, by default 1.
+
+    Returns
+    -------
+    Tuple
+        - List of lines for vehicle propeller arms,
+        - Array of (2*propellers) x [2|3] containing end-points of arm lines in [2|3] dimensions
+        - The line object of the vehicle trajectory
+        - List of lines for body-frame axes
+        - Array of (2*3) x 3 containing end-points of body-frame axis lines in [2|3] dimensions.
+    """
     Line = Line3D if not make_2d else Line2D
     arm_lines_points = np.zeros((len(params.propellers) * 2, 2 if make_2d else 3)) # [2 points/ propeller, axis]
     x = params.distances * np.cos(params.angles)
@@ -415,7 +323,29 @@ def make_drawing(params: VehicleParams, body_axes: bool=False, make_2d: bool=Fal
 
 
 
-def update_drawing(drawing: VehicleDrawing, position: np.ndarray, orientation: np.ndarray):
+def update_drawing(
+        drawing: VehicleDrawing, position: np.ndarray, orientation: np.ndarray
+    ) -> Tuple[List[Union[Line2D, Line3D]], Union[Line2D, Line3D], List[Union[Line2D, Line3D]]]:
+    """
+    Update the Artist objects for the vehicle arms, trajectory, body-frame axes given
+    position and orientation.
+
+    Parameters
+    ----------
+    drawing : VehicleDrawing
+        The drawing to update.
+    position : np.ndarray
+        The 3D position of the vehicle,
+    orientation : np.ndarray
+        The orientation (radians) of the vehicle
+
+    Returns
+    -------
+    Tuple
+        - List of lines for vehicle propeller arms,
+        - The line object of the vehicle trajectory
+        - List of lines for body-frame axes
+    """
     dcm = direction_cosine_matrix(orientation[0], orientation[1], orientation[2])
     arms = np.copy(drawing.arm_lines_points)
     arms = body_to_inertial(arms.T, dcm).T
@@ -451,7 +381,8 @@ def make_fig(
         ylim: Tuple[float, float],
         zlim: Tuple[float, float]
     ) -> Tuple[plt.Figure, Axes3D]:
-    """Convenience function for creating a 3D axis.
+    """
+    Convenience function for creating a 3D axis.
 
     Parameters
     ----------
@@ -473,6 +404,14 @@ def make_fig(
 
 
 def is_terminal() -> bool:
+    """
+    Check whether code is running in a text console or jupyter notebook.
+
+    Returns
+    -------
+    bool
+        True if running in terminal.
+    """
     # https://stackoverflow.com/q/15411967/4591810
     # https://stackoverflow.com/a/39662359/4591810
     try:
