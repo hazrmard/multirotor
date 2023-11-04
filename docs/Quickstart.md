@@ -214,7 +214,7 @@ pprint(ctrl.get_params())
 from multirotor.optimize import optimize, run_sim, apply_params
 study = optimize(vp, sp, ctrl, ntrials=100)
 
-from optuna.visualization import plot_parallel_coordinate
+from optuna.visualization.matplotlib import plot_parallel_coordinate
 plot_parallel_coordinate(study)
 ```
 
