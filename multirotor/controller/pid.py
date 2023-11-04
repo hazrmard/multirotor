@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Union, Dict
 
@@ -180,9 +181,9 @@ class PosController(PIDController):
     "Maximum acceleration in m/s/s"
     max_jerk: float = 100.0
     "Maximum jerk in m/s/s/s"
-    square_root_scaling: bool = False
+    square_root_scaling: bool = True
     "Whether to scale P-gain with the square root of the error"
-    leashing: bool = False
+    leashing: bool = True
     "Whether to limit proportional position error"
 
 
@@ -467,9 +468,9 @@ class Controller:
         ctrl_p: PosController, ctrl_v: VelController,
         ctrl_a: AttController, ctrl_r: RateController,
         ctrl_z: AltController, ctrl_vz: AltRateController,
-        period_p: float=1.,
-        period_a: float=1.,
-        period_z: float=1.,
+        period_p: float=1e-1,
+        period_a: float=1e-2,
+        period_z: float=1e-1,
         feedforward_weight: float=0.
     ):
         """
@@ -636,3 +637,35 @@ class Controller:
 
     def predict(self, ref, deterministic=True):
         return self.step(reference=ref)
+
+
+    @classmethod
+    def make_for(cls, vehicle: Multirotor) -> Controller:
+        """
+        Make a `Controller` with p-only parameters for a vehicle. The parameters
+        can be learned using the `optimize` function.
+
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The vehicle to control.
+
+        Returns
+        -------
+        Controller
+            The controller with p-only parameters.
+        """
+        pid = dict(k_p=1., k_i=0, k_d=0, max_err_i=1., vehicle=vehicle)
+        ctrl = cls(
+            ctrl_p=PosController(**pid, square_root_scaling=True, leashing=True),
+            ctrl_v=VelController(**pid),
+            ctrl_a=AttController(**pid),
+            ctrl_r=RateController(**pid),
+            ctrl_z=AltController(**pid),
+            ctrl_vz=AltRateController(**pid),
+            period_p=1e-1,
+            period_a=1e-2,
+            period_z=1e-1,
+            feedforward_weight=0.
+        )
+        return ctrl

@@ -1,0 +1,65 @@
+@startuml
+!pragma ratio 1.0
+
+skinparam defaultFontSize 20
+
+class MotorParams {
+    {field} k_emf, k_DF
+    {field} resistance, moment_of_inertia
+}
+class PropellerParams {
+    {field} moment_of_inertia
+    {field} k_thrust,k_drag
+    {field} motor
+}
+class VehicleParams {
+    {field} propellers
+    {field} angles, distances, clockwise
+    {field} mass, inertia_matrix
+}
+
+class Propeller {
+    {field} params, speed
+    reset()
+    step()
+    thrust()
+}
+class Motor {
+    {field} params
+    {field} speed, voltage, current
+    reset()
+    step()
+}
+class Multirotor {
+    {field} params
+    {field} state
+    {field} propellers: Propeller
+    step_dynamics()
+    step_speeds()
+    allocate_control()
+}
+class BaseMultirotorEnv {
+    {field} observation_space
+    {field} action_space
+    {field} vehicle: Multirotor
+    reset()
+    step()
+    reward()
+}
+
+class DynamicsMultirotorEnv
+class SpeedsMultirotorEnv
+
+BaseMultirotorEnv *-- Multirotor
+Multirotor "1" *-- "many" Propeller : contains
+Multirotor *-- VehicleParams
+Propeller "1" *-- "1" Motor
+Propeller *-- PropellerParams
+Motor *-- MotorParams
+VehicleParams "1" *-- "many" PropellerParams : contains
+PropellerParams "1" *-- "1" MotorParams
+
+BaseMultirotorEnv <|.. DynamicsMultirotorEnv : extends
+BaseMultirotorEnv <|.. SpeedsMultirotorEnv : extends
+
+@enduml

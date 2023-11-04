@@ -1,0 +1,34 @@
+@startuml
+!pragma ratio 1.0
+
+skinparam defaultFontSize 20
+
+class PIDController {
+    {field} 
+    step()
+}
+class Controller {
+    step()
+}
+class PosController
+class VelController
+class AttController
+class RateController
+class AltController
+class AltRateController
+
+PIDController <|.. AltController : extends
+PIDController <|.. AltRateController : extends
+PIDController <|.. AttController : extends
+PIDController <|.. RateController : extends
+PIDController <|.. PosController : extends
+PIDController <|.. VelController : extends
+
+Controller *-- AltController
+AltController *-- AltRateController
+Controller *-- PosController
+PosController *-- VelController
+Controller *-- AttController
+AttController *-- RateController
+
+@enduml

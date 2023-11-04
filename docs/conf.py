@@ -42,7 +42,7 @@ nb_execution_excludepatterns = (
     # 'Detailed Demo.ipynb',
     # 'Demo.ipynb'  
 )
-nb_execution_timeout = 60
+nb_execution_timeout = 180
 
 
 

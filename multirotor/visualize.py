@@ -98,7 +98,7 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         plot_number += 1
         axes['vel'] = plt.gca()
 
-    if 'ctrl' in plots:
+    if 'ctrl' in plots and log.actions is not None:
         plt.subplot(*plot_grid, plot_number)
         plt.title('Controller allocated dynamics')
         l = plt.plot(log.t, log.actions[:,0], label='Ctrl Thrust')
@@ -179,6 +179,9 @@ class VehicleDrawing:
         axis: Axes3D = None,
         trace: bool = False,
         body_axes: bool = False,
+        make_fig_kwargs: dict=dict(
+            xlim=(-10,10), ylim=(-10,10), zlim=(-10,10)
+        )
     ):
         """
         Parameters
@@ -202,12 +205,11 @@ class VehicleDrawing:
         self.axis_lines, self.axis_lines_points = \
             make_drawing(self.vehicle.params, self.body_axes)
         if self.axis is None:
-            self.figure, self.axis = make_fig((-10,10), (-10,10), (-10,10))
+            self.figure, self.axis = make_fig(**make_fig_kwargs)
         else:
             self.figure = self.axis.figure, self.axis = axis
         self.trajectory = [[], [], []] # [[X,..], [Y,...], [Z,...]]
         self._init_func()
-
 
 
     def update(self) -> float:
@@ -379,7 +381,8 @@ def update_drawing(
 def make_fig(
         xlim: Tuple[float, float],
         ylim: Tuple[float, float],
-        zlim: Tuple[float, float]
+        zlim: Tuple[float, float],
+        **fig_kwargs
     ) -> Tuple[plt.Figure, Axes3D]:
     """
     Convenience function for creating a 3D axis.
@@ -394,7 +397,7 @@ def make_fig(
     Tuple[plt.Figure, Axes3D]
         The figure and Axes3D instance
     """
-    fig = plt.figure()
+    fig = plt.figure(**fig_kwargs)
     ax = fig.add_subplot(projection='3d', xlim=xlim, ylim=ylim, zlim=zlim)
     ax.set_xlabel('x')
     ax.set_ylabel('y')

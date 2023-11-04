@@ -265,7 +265,7 @@ def make_env(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFAULTS) 
 
 
 
-def make_objective(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFAULTS) -> Callable:
+def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None, args: Namespace=DEFAULTS) -> Callable:
     """
     Make the function that `optuna` will use to optimize.
 
@@ -273,14 +273,20 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFA
     ----------
     vp : VehicleParams
     sp : SimulationParams
+    ctrl: Controller, optional
+        The controller class to use. If not provided, `get_controller` is used with `DEFAULTS`
+        to make a controller instance.
     args : Namespace, optional
         Optimization params, by default DEFAULTS
     """
-    def objective(trial: optuna.Trial):
+    def objective(trial: optuna.Trial, ctrl=ctrl):
         # objective is to navigate to origin from an intial position
         ctrl_params = make_controller_from_trial(trial=trial, args=args)
         env = make_env(vp, sp, args)
-        ctrl = get_controller(env.vehicle, args.scurve, args)
+        if ctrl is None:
+            ctrl = get_controller(env.vehicle, args.scurve, args)
+        else:
+            ctrl.vehicle = env.vehicle
         ctrl.set_params(**ctrl_params)
         errs = []
         for i in range(args.num_sims):
@@ -296,7 +302,7 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFA
 
 
 def optimize(
-    vp: VehicleParams, sp: SimulationParams,
+    vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None,
     ntrials: int=1000,
     args: Namespace=DEFAULTS, seed: int=0,
     study_name: str=None,
@@ -311,6 +317,9 @@ def optimize(
     ----------
     vp : VehicleParams
     sp : SimulationParams
+    ctrl: Controller, optional
+        The controller class to use. If not provided, `get_controller` is used with `DEFAULTS`
+        to make a controller instance.
     ntrials : int, optional
         Number of trials, by default 1000
     args : Namespace, optional
@@ -336,7 +345,7 @@ def optimize(
     optuna.logging.set_verbosity(verbosity)
     study = get_study(study_name, seed=seed)
     study.optimize(
-        make_objective(vp, sp, args),
+        make_objective(vp, sp, ctrl=ctrl, args=args),
         n_trials=ntrials,
         show_progress_bar=True,
         n_jobs=n_jobs,
