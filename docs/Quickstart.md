@@ -190,19 +190,13 @@ drawing.axis.view_init(elev=30, azim=-100)
 plot_datalog(log, figsize=(8,6));
 ```
 
-## Running trajectories
-
-
-The `multirotor.trajectories.Trajectory` class provides a simple interface to 
-
-
 ## Optimizing control
 
 
 The PID controller has many tunable parameters. Searching for an adequate parametrization for a vehicle is a complex search problem.
 
 ```python
-print(ctrl.get_params())
+pprint(ctrl.get_params())
 ```
 
 `multirotor.optimize` provides a convenience function called `optimize()` to search for the best parameters. Parameter search is done using the [optuna](https://optuna.org/) library, which is installed as a dependency.

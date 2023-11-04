@@ -7,7 +7,7 @@
    :maxdepth: 1
    :caption: Contents:
 
-   ./Detailed Demo.ipynb
+   ./Demo.ipynb
 
 .. include:: ../README.md
    :parser: myst_parser.sphinx_
