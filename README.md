@@ -43,7 +43,7 @@ pip install -r docs/requirements.txt
 ## Code organization
 
 The following main classes are available in the code. For simulating the vehicle:
-![](./docs/_static/vehicle_classdiagram.png)
+![](./_static/vehicle_classdiagram.png)
 
 And for simulating control:
-![](./docs/_static/controller_classdiagram.png)
+![](./_static/controller_classdiagram.png)
