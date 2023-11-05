@@ -39,7 +39,7 @@ myst_enable_extensions = [
 ]
 myst_url_schemes = ("http", "https", "mailto")
 nb_execution_excludepatterns = (
-    'Detailed Demo.ipynb',
+    # 'Detailed Demo.ipynb',
     # 'Demo.ipynb'  
 )
 nb_execution_timeout = 180

@@ -1,12 +1,14 @@
 # multirotor
 
+[![Documentation Status](https://readthedocs.org/projects/multirotor/badge/?version=latest)](https://multirotor.readthedocs.io/en/latest/?badge=latest)
+
 Simulation of multi-rotor unmanned aerial vehicles in python.
 
 This package provides an object-oriented interface for modeling and simulating motors, propellers, and airframe of a UAV. Additionally, an OpenAI gym-compatible environment is provided for Reinforcement Learning experiments.
 
 See the Demo jupyter notebook in the repository for a walkthrough.
 
-Code repository: [Github](https://github.com/hazrmard/multirotor), [Gitlab](https://git.isis.vanderbilt.edu/ahmedi/multirotor)
+Code repository: [Github](https://github.com/hazrmard/multirotor)
 
 Please cite this as:
 

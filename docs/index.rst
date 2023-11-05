@@ -8,6 +8,7 @@
    :caption: Contents:
 
    ./Quickstart.md
+   ./Detailed Demo.ipynb
 
 .. include:: ../README.md
    :parser: myst_parser.sphinx_
