@@ -1,9 +1,11 @@
 sphinx==6.1.0
+sphinx-rtd-theme
 sphinx-autoapi==3.0.0
 numpydoc==1.5.0
 myst-parser==2.0.0
 jupyter==1.0.0
 ipympl==0.9.3
+plotly==5.17.0
 # myst-nb==0.17.2
 git+https://github.com/executablebooks/MyST-NB.git@8428815cda8af7937993241eaa6fa76eb1635497
 ./

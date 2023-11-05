@@ -14,7 +14,15 @@ kernelspec:
 # multirotor - Quickstart
 
 
-First, import the dependencies:
+This tutorial is a quick overview of functionality in `multiotor` library. `multirotor` is a simulation package for drones which provides accurate, modular, and extensible interface to model flight. It is able to model electrical and physical characteristics of flight. This tutorial illustrates the following features:
+
+1. Describing and creating a `Multirotor` class
+2. Visualization
+3. Using optimized PID control for flight
+4. `Trajectory` class model multiple waypoints
+5. `BaseMultirotorEnv` class for gym-like interface
+
+This document can be run as a Jupyter notebook using [jupytext](https://jupytext.readthedocs.io/en/latest/) extension. Link to raw markdown file is [here](https://raw.githubusercontent.com/hazrmard/multirotor/master/docs/Quickstart.md).
 
 ```{code-cell} ipython3
 %matplotlib widget
@@ -22,8 +30,9 @@ First, import the dependencies:
 %autoreload 2
 from pprint import pprint
 import numpy as np
-
 np.set_printoptions(precision=3)
+import matplotlib.pyplot as plt
+plt.rcParams.update({'font.size': 8})
 ```
 
 ## Creating a vehicle
@@ -134,7 +143,7 @@ for j in range(1000):
         dtype=vehicle.dtype))
     log.log()
 log.done_logging() # converts to numpy arrays
-plot_datalog(log, figsize=(8,4));
+plot_datalog(log, figsize=(6,4));
 ```
 
 ## Controlling a vehicle
@@ -181,7 +190,7 @@ This can then be looped over and over again:
 vehicle.reset()
 ctrl.reset()
 drawing = VehicleDrawing(
-    vehicle, trace=True,
+    vehicle, trace=True, body_axes=True,
     make_fig_kwargs={'xlim':(-1,10), 'ylim':(-3,3), 'zlim':(-1,2)}
 )
 log = DataLog(vehicle, ctrl)
@@ -196,7 +205,7 @@ drawing.axis.view_init(elev=30, azim=-100)
 ```
 
 ```{code-cell} ipython3
-plot_datalog(log, figsize=(8,6));
+plot_datalog(log, figsize=(6,4));
 ```
 
 ## Optimizing control
@@ -214,7 +223,8 @@ pprint(ctrl.get_params())
 from multirotor.optimize import optimize, run_sim, apply_params
 study = optimize(vp, sp, ctrl, ntrials=100)
 
-from optuna.visualization.matplotlib import plot_parallel_coordinate
+from optuna.visualization import plot_parallel_coordinate # requires plotly
+# from optuna.visualization.matplotlib import plot_parallel_coordinate # requires matplotlib
 plot_parallel_coordinate(study)
 ```
 
