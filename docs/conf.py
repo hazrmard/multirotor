@@ -51,3 +51,11 @@ nb_execution_timeout = 180
 
 html_theme = 'alabaster'
 html_static_path = ['../_static']
+html_theme_options = {
+    'github_user': 'hazrmard',
+    'github_repo': 'multirotor',
+    'github_banner': True,
+    'github_button': True,
+    'github_type': 'star',
+    'fixed_sidebar': True,
+}
