@@ -58,4 +58,7 @@ html_theme_options = {
     'github_button': True,
     'github_type': 'star',
     'fixed_sidebar': True,
+    'logo': 'logo.jpg',
+    'description': 'Drone simulation in python.',
+    'logo_name': True
 }

@@ -2,6 +2,8 @@
 
 [![Documentation Status](https://readthedocs.org/projects/multirotor/badge/?version=latest)](https://multirotor.readthedocs.io/en/latest/?badge=latest)
 
+![](./_static/logo.jpg)
+
 Simulation of multi-rotor unmanned aerial vehicles in python.
 
 This package provides an object-oriented interface for modeling and simulating motors, propellers, and airframe of a UAV. Additionally, an OpenAI gym-compatible environment is provided for Reinforcement Learning experiments.
