@@ -1,3 +1,30 @@
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "multirotor"
+version = "0.5.0"
+description = "Simulation testbed for multirotor vehicles."
+readme = "README.md"
+keywords = ["multirotor", "simulation", "gym", "uav"]
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "scipy",
+    "numba",
+    "matplotlib",
+    "gym",
+    "optuna",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter",
+]
+control = [
+    "control",
+]
+
+[tool.setuptools]
+packages = ["multirotor", "multirotor.controller", "multirotor.models"]
