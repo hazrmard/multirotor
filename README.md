@@ -38,7 +38,7 @@ Or, clone repository and install for development. This will allow you to change 
 git clone https://github.com/hazrmard/multirotor.git
 cd multirotor
 uv sync                  # creates .venv, installs package (editable) + dev group
-uv sync --group docs     # also install documentation dependencies
+uv sync --group docs     # also install documentation dependencies (used by Read the Docs)
 uv sync --extra control  # optional `control` extra
 ```
 

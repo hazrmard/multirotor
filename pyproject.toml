@@ -7,7 +7,7 @@ name = "multirotor"
 version = "0.5.0"
 description = "Simulation testbed for multirotor vehicles."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 keywords = ["multirotor", "simulation", "gym", "uav"]
 dependencies = [
     "numpy",
@@ -36,11 +36,14 @@ docs = [
     "jupyter==1.0.0",
     "ipympl==0.9.3",
     "plotly==5.17.0",
+    "myst-nb",
 ]
-# myst-nb is pinned to a git commit in docs/requirements.txt (used by Read the Docs).
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.uv.sources]
+myst-nb = { git = "https://github.com/executablebooks/MyST-NB.git", rev = "8428815cda8af7937993241eaa6fa76eb1635497" }
 
 [tool.uv.build-backend]
 module-name = "multirotor"
