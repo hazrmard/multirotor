@@ -37,11 +37,16 @@ Or, clone repository and install for development. This will allow you to change 
 ```bash
 git clone https://github.com/hazrmard/multirotor.git
 cd multirotor
-pip install -e .
+uv sync                  # creates .venv, installs package (editable) + dev group
+uv sync --group docs     # also install documentation dependencies (used by Read the Docs)
+uv sync --extra control  # optional `control` extra
+```
 
-# to also install dependencies for building package/documentation
-pip install -e .[DEV]
-pip install -r docs/requirements.txt
+Build and publish with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv build                 # writes sdist and wheel to dist/
+uv publish               # uploads dist/* to PyPI (set UV_PUBLISH_TOKEN)
 ```
 
 ## Code organization

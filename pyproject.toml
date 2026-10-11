@@ -1,3 +1,46 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.11.0,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "multirotor"
+version = "0.5.0"
+description = "Simulation testbed for multirotor vehicles."
+readme = "README.md"
+requires-python = ">=3.13"
+keywords = ["multirotor", "simulation", "gym", "uav"]
+dependencies = [
+    "numpy",
+    "scipy",
+    "numba",
+    "matplotlib",
+    "gym",
+    "optuna",
+    # pyscurve cannot be a git dependency when uploading to PyPI:
+    # "pyscurve @ git+https://github.com/hazrmard/py-scurve.git@v1.0.2"
+]
+
+[project.optional-dependencies]
+control = ["control"]
+
+[dependency-groups]
+dev = [
+    "jupyter",
+]
+docs = [
+    "sphinx",
+    "sphinx-autoapi",
+    "numpydoc",
+    "myst-parser",
+    "myst-nb",
+    "jupyter",
+    "ipympl",
+    "plotly",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.build-backend]
+module-name = "multirotor"
+module-root = ""
