@@ -116,7 +116,7 @@ def plot_speedup(files, labels, colors, t, out):
 
 CATEGORY = {   # last element of a scope path -> chart category
     'loop': 'loop overhead', 'step_speeds': 'step bookkeeping',
-    'step_dynamics': 'step bookkeeping', 'model': 'model',
+    'step_dynamics': 'step bookkeeping', 'model': 'model (kernel + rounding)',
     'forces_torques': 'forces/torques', 'integrator': 'integrator',
     'propeller': 'propeller', 'controller': 'controller',
     'allocation': 'allocation', 'env.step': 'env', 'reward': 'env',

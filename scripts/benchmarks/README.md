@@ -34,7 +34,8 @@ under 100 KiB ignored).
 
 All use the `tarott18` propeller/motor constants, `dt=0.01`, `float32`, and hold
 5 m altitude where a reference is needed. Add a case by writing a `Runner`
-(`reset()`, `run(n)`, `dt`) in `cases.py` and listing its parameter grid in `CASES`.
+(`reset()`, `run(n)`, `dt`, and `scope_points()` to say which callables to time as
+scopes) in `cases.py` and listing its parameter grid in `CASES`.
 
 ## Metrics
 
@@ -56,6 +57,14 @@ All use the `tarott18` propeller/motor constants, `dt=0.01`, `float32`, and hold
     evaluations the solver requests (`evals_per_step` = their count per integrator call).
   * `integrator` exclusive time is solver overhead (LSODA bookkeeping plus the
     call into Python); it excludes the model time below it.
+  * `model` exclusive time is only the jitted kernel plus rounding; the per-rotor
+    loop is its child `forces_torques`. Use `model` inclusive for the whole
+    derivative evaluation. Mapping: model = `model` incl; integrator = `integrator`
+    excl; one `step_*()` call = `step_speeds`/`step_dynamics` incl; controller =
+    `controller` incl; env = `env.step` incl minus `step_dynamics` incl; full sim
+    step = `loop` incl.
+  * At exact hover `evals_per_step` is 4; perturbed inputs need ~13-17 and cost 2x
+    or more. Never benchmark at equilibrium only (hence the `excite` cases).
   * The wrappers cost roughly 0.8 us per call. `scopes.calibrate()` measures that
     and `report()` removes it (`a_ns`, `b_ns` in the file). `vs_clean` is the
     instrumented total divided by the clean median; far from 1 (the run prints a

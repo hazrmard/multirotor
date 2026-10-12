@@ -33,8 +33,6 @@ def _peak_rss_mb() -> float:
 
 
 LEVELS = {'coarse': 0, 'fine': 1}
-SCOPE_STEPS = 300
-
 
 def scope_profile(runner, steps: int, level: str, ab) -> dict:
     """One instrumented pass: a scope tree at ``level`` ('coarse' or 'fine').
@@ -46,11 +44,14 @@ def scope_profile(runner, steps: int, level: str, ab) -> dict:
     for lvl, owner, attr, name in runner.scope_points():
         if LEVELS[lvl] <= LEVELS[level]:
             timer.wrap(owner, attr, name)
+    gc.collect()
+    gc.disable()   # same as the clean pass, so GC pauses do not land in a scope
     timer.enter('loop')
     try:
         runner.run(steps)
     finally:
         timer.exit()
+        gc.enable()
         timer.restore()
     return timer.report(steps, *ab)
 
@@ -83,7 +84,7 @@ def worker_time(name: str, params: dict, repeats: int, scopes: str) -> dict:
     trees = {}
     if scopes != 'off' and runner.scope_points():
         ab = calibrate()
-        n = min(SCOPE_STEPS, steps)
+        n = steps  # same length as the clean pass: trajectories drift with step count
         for level in (['coarse', 'fine'] if scopes == 'both' else [scopes]):
             tree = scope_profile(runner, n, level, ab)
             tree['vs_clean'] = tree['total_us'] / stats['median']
