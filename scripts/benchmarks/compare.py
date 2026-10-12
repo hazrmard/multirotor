@@ -25,8 +25,12 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('baseline')
     ap.add_argument('candidate')
-    ap.add_argument('--threshold', type=float, default=10.,
-                    help='percent slowdown that counts as a regression (default 10)')
+    ap.add_argument('--threshold', type=float, default=15.,
+                    help='percent slowdown that counts as a regression (default 15; '
+                         'two runs of one commit on the dev VM differed by up to 11%%)')
+    ap.add_argument('--mem-threshold', type=float, default=10.,
+                    help='percent growth of tracemalloc peak that counts as a '
+                         'regression; cases under 100 KiB are ignored (default 10)')
     args = ap.parse_args(argv)
 
     a, b = load_results(args.baseline), load_results(args.candidate)
@@ -42,7 +46,7 @@ def main(argv=None) -> int:
     ia, ib = index_by_id(a), index_by_id(b)
     regressions = []
     print(f'\n{"case":<60} {"base us":>10} {"new us":>10} {"time %":>8}'
-          f' {"RSS %":>8} {"B/step %":>9}')
+          f' {"RSS %":>8} {"peak %":>8} {"RHS/step":>9}')
     for cid in ia:
         if cid not in ib:
             print(f'{cid:<60} (missing in candidate)')
@@ -66,14 +70,25 @@ def main(argv=None) -> int:
             row += f' {"-":>10} {"-":>10} {"-":>8} {"-":>8}'
         ma, mb = ra.get('tracemalloc'), rb.get('tracemalloc')
         if ma and mb:
-            row += f' {pct(mb["net_bytes_per_step"], ma["net_bytes_per_step"]):>+9.1f}'
+            d = pct(mb['peak_kb'], ma['peak_kb'])
+            big = ma['peak_kb'] >= 100
+            flag = '!' if big and d > args.mem_threshold else ' '
+            row += f' {d:>+7.1f}{flag}'
+            if flag == '!':
+                regressions.append((cid + ' (memory)', d))
+        else:
+            row += f' {"-":>8}'
+        xa, xb = ra.get('rhs_calls_per_step'), rb.get('rhs_calls_per_step')
+        if xa and xb:
+            row += f' {xa:>4.1f}>{xb:<4.1f}'
         print(row)
     for cid in ib:
         if cid not in ia:
             print(f'{cid:<60} (new in candidate)')
 
     if regressions:
-        print(f'\n{len(regressions)} case(s) slower than {args.threshold:.0f}%:')
+        print(f'\n{len(regressions)} regression(s) (time > {args.threshold:.0f}%, '
+              f'memory > {args.mem_threshold:.0f}%):')
         for cid, d in regressions:
             print(f'  {cid}: {d:+.1f}%')
         return 1

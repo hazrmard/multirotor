@@ -59,6 +59,21 @@ def hover_speeds(vehicle: Multirotor) -> np.ndarray:
     return np.full(p.nprops, w, vehicle.dtype)
 
 
+N_SCHEDULE = 64
+
+
+def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
+    """Deterministic schedule of inputs, ``base * (1 +- frac)``, cycled per step.
+
+    A vehicle fed exactly its hover inputs sits at equilibrium, where ``odeint``
+    takes the fewest right-hand-side calls. Perturbed inputs make it work for
+    its answer.
+    """
+    rng = np.random.default_rng(seed)
+    noise = rng.uniform(-frac, frac, size=(N_SCHEDULE, *np.shape(base)))
+    return (np.asarray(base) * (1 + noise)).astype(np.asarray(base).dtype)
+
+
 class Runner:
     dt: float = SP.dt
 
@@ -70,36 +85,47 @@ class Runner:
 
 
 class StepSpeeds(Runner):
-    """Raw ODE step, fixed hover speeds. Isolates ``Multirotor.step_speeds``."""
-    def __init__(self, n=8, thrust='const', motor=False):
+    """Raw ODE step. Isolates ``Multirotor.step_speeds``.
+
+    ``excite=False`` holds exact hover speeds (equilibrium: cheapest possible
+    integration). ``excite=True`` cycles through +-5% perturbed speeds.
+    """
+    def __init__(self, n=8, thrust='const', motor=False, excite=True):
         self.v = make_vehicle(n, thrust, motor)
-        self.u = hover_speeds(self.v)
+        hover = hover_speeds(self.v)
+        self.us = excitation(hover, 0.05) if excite else hover[None]
         self.dt = self.v.simulation.dt
 
     def reset(self):
         self.v.reset()
 
     def run(self, n):
-        step, u = self.v.step_speeds, self.u
-        for _ in range(n):
-            step(u)
+        step, us = self.v.step_speeds, self.us
+        m = len(us)
+        for i in range(n):
+            step(us[i % m])
 
 
 class StepDynamics(Runner):
     """Raw ODE step with force/torque inputs. Isolates ``step_dynamics``."""
-    def __init__(self, n=8):
+    def __init__(self, n=8, excite=True):
         self.v = make_vehicle(n)
-        self.u = np.asarray([0, 0, self.v.params.mass * self.v.simulation.g, 0, 0, 0],
-                            self.v.dtype)
+        hover = np.asarray([0, 0, self.v.params.mass * self.v.simulation.g, 0, 0, 0],
+                           self.v.dtype)
+        self.us = excitation(hover, 0.05) if excite else hover[None]
+        # torques are zero at hover, so perturb them additively
+        if excite:
+            self.us[:, 3:] = excitation(np.ones(3, self.v.dtype), 0.5)[:, :] * 0.1 - 0.1
         self.dt = self.v.simulation.dt
 
     def reset(self):
         self.v.reset()
 
     def run(self, n):
-        step, u = self.v.step_dynamics, self.u
-        for _ in range(n):
-            step(u)
+        step, us = self.v.step_dynamics, self.us
+        m = len(us)
+        for i in range(n):
+            step(us[i % m])
 
 
 class ControllerStep(Runner):
@@ -161,7 +187,11 @@ class RunSim(Runner):
     def run(self, n):
         point = np.asarray([0, 0, ALTITUDE], self.v.dtype)
         traj = ((point, None) for _ in range(n))
-        run_sim(self.env, traj, self.c)
+        log = run_sim(self.env, traj, self.c)
+        # run_sim stops early when the env reports done; us/step would then be
+        # divided by steps that never ran.
+        if len(log) != n:
+            raise RuntimeError(f'run_sim ended after {len(log)} of {n} steps')
 
 
 # name -> (builder, list of param dicts)
@@ -172,12 +202,17 @@ def _grid(**axes) -> List[Dict]:
 
 CASES: Dict[str, tuple] = {
     'step_speeds': (StepSpeeds, [
-        dict(n=n, thrust='const', motor=False, steps=1000) for n in (4, 6, 8)
+        dict(n=n, thrust='const', motor=False, excite=True, steps=1000)
+        for n in (4, 6, 8)
     ] + [
-        dict(n=8, thrust='const', motor=True, steps=1000),
-        dict(n=8, thrust='blade', motor=False, steps=100),
+        dict(n=8, thrust='const', motor=True, excite=True, steps=1000),
+        dict(n=8, thrust='blade', motor=False, excite=True, steps=300),
+        # equilibrium reference: the integrator's best case
+        dict(n=8, thrust='const', motor=False, excite=False, steps=1000),
     ]),
-    'step_dynamics': (StepDynamics, [dict(n=8, steps=1000)]),
+    'step_dynamics': (StepDynamics, [
+        dict(n=8, excite=True, steps=1000), dict(n=8, excite=False, steps=1000),
+    ]),
     'controller_step': (ControllerStep, [dict(n=8, steps=5000)]),
     'closed_loop': (ClosedLoop, [
         dict(n=8, thrust='const', motor=False, log=False, steps=2000),

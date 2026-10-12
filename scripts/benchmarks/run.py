@@ -55,12 +55,40 @@ def worker_time(name: str, params: dict, repeats: int) -> dict:
     finally:
         gc.enable()
     stats = summarize(samples)
+    rhs = count_rhs(runner, min(200, steps)) if hasattr(runner, 'v') else None
     return dict(
+        rhs_calls_per_step=rhs,
         us_per_step=samples, stats=stats,
         steps_per_s=1e6 / stats['median'],
         real_time_factor=runner.dt * 1e6 / stats['median'],
         build_s=build_s, warmup_s=warmup_s, peak_rss_mb=_peak_rss_mb(),
     )
+
+
+def count_rhs(runner, steps: int) -> float:
+    """Right-hand-side evaluations per step, from a separate counted pass.
+
+    Separates "each RHS call got cheaper" from "the integrator needed fewer
+    calls". Counting adds overhead, so this never shares a run with timing.
+    """
+    v = runner.v
+    calls = [0]
+    originals = {}
+    for attr in ('dxdt_speeds', 'dxdt_dynamics'):
+        f = getattr(v, attr)
+        originals[attr] = f
+
+        def wrapped(*a, _f=f, **k):
+            calls[0] += 1
+            return _f(*a, **k)
+        setattr(v, attr, wrapped)
+    try:
+        runner.reset()
+        runner.run(steps)
+    finally:
+        for attr, f in originals.items():
+            setattr(v, attr, f)
+    return calls[0] / steps
 
 
 def worker_mem(name: str, params: dict) -> dict:
@@ -171,8 +199,11 @@ def main(argv=None) -> None:
         results.append(rec)
         msg = []
         if 'stats' in rec:
+            rhs = rec.get('rhs_calls_per_step')
             msg.append(f'{rec["stats"]["median"]:9.1f} us/step '
-                       f'(RTF {rec["real_time_factor"]:.1f}x)')
+                       f'(RTF {rec["real_time_factor"]:5.1f}x, '
+                       f'{rhs:.1f} RHS/step)' if rhs else
+                       f'{rec["stats"]["median"]:9.1f} us/step')
         if 'tracemalloc' in rec:
             msg.append(f'{rec["tracemalloc"]["net_bytes_per_step"]:8.1f} B/step net')
         print('  '.join(msg))
