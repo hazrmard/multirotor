@@ -4,8 +4,8 @@
     uv run python scripts/benchmarks/plot.py A.json B.json --out charts --theme dark
 
 Writes PNGs: ``time_per_step.png`` (median with min-max whiskers),
-``speedup.png`` (first file / each later file), ``breakdown.png`` (model vs
-integrator vs other time per step), ``memory.png`` (tracemalloc
+``speedup.png`` (first file / each later file), ``breakdown.png`` (share of step
+time by scope), ``memory.png`` (tracemalloc
 peak per case) and ``log_scaling.png`` (DataLog growth vs steps).
 """
 import argparse
@@ -114,38 +114,69 @@ def plot_speedup(files, labels, colors, t, out):
     plt.close(fig)
 
 
+CATEGORY = {   # last element of a scope path -> chart category
+    'loop': 'loop overhead', 'step_speeds': 'step bookkeeping',
+    'step_dynamics': 'step bookkeeping', 'model': 'model',
+    'forces_torques': 'forces/torques', 'integrator': 'integrator',
+    'propeller': 'propeller', 'controller': 'controller',
+    'allocation': 'allocation', 'env.step': 'env', 'reward': 'env',
+    'log': 'logging', 'log_done': 'logging',
+}
+MAX_CATEGORIES = 7   # categorical slots 1-7; the rest folds into "other"
+
+
 def plot_breakdown(files, labels, colors, t, out, theme):
-    """100%-stacked bars: share of step time in model / integrator / other."""
-    parts = [('model', 'model'),
-             ('integrator', 'integrator'),
-             ('other', 'other')]
-    part_colors = SERIES[theme][:3]
+    """100%-stacked bars: share of step time by scope (exclusive time)."""
     rows = []
     for f, label in zip(files, labels):
         for cid, r in index_by_id(f).items():
-            if r.get('breakdown'):
-                rows.append((cid if len(files) == 1 else f'{cid} [{label}]', r['breakdown']))
+            tree = (r.get('scopes') or {})
+            tree = tree.get('fine') or tree.get('coarse')
+            if tree:
+                rows.append((cid if len(files) == 1 else f'{cid} [{label}]', tree))
     if not rows:
         return
-    fig, ax = new_fig(t, 0.45 * len(rows) + 1.5)
+    shares = []   # per row: category -> percent of that row's total
+    for _, tree in rows:
+        d = {}
+        for it in tree['items']:
+            cat = CATEGORY.get(it['path'].rsplit('/', 1)[-1], it['path'].rsplit('/', 1)[-1])
+            d[cat] = d.get(cat, 0.) + it['excl_us'] / tree['total_us'] * 100
+        shares.append(d)
+    overall = {}
+    for d in shares:
+        for k, v in d.items():
+            overall[k] = overall.get(k, 0.) + v
+    ranked = sorted(overall, key=overall.get, reverse=True)
+    keep = ranked[:MAX_CATEGORIES]
+    cats = keep + (['other'] if len(ranked) > MAX_CATEGORIES else [])
+    from_ramp = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6'] \
+        if theme == 'light' else \
+        ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9']
+    muted = '#898781'
+    cat_colors = {c: from_ramp[i] for i, c in enumerate(keep)}
+    cat_colors['other'] = muted
+    fig, ax = new_fig(t, 0.45 * len(rows) + 1.8)
     y = np.arange(len(rows))
     left = np.zeros(len(rows))
-    for (key, name), c in zip(parts, part_colors):
-        vals = np.array([b[key + '_us'] / b['total_us'] * 100 for _, b in rows])
-        # surface-colored edge draws the 2px gap between stacked segments
-        ax.barh(y, vals, left=left, height=0.65, color=c, label=name,
-                edgecolor=t['surface'], linewidth=2)
+    for cat in cats:
+        vals = np.array([sum(v for k, v in d.items()
+                             if k == cat or (cat == 'other' and k not in keep))
+                         for d in shares])
+        ax.barh(y, vals, left=left, height=0.65, color=cat_colors[cat], label=cat,
+                edgecolor=t['surface'], linewidth=2)   # 2px gap between segments
         left += vals
-    ax.set_yticks(y, [f'{name}  ({b["total_us"]:.0f} us)' for name, b in rows])
+    ax.set_yticks(y, [f'{name}  ({tree["total_us"]:.0f} us)' for name, tree in rows])
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel('share of step time (%); bracket = total us/step, instrumented run')
-    ax.set_title('Where the step time goes', loc='left', pad=34)
-    leg = ax.legend(frameon=False, loc='lower left', bbox_to_anchor=(0, 1.0), ncol=3,
-                    borderaxespad=0.2, columnspacing=1.2, handlelength=1.2)
+    ax.set_xlabel('share of step time (%, exclusive)')
+    ax.set_title('Where the step time goes', loc='left')
+    handles, names = ax.get_legend_handles_labels()
+    leg = fig.legend(handles, names, loc='lower center', ncol=min(len(cats), 4),
+                     frameon=False, columnspacing=1.2, handlelength=1.2)
     for txt in leg.get_texts():
         txt.set_color(t['ink2'])
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0.1 if len(cats) > 4 else 0.06, 1, 1])
     fig.savefig(out / 'breakdown.png', dpi=150, facecolor=t['surface'])
     plt.close(fig)
 

@@ -41,24 +41,34 @@ All use the `tarott18` propeller/motor constants, `dt=0.01`, `float32`, and hold
 * `us_per_step`: wall time per step, one sample per repeat (default 7). Compare on
   the **median**; `min` is the noise floor. `real_time_factor` = simulated seconds
   per wall second.
-* `breakdown`: where a physics step goes, from a separate instrumented pass
-  (`instrument.py`; wrapping adds overhead, so it never shares a run with timing).
-  `Multirotor` takes an `integrator` callable and `TimedIntegrator` wraps it:
-  * `model_us`: time inside the derivative function (`dxdt_*`: forces, torques,
-    state derivative). `model_us_per_eval` is the cost of one evaluation.
-  * `integrator_us`: the rest of the integrator call (LSODA step-size control and
-    bookkeeping, plus the C/Fortran-to-Python call overhead).
-  * `other_us`: everything outside the integrator call: rounding, propeller and
-    battery stepping, the one `_dxdt` evaluation that precedes the solve, and in
-    closed-loop cases the controller, allocation and logging.
-  * `evals_per_step`: derivative evaluations the solver requested. Deterministic.
-  A model speedup lowers `model_us_per_eval`; a solver or tolerance change lowers
-  `evals_per_step` and `integrator_us`. At exact hover `evals_per_step` is 4;
-  perturbed inputs need ~13-17 and cost 2x or more, so never benchmark at
-  equilibrium only. The wrapper costs roughly `timer_overhead_ns` per evaluation
-  (recorded in the file), which overstates `model_us_per_eval` for cheap models
-  such as `step_dynamics`. Shares are indicative, not exact. Runs on a commit
-  without the `integrator` argument record `breakdown: null`.
+* `scopes`: a scope tree (`scopes.py`) from separate instrumented passes, one per
+  level, because wrapping adds overhead. Each scope has `calls_per_step`,
+  inclusive and exclusive us/step, keyed by path (`loop/step_speeds/integrator/model`).
+  * `coarse`: controller, allocation, env step, reward, the `step_*` calls, logging.
+  * `fine`: adds the integrator, the model (`dxdt_*`), `forces_torques` (the
+    per-rotor loop inside the model) and `Propeller.step`.
+  * Invariants, exact by construction: `inclusive = exclusive + sum(children's
+    inclusive)` and `sum(exclusive over all scopes) = inclusive(loop)`. Time no
+    child scope covers stays in the parent's exclusive time, so there is no
+    unexplained "other" bucket.
+  * The same function can appear under two paths: `step_speeds/model` is the one
+    `_dxdt` evaluation before the solve; `step_speeds/integrator/model` are the
+    evaluations the solver requests (`evals_per_step` = their count per integrator call).
+  * `integrator` exclusive time is solver overhead (LSODA bookkeeping plus the
+    call into Python); it excludes the model time below it.
+  * The wrappers cost roughly 0.8 us per call. `scopes.calibrate()` measures that
+    and `report()` removes it (`a_ns`, `b_ns` in the file). `vs_clean` is the
+    instrumented total divided by the clean median; far from 1 (the run prints a
+    warning above 1.3) means the instrumented pass hit a noisy machine, so do not
+    trust its shares.
+  * Jitted functions (`apply_forces_torques`, `torque`) cannot be wrapped, so they
+    stay in the exclusive time of the scope that calls them.
+  * Which callables become scopes is declared per case in `cases.py`
+    (`Runner.scope_points`). Missing attributes are skipped, so older commits
+    degrade instead of failing. The integrator scope needs the `integrator`
+    argument of `Multirotor`.
+  * `run.py --tree` prints the tree per case; `--scopes off|coarse|fine|both`
+    selects the passes; `compare.py --detail` compares fine scopes.
 * `peak_rss_mb`: process peak RSS of the timing run (includes the interpreter,
   numpy, scipy, numba; compare deltas, not absolutes).
 * `tracemalloc`: Python/numpy allocations during the run, measured in a separate
@@ -77,4 +87,4 @@ All use the `tarott18` propeller/motor constants, `dt=0.01`, `float32`, and hold
   git SHA/dirty flag and library versions.
 * Timing noise: two full runs of the same commit on the dev VM differed by up to
   11% per case (short cases and the blade model are noisiest). Treat deltas under
-  ~15% as noise unless repeated; `rhs_calls_per_step` changes are always real.
+  ~15% as noise unless repeated; `evals_per_step` changes are always real.

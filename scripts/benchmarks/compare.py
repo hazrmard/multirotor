@@ -31,6 +31,8 @@ def main(argv=None) -> int:
     ap.add_argument('--mem-threshold', type=float, default=10.,
                     help='percent growth of tracemalloc peak that counts as a '
                          'regression; cases under 100 KiB are ignored (default 10)')
+    ap.add_argument('--detail', action='store_true',
+                    help='show fine scopes (integrator, model, propellers) instead of coarse')
     args = ap.parse_args(argv)
 
     a, b = load_results(args.baseline), load_results(args.candidate)
@@ -84,18 +86,33 @@ def main(argv=None) -> int:
             print(f'{cid:<60} (new in candidate)')
 
     # Diagnostic only: never affects the exit status.
-    rows = [(cid, ia[cid]['breakdown'], ib[cid]['breakdown']) for cid in ia
-            if cid in ib and ia[cid].get('breakdown') and ib[cid].get('breakdown')]
-    if rows:
-        print(f'\nwhere the time went (us/step; model = derivative evaluation, '
-              f'integrator = solver overhead):')
-        print(f'{"case":<60} {"evals/step":>11} {"model/eval":>11} {"model":>11}'
-              f' {"integrator":>11} {"other":>11}')
-        for cid, x, y in rows:
-            def pair(k, f='{:.1f}'):
-                return (f.format(x[k]) + '>' + f.format(y[k])).rjust(11)
-            print(f'{cid:<60} {pair("evals_per_step")} {pair("model_us_per_eval")}'
-                  f' {pair("model_us")} {pair("integrator_us")} {pair("other_us")}')
+    level = 'fine' if args.detail else 'coarse'
+    shown = False
+    for cid in ia:
+        sa = (ia[cid].get('scopes') or {}).get(level) if cid in ib else None
+        sb = (ib[cid].get('scopes') or {}).get(level) if cid in ib else None
+        if not sa or not sb:
+            continue
+        if not shown:
+            print(f'\nwhere the time went ({level} scopes; exclusive us/step, '
+                  f'base>new; scopes under 1% of the step are hidden):')
+            shown = True
+        print(f'\n{cid}')
+        xa = {i['path']: i for i in sa['items']}
+        xb = {i['path']: i for i in sb['items']}
+        for path in sorted(set(xa) | set(xb)):
+            ea = xa.get(path, {}).get('excl_us', 0.)
+            eb = xb.get(path, {}).get('excl_us', 0.)
+            if max(ea / sa['total_us'], eb / sb['total_us']) < 0.01:
+                continue
+            ca = xa.get(path, {}).get('calls_per_step', 0.)
+            cb = xb.get(path, {}).get('calls_per_step', 0.)
+            parts = path.split('/')
+            label = '  ' * (len(parts) - 1) + parts[-1]
+            print(f'  {label:<34} {ea:>8.1f} > {eb:<8.1f} {pct(eb, ea):>+7.1f}%'
+                  f'   calls {ca:.2f} > {cb:.2f}')
+        print(f'  {"total (instrumented)":<34} {sa["total_us"]:>8.1f} > {sb["total_us"]:<8.1f}'
+              f'   instrumented/clean {sa["vs_clean"]:.2f} > {sb["vs_clean"]:.2f}')
 
     if regressions:
         print(f'\n{len(regressions)} regression(s) (time > {args.threshold:.0f}%, '

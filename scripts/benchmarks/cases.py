@@ -74,6 +74,24 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
     return (np.asarray(base) * (1 + noise)).astype(np.asarray(base).dtype)
 
 
+def vehicle_points(v: Multirotor) -> List[tuple]:
+    """Scope points for the vehicle: ``(level, owner, attribute, scope name)``."""
+    pts = [('coarse', v, 'step_speeds', 'step_speeds'),
+           ('coarse', v, 'step_dynamics', 'step_dynamics'),
+           ('fine', v, 'integrator', 'integrator'),
+           ('fine', v, 'dxdt_speeds', 'model'),
+           ('fine', v, 'dxdt_dynamics', 'model'),
+           ('fine', v, 'get_forces_torques', 'forces_torques')]
+    pts += [('fine', p, 'step', 'propeller') for p in v.propellers]
+    return pts
+
+
+def log_points() -> List[tuple]:
+    # DataLog is created inside reset()/run_sim, so patch the class.
+    return [('coarse', DataLog, 'log', 'log'),
+            ('coarse', DataLog, 'done_logging', 'log_done')]
+
+
 class Runner:
     dt: float = SP.dt
 
@@ -82,6 +100,14 @@ class Runner:
 
     def run(self, n: int) -> None:
         raise NotImplementedError
+
+    def scope_points(self) -> List[tuple]:
+        """Callables to time as scopes: ``(level, owner, attr, name)``.
+
+        Levels: ``coarse`` (controller, env, step, logging) and ``fine``
+        (integrator, model, propellers; includes coarse).
+        """
+        return []
 
 
 class StepSpeeds(Runner):
@@ -105,6 +131,9 @@ class StepSpeeds(Runner):
         for i in range(n):
             step(us[i % m])
 
+    def scope_points(self):
+        return vehicle_points(self.v)
+
 
 class StepDynamics(Runner):
     """Raw ODE step with force/torque inputs. Isolates ``step_dynamics``."""
@@ -127,6 +156,9 @@ class StepDynamics(Runner):
         for i in range(n):
             step(us[i % m])
 
+    def scope_points(self):
+        return vehicle_points(self.v)
+
 
 class ControllerStep(Runner):
     """``Controller.step`` alone; the vehicle state is held fixed."""
@@ -144,6 +176,9 @@ class ControllerStep(Runner):
         step, ref = self.c.step, self.ref
         for _ in range(n):
             step(reference=ref)
+
+    def scope_points(self):
+        return [('coarse', self.c, 'step', 'controller')]
 
 
 class ClosedLoop(Runner):
@@ -171,6 +206,11 @@ class ClosedLoop(Runner):
         if dl is not None:
             dl.done_logging()
 
+    def scope_points(self):
+        return ([('coarse', self.c, 'step', 'controller'),
+                 ('coarse', self.v, 'allocate_control', 'allocation')]
+                + vehicle_points(self.v) + log_points())
+
 
 class RunSim(Runner):
     """``optimize.run_sim`` through the gym-style env, over a bounded trajectory."""
@@ -192,6 +232,13 @@ class RunSim(Runner):
         # divided by steps that never ran.
         if len(log) != n:
             raise RuntimeError(f'run_sim ended after {len(log)} of {n} steps')
+
+    def scope_points(self):
+        return ([('coarse', self.c, 'step', 'controller'),
+                 ('coarse', self.env, 'step', 'env.step'),
+                 ('coarse', self.env, 'reward', 'reward'),
+                 ('coarse', self.v, 'allocate_control', 'allocation')]
+                + vehicle_points(self.v) + log_points())
 
 
 # name -> (builder, list of param dicts)
