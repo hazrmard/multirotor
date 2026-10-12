@@ -41,11 +41,24 @@ All use the `tarott18` propeller/motor constants, `dt=0.01`, `float32`, and hold
 * `us_per_step`: wall time per step, one sample per repeat (default 7). Compare on
   the **median**; `min` is the noise floor. `real_time_factor` = simulated seconds
   per wall second.
-* `rhs_calls_per_step`: right-hand-side evaluations `odeint` needs per step, from a
-  separate counted pass. Deterministic, so it is noise-free. Use it to tell
-  "each call got cheaper" from "the integrator took fewer calls". At exact hover
-  it is 5; perturbed inputs need ~13-18, and timings differ by 2x or more, so
-  never benchmark at equilibrium only.
+* `breakdown`: where a physics step goes, from a separate instrumented pass
+  (`instrument.py`; wrapping adds overhead, so it never shares a run with timing).
+  `Multirotor` takes an `integrator` callable and `TimedIntegrator` wraps it:
+  * `model_us`: time inside the derivative function (`dxdt_*`: forces, torques,
+    state derivative). `model_us_per_eval` is the cost of one evaluation.
+  * `integrator_us`: the rest of the integrator call (LSODA step-size control and
+    bookkeeping, plus the C/Fortran-to-Python call overhead).
+  * `other_us`: everything outside the integrator call: rounding, propeller and
+    battery stepping, the one `_dxdt` evaluation that precedes the solve, and in
+    closed-loop cases the controller, allocation and logging.
+  * `evals_per_step`: derivative evaluations the solver requested. Deterministic.
+  A model speedup lowers `model_us_per_eval`; a solver or tolerance change lowers
+  `evals_per_step` and `integrator_us`. At exact hover `evals_per_step` is 4;
+  perturbed inputs need ~13-17 and cost 2x or more, so never benchmark at
+  equilibrium only. The wrapper costs roughly `timer_overhead_ns` per evaluation
+  (recorded in the file), which overstates `model_us_per_eval` for cheap models
+  such as `step_dynamics`. Shares are indicative, not exact. Runs on a commit
+  without the `integrator` argument record `breakdown: null`.
 * `peak_rss_mb`: process peak RSS of the timing run (includes the interpreter,
   numpy, scipy, numba; compare deltas, not absolutes).
 * `tracemalloc`: Python/numpy allocations during the run, measured in a separate

@@ -4,7 +4,8 @@
     uv run python scripts/benchmarks/plot.py A.json B.json --out charts --theme dark
 
 Writes PNGs: ``time_per_step.png`` (median with min-max whiskers),
-``speedup.png`` (first file / each later file), ``memory.png`` (tracemalloc
+``speedup.png`` (first file / each later file), ``breakdown.png`` (model vs
+integrator vs other time per step), ``memory.png`` (tracemalloc
 peak per case) and ``log_scaling.png`` (DataLog growth vs steps).
 """
 import argparse
@@ -113,6 +114,42 @@ def plot_speedup(files, labels, colors, t, out):
     plt.close(fig)
 
 
+def plot_breakdown(files, labels, colors, t, out, theme):
+    """100%-stacked bars: share of step time in model / integrator / other."""
+    parts = [('model', 'model'),
+             ('integrator', 'integrator'),
+             ('other', 'other')]
+    part_colors = SERIES[theme][:3]
+    rows = []
+    for f, label in zip(files, labels):
+        for cid, r in index_by_id(f).items():
+            if r.get('breakdown'):
+                rows.append((cid if len(files) == 1 else f'{cid} [{label}]', r['breakdown']))
+    if not rows:
+        return
+    fig, ax = new_fig(t, 0.45 * len(rows) + 1.5)
+    y = np.arange(len(rows))
+    left = np.zeros(len(rows))
+    for (key, name), c in zip(parts, part_colors):
+        vals = np.array([b[key + '_us'] / b['total_us'] * 100 for _, b in rows])
+        # surface-colored edge draws the 2px gap between stacked segments
+        ax.barh(y, vals, left=left, height=0.65, color=c, label=name,
+                edgecolor=t['surface'], linewidth=2)
+        left += vals
+    ax.set_yticks(y, [f'{name}  ({b["total_us"]:.0f} us)' for name, b in rows])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel('share of step time (%); bracket = total us/step, instrumented run')
+    ax.set_title('Where the step time goes', loc='left', pad=34)
+    leg = ax.legend(frameon=False, loc='lower left', bbox_to_anchor=(0, 1.0), ncol=3,
+                    borderaxespad=0.2, columnspacing=1.2, handlelength=1.2)
+    for txt in leg.get_texts():
+        txt.set_color(t['ink2'])
+    fig.tight_layout()
+    fig.savefig(out / 'breakdown.png', dpi=150, facecolor=t['surface'])
+    plt.close(fig)
+
+
 def plot_memory(files, labels, colors, t, out):
     ids = [c for c, r in index_by_id(files[0]).items()
            if 'tracemalloc' in r and r['case'] != 'log_scaling']
@@ -179,6 +216,7 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     plot_time(files, labels, colors, t, out)
     plot_speedup(files, labels, colors, t, out)
+    plot_breakdown(files, labels, colors, t, out, args.theme)
     plot_memory(files, labels, colors, t, out)
     plot_log_scaling(files, labels, colors, t, out)
     print('wrote', *sorted(p.name for p in out.glob('*.png')), 'to', out)

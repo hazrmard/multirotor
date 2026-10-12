@@ -46,7 +46,7 @@ def main(argv=None) -> int:
     ia, ib = index_by_id(a), index_by_id(b)
     regressions = []
     print(f'\n{"case":<60} {"base us":>10} {"new us":>10} {"time %":>8}'
-          f' {"RSS %":>8} {"peak %":>8} {"RHS/step":>9}')
+          f' {"RSS %":>8} {"peak %":>8}')
     for cid in ia:
         if cid not in ib:
             print(f'{cid:<60} (missing in candidate)')
@@ -78,13 +78,24 @@ def main(argv=None) -> int:
                 regressions.append((cid + ' (memory)', d))
         else:
             row += f' {"-":>8}'
-        xa, xb = ra.get('rhs_calls_per_step'), rb.get('rhs_calls_per_step')
-        if xa and xb:
-            row += f' {xa:>4.1f}>{xb:<4.1f}'
         print(row)
     for cid in ib:
         if cid not in ia:
             print(f'{cid:<60} (new in candidate)')
+
+    # Diagnostic only: never affects the exit status.
+    rows = [(cid, ia[cid]['breakdown'], ib[cid]['breakdown']) for cid in ia
+            if cid in ib and ia[cid].get('breakdown') and ib[cid].get('breakdown')]
+    if rows:
+        print(f'\nwhere the time went (us/step; model = derivative evaluation, '
+              f'integrator = solver overhead):')
+        print(f'{"case":<60} {"evals/step":>11} {"model/eval":>11} {"model":>11}'
+              f' {"integrator":>11} {"other":>11}')
+        for cid, x, y in rows:
+            def pair(k, f='{:.1f}'):
+                return (f.format(x[k]) + '>' + f.format(y[k])).rjust(11)
+            print(f'{cid:<60} {pair("evals_per_step")} {pair("model_us_per_eval")}'
+                  f' {pair("model_us")} {pair("integrator_us")} {pair("other_us")}')
 
     if regressions:
         print(f'\n{len(regressions)} regression(s) (time > {args.threshold:.0f}%, '
