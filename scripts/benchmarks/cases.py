@@ -342,7 +342,7 @@ class Case:
         Parameter sets; each yields one case id. ``steps`` is the number of steps
         per run and is not passed to the Runner.
     measures : tuple of str
-        Workers to start per case id: ``'time'`` (clean and scope passes) and/or
+        Workers to start per case id: ``'time'`` (clean pass and scope pass) and/or
         ``'mem'`` (memory pass).
     sweep : str or None
         Name of the parameter that the parameter sets sweep to show growth, for
