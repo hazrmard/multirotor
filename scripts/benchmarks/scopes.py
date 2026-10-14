@@ -9,8 +9,8 @@ Usage::
 
     timer = ScopeTimer()
     # Each wrap needs an owner object that has the named attribute.
-    timer.wrap(vehicle, 'step_speeds', 'step_speeds')   # vehicle.step_speeds is now timed
-    timer.wrap(vehicle, 'dxdt_speeds', 'model')
+    timer.wrap(vehicle, 'step_speeds', 'step_speeds', Level.COARSE)   # now timed
+    timer.wrap(vehicle, 'dxdt_speeds', 'model', Level.FINE)
 
     timer.enter('loop')                                 # root scope
     for _ in range(1000):
@@ -20,10 +20,14 @@ Usage::
 
     a_ns, b_ns = calibrate()                            # wrapper overhead
     report = timer.report(1000, a_ns, b_ns)             # per-step costs, overhead removed
-    print(format_tree(report))
+    print(format_tree(report))                          # every scope (fine view)
+    print(format_tree(view(report, Level.COARSE)))      # coarse scopes only
+
+A pass records every scope once. ``view()`` derives the coarse tree from it by
+rolling the time of fine scopes up into their nearest coarse ancestor.
 
 ``Level``, ``ScopePoint`` and ``Runner.scope_points()`` (in ``cases.py``) describe
-which callables a benchmark case wraps.
+which callables a benchmark case wraps and how detailed each scope is.
 
 Invariants (exact, by construction):
 
@@ -84,6 +88,7 @@ class ScopeTimer:
         self.stats: Dict[Path, List[int]] = {}  # path -> [calls, incl_ns, excl_ns]
         self._restores: List[Callable] = []
         self.skipped: List[str] = []            # 'Owner.attr' of scopes that could not be wrapped
+        self.levels: Dict[str, Level] = {}      # scope name -> level (unlisted names are COARSE)
 
     # -- recording ---------------------------------------------------------
     def enter(self, name: str) -> None:
@@ -105,8 +110,11 @@ class ScopeTimer:
         if self.stack:
             self.stack[-1][2] += dur
 
-    def wrap(self, owner, attr: str, name: str) -> bool:
+    def wrap(self, owner, attr: str, name: str, level: Level = Level.FINE) -> bool:
         """Replace ``owner.attr`` with a version that records the scope ``name``.
+
+        ``level`` tags the scope for ``view()``. A name wrapped at two levels keeps
+        the coarser one.
 
         ``owner`` is an instance or a class. ``attr`` must be the name of a callable
         attribute of ``owner``, for example ``wrap(vehicle, 'step_speeds', 'step')``.
@@ -120,6 +128,7 @@ class ScopeTimer:
             owner_name = owner.__name__ if isinstance(owner, type) else type(owner).__name__
             self.skipped.append(f'{owner_name}.{attr}')
             return False
+        self.levels[name] = min(level, self.levels.get(name, level))
         had_own = attr in vars(owner)
         enter, exit_ = self.enter, self.exit
 
@@ -165,12 +174,53 @@ class ScopeTimer:
         raw_root = sum(self.stats[r][1] for r in roots)
         us = 1. / steps / 1e3
         items = [
-            dict(path='/'.join(p), calls_per_step=calls[p] / steps,
+            dict(path='/'.join(p), level=self.levels.get(p[-1], Level.COARSE).key,
+                 calls_per_step=calls[p] / steps,
                  incl_us=incl[p] * us, excl_us=excl[p] * us)
             for p in sorted(self.stats)
         ]
         return dict(total_us=root_incl * us, raw_total_us=raw_root * us,
                     a_ns=a_ns, b_ns=b_ns, skipped=list(self.skipped), items=items)
+
+
+def view(rep: Dict, level: Level) -> Dict:
+    """Restrict a scope tree to scopes at ``level`` or coarser.
+
+    Dropped scopes disappear from the paths, and their time moves into the
+    exclusive time of the nearest kept ancestor:
+    ``exclusive'(p) = inclusive(p) - sum(inclusive(q))`` over the nearest kept
+    descendants ``q`` of ``p``. The invariants of the full tree still hold.
+    """
+    keep = {i['path']: Level[i['level'].upper()] <= level for i in rep['items']}
+    items = {i['path']: i for i in rep['items']}
+
+    def kept_path(path: str) -> str:
+        parts = path.split('/')
+        return '/'.join(p for k, p in enumerate(parts)
+                        if keep['/'.join(parts[:k + 1])])
+
+    out: Dict[str, Dict] = {}
+    for path, it in items.items():
+        if not keep[path]:
+            continue
+        # nearest kept descendants: kept paths below `path` with no kept path between
+        below = [q for q in items if q.startswith(path + '/') and keep[q]
+                 and not any(keep[r] for r in _between(path, q))]
+        excl = it['incl_us'] - sum(items[q]['incl_us'] for q in below)
+        new = kept_path(path)
+        acc = out.setdefault(new, dict(path=new, level=it['level'], calls_per_step=0.,
+                                       incl_us=0., excl_us=0.))
+        acc['calls_per_step'] += it['calls_per_step']
+        acc['incl_us'] += it['incl_us']
+        acc['excl_us'] += max(excl, 0.)
+    return dict(rep, items=[out[k] for k in sorted(out)])
+
+
+def _between(ancestor: str, descendant: str) -> List[str]:
+    """Paths strictly between ``ancestor`` and ``descendant`` (both on one branch)."""
+    parts = descendant.split('/')
+    start = len(ancestor.split('/'))
+    return ['/'.join(parts[:k]) for k in range(start + 1, len(parts))]
 
 
 def calibrate(n: int = 200_000) -> Tuple[float, float]:
@@ -239,6 +289,8 @@ def selftest() -> None:
     * the exclusive times sum to the root's inclusive time;
     * call counts match the workload (B is called twice per A) and timings are at
       least the sleep durations (lower bounds only, so it passes on a loaded machine);
+    * ``view()`` rolls fine scopes up into their coarse ancestor and drops scopes
+      from the middle of a path, keeping the invariants;
     * ``calibrate()`` returns plausible overhead constants;
     * the same scope name under different parents gets different paths.
 
@@ -255,7 +307,7 @@ def selftest() -> None:
 
     o = Obj()
     t = ScopeTimer()
-    assert t.wrap(o, 'a', 'A') and t.wrap(o, 'b', 'B')
+    assert t.wrap(o, 'a', 'A', Level.COARSE) and t.wrap(o, 'b', 'B', Level.FINE)
     assert not t.wrap(o, 'missing', 'X')
     assert t.skipped == ['Obj.missing'], t.skipped
     t.enter('root')
@@ -278,6 +330,22 @@ def selftest() -> None:
     assert abs(by['root/A/B']['calls_per_step'] - 2) < 1e-9
     assert by['root/A/B']['incl_us'] >= 2000, by['root/A/B']
     assert by['root/A']['excl_us'] >= 2000, by['root/A']
+    # view(): the coarse tree rolls fine scopes up into their coarse ancestor
+    coarse = view(rep, Level.COARSE)
+    cby = {i['path']: i for i in coarse['items']}
+    assert set(cby) == {'root', 'root/A'}, set(cby)
+    assert abs(cby['root/A']['excl_us'] - by['root/A']['incl_us']) < 1e-6
+    assert abs(sum(i['excl_us'] for i in coarse['items']) - coarse['total_us']) < 1e-6
+    # a dropped scope between two kept scopes disappears from the kept path
+    t3 = ScopeTimer()
+    t3.levels['M'] = Level.FINE
+    for name in ('root', 'M', 'C'):
+        t3.enter(name)
+    for _ in range(3):
+        t3.exit()
+    mid = view(t3.report(1), Level.COARSE)
+    assert [i['path'] for i in mid['items']] == ['root', 'root/C'], mid['items']
+    assert abs(sum(i['excl_us'] for i in mid['items']) - mid['total_us']) < 1e-6
     a, b = calibrate(20_000)
     assert 0 <= a < 1e6 and 0 <= b < 1e6, (a, b)   # generous: under 1 ms per call
     # the same name at different depths gives separate paths

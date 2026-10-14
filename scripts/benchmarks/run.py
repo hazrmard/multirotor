@@ -19,8 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from scopes import (Level, ScopeTimer, calibrate, evals_per_step,  # noqa: E402
-                    format_tree)
+from scopes import ScopeTimer, calibrate, evals_per_step, format_tree  # noqa: E402
 from common import (RESULTS_DIR, SCHEMA_VERSION, environment_metadata,  # noqa: E402
                     save_results, summarize)
 
@@ -33,22 +32,16 @@ def _peak_rss_mb() -> float:
     return rss / (1024 * 1024 if sys.platform == 'darwin' else 1024)
 
 
-SCOPE_MODES = {'off': [], 'coarse': [Level.COARSE], 'fine': [Level.FINE],
-               'both': [Level.COARSE, Level.FINE]}   # values of --scopes
+def scope_profile(runner, steps: int, ab) -> dict:
+    """One instrumented pass: the scope tree with every scope the Runner declares.
 
-
-def scope_profile(runner, steps: int, level: Level, ab) -> dict:
-    """One instrumented pass: a scope tree at ``level``.
-
-    Separate from the clean timing pass because wrapping adds overhead.
+    Separate from the clean timing pass because wrapping adds overhead. Use
+    ``scopes.view()`` to get the coarse tree from the result.
     """
     timer = ScopeTimer()
     runner.reset()
     for point in runner.scope_points():
-        # Levels are cumulative: a FINE pass also wraps the COARSE scopes, so the
-        # fine tree contains every coarse scope plus the extra detail.
-        if point.level <= level:
-            timer.wrap(point.owner, point.attr, point.name)
+        timer.wrap(point.owner, point.attr, point.name, point.level)
     gc.collect()
     gc.disable()   # same as the clean pass, so GC pauses do not land in a scope
     timer.enter('loop')
@@ -61,7 +54,7 @@ def scope_profile(runner, steps: int, level: Level, ab) -> dict:
     return timer.report(steps, *ab)
 
 
-def worker_time(name: str, params: dict, repeats: int, scopes: str) -> dict:
+def worker_time(name: str, params: dict, repeats: int, scopes: bool) -> dict:
     import cases
     t0 = time.perf_counter()
     runner = cases.build(name, params)
@@ -86,18 +79,14 @@ def worker_time(name: str, params: dict, repeats: int, scopes: str) -> dict:
     finally:
         gc.enable()
     stats = summarize(samples)
-    trees = {}
-    if scopes != 'off' and runner.scope_points():
-        ab = calibrate()
-        n = steps  # same length as the clean pass: trajectories drift with step count
-        for level in SCOPE_MODES[scopes]:
-            tree = scope_profile(runner, n, level, ab)
-            tree['vs_clean'] = tree['total_us'] / stats['median']
-            trees[level.key] = tree
-    fine = trees.get(Level.FINE.key)
+    tree = None
+    if scopes and runner.scope_points():
+        # same length as the clean pass: the step count can change the trajectory
+        tree = scope_profile(runner, steps, calibrate())
+        tree['vs_clean'] = tree['total_us'] / stats['median']
     return dict(
-        scopes=trees or None,
-        evals_per_step=evals_per_step(fine) if fine else None,
+        scopes=tree,
+        evals_per_step=evals_per_step(tree) if tree else None,
         us_per_step=samples, stats=stats,
         steps_per_s=1e6 / stats['median'],
         real_time_factor=runner.dt * 1e6 / stats['median'],
@@ -151,7 +140,7 @@ def worker_cold() -> dict:
 def run_worker(args) -> None:
     params = json.loads(args.params) if args.params else {}
     if args.worker == 'time':
-        out = worker_time(args.case, params, args.repeats, args.scopes)
+        out = worker_time(args.case, params, args.repeats, not args.no_scopes)
     elif args.worker == 'mem':
         out = worker_mem(args.case, params)
     else:
@@ -164,11 +153,12 @@ class WorkerError(RuntimeError):
 
 
 def spawn(mode: str, case: str = '', params: dict = None, repeats: int = 0,
-          scopes: str = 'off') -> dict:
+          scopes: bool = False) -> dict:
     cmd = [sys.executable, str(Path(__file__).resolve()), '--worker', mode]
     if case:
-        cmd += ['--case', case, '--params', json.dumps(params),
-                '--repeats', str(repeats), '--scopes', scopes]
+        cmd += ['--case', case, '--params', json.dumps(params), '--repeats', str(repeats)]
+        if not scopes:
+            cmd.append('--no-scopes')
     proc = subprocess.run(cmd, capture_output=True, text=True)
     for line in proc.stdout.splitlines():
         if line.startswith('@@RESULT@@'):
@@ -188,10 +178,10 @@ def main(argv=None) -> None:
                     help='timed repeats per case (default 7; --quick uses 3)')
     ap.add_argument('--quick', action='store_true', help='smoke test: few steps')
     ap.add_argument('--no-memory', action='store_true', help='skip tracemalloc runs')
-    ap.add_argument('--scopes', choices=list(SCOPE_MODES), default='both',
-                    help='scope-tree instrumentation passes (default both)')
+    ap.add_argument('--no-scopes', action='store_true',
+                    help='skip the instrumented scope pass')
     ap.add_argument('--tree', action='store_true',
-                    help='print the finest scope tree for each case')
+                    help='print the scope tree of each case')
     ap.add_argument('--list-cases', action='store_true', help='list case ids and exit')
     # Internal protocol: the parent process re-runs this script as a worker
     # subprocess (see spawn()) with these options. Users never pass them, so they
@@ -218,13 +208,15 @@ def main(argv=None) -> None:
     failed = []   # ids of cases whose worker failed
     for cid, name, params in selected:
         print(f'{cid:<62}', end=' ', flush=True)
-        # log_scaling is a memory-only case: skip the timing repeats
         rec = dict(id=cid, case=name, params=params)
         results.append(rec)
+        case = cases.CASES[name]
+        if case.sweep:
+            rec['sweep'] = case.sweep
         try:
-            if name != 'log_scaling':
-                rec.update(spawn('time', name, params, repeats, args.scopes))
-            if not args.no_memory:
+            if 'time' in case.measures:
+                rec.update(spawn('time', name, params, repeats, not args.no_scopes))
+            if 'mem' in case.measures and not args.no_memory:
                 rec['tracemalloc'] = spawn('mem', name, params)
         except WorkerError as e:
             # Record the failure and keep going: a late failure must not discard
@@ -239,20 +231,17 @@ def main(argv=None) -> None:
                        f'(RTF {rec["real_time_factor"]:5.1f}x)')
             if rec.get('evals_per_step'):
                 msg.append(f'{rec["evals_per_step"]:4.1f} evals')
-            trees = (rec.get('scopes') or {}).values()
-            ratios = [t['vs_clean'] for t in trees]
-            if ratios and max(ratios) > 1.3:
-                msg.append(f'(!) instrumented/clean {max(ratios):.2f}: noisy scope timings')
-            skipped = sorted({s for t in trees for s in t['skipped']})
-            if skipped:
-                msg.append(f'(!) scopes skipped, attribute missing: {", ".join(skipped)}')
+            tree = rec.get('scopes')
+            if tree and tree['vs_clean'] > 1.3:
+                msg.append(f'(!) instrumented/clean {tree["vs_clean"]:.2f}: noisy scope timings')
+            if tree and tree['skipped']:
+                msg.append(f'(!) scopes skipped, attribute missing: {", ".join(sorted(set(tree["skipped"])))}')
         if 'tracemalloc' in rec:
             msg.append(f'{rec["tracemalloc"]["net_bytes_per_step"]:8.1f} B/step net')
         print('  '.join(msg))
         if args.tree and rec.get('scopes'):
-            level = Level.FINE if Level.FINE.key in rec['scopes'] else Level.COARSE
-            tree = rec['scopes'][level.key]
-            print(f'  [{level.key}] instrumented/clean = {tree["vs_clean"]:.2f}')
+            tree = rec['scopes']
+            print(f'  instrumented/clean = {tree["vs_clean"]:.2f}')
             print('  ' + format_tree(tree).replace('\n', '\n  '))
 
     print(f'{"cold_start":<62}', end=' ', flush=True)

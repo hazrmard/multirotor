@@ -6,7 +6,8 @@
 Writes PNGs: ``time_per_step.png`` (median with min-max whiskers),
 ``speedup.png`` (first file / each later file), ``breakdown.png`` (share of step
 time by scope), ``memory.png`` (tracemalloc
-peak per case) and ``log_scaling.png`` (DataLog growth vs steps).
+peak per case) and one ``<case>.png`` per sweep case, such as ``log_scaling.png``
+(memory growth against the swept parameter).
 """
 import argparse
 import sys
@@ -21,7 +22,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from common import index_by_id, load_results  # noqa: E402
-from scopes import Level  # noqa: E402
 
 # Categorical slots 1-7 from the reference palette, fixed order. One color per
 # result file (first 4) or per scope category (up to 7).
@@ -134,8 +134,7 @@ def plot_breakdown(files, labels, t, out, theme):
     rows = []
     for f, label in zip(files, labels):
         for cid, r in index_by_id(f).items():
-            tree = (r.get('scopes') or {})
-            tree = tree.get(Level.FINE.key) or tree.get(Level.COARSE.key)
+            tree = r.get('scopes')
             if tree:
                 rows.append((cid if len(files) == 1 else f'{cid} [{label}]', tree))
     if not rows:
@@ -185,7 +184,7 @@ def plot_breakdown(files, labels, t, out, theme):
 
 def plot_memory(files, labels, colors, t, out):
     ids = [c for c, r in index_by_id(files[0]).items()
-           if 'tracemalloc' in r and r['case'] != 'log_scaling']
+           if 'tracemalloc' in r and 'sweep' not in r]
     if not ids:
         return
     idx = [index_by_id(f) for f in files]
@@ -201,34 +200,36 @@ def plot_memory(files, labels, colors, t, out):
     plt.close(fig)
 
 
-def plot_log_scaling(files, labels, colors, t, out):
-    fig, ax = new_fig(t, 4.5)
-    ax.grid(axis='y', color=t['grid'], linewidth=0.8)
-    drawn = False
-    for f, label, c in zip(files, labels, colors):
-        pts = sorted((r['params']['steps'], r['tracemalloc']['peak_kb'])
-                     for r in f['results']
-                     if r['case'] == 'log_scaling' and 'tracemalloc' in r)
-        if not pts:
-            continue
-        x, y = zip(*pts)
-        ax.plot(x, [v / 1024 for v in y], color=c, lw=2, marker='o', ms=8,
-                markeredgecolor=t['surface'], markeredgewidth=2, label=label)
-        drawn = True
-    if not drawn:
+def plot_sweeps(files, labels, colors, t, out):
+    """One line chart per sweep case: peak memory against the swept parameter."""
+    sweeps = {}   # case name -> swept parameter
+    for f in files:
+        for r in f['results']:
+            if 'sweep' in r and 'tracemalloc' in r:
+                sweeps[r['case']] = r['sweep']
+    for case, param in sweeps.items():
+        fig, ax = new_fig(t, 4.5)
+        ax.grid(axis='y', color=t['grid'], linewidth=0.8)
+        for f, label, c in zip(files, labels, colors):
+            pts = sorted((r['params'][param], r['tracemalloc']['peak_kb'])
+                         for r in f['results']
+                         if r['case'] == case and 'tracemalloc' in r)
+            if not pts:
+                continue
+            x, y = zip(*pts)
+            ax.plot(x, [v / 1024 for v in y], color=c, lw=2, marker='o', ms=8,
+                    markeredgecolor=t['surface'], markeredgewidth=2, label=label)
+        ax.set_xlabel(param)
+        ax.set_ylabel('tracemalloc peak (MiB)')
+        ax.yaxis.label.set_color(t['ink2'])
+        ax.set_title(f'{case}: memory growth', loc='left')
+        if len(files) > 1:
+            leg = ax.legend(frameon=False, loc='upper left')
+            for txt in leg.get_texts():
+                txt.set_color(t['ink2'])
+        fig.tight_layout()
+        fig.savefig(out / f'{case}.png', dpi=150, facecolor=t['surface'])
         plt.close(fig)
-        return
-    ax.set_xlabel('logged steps')
-    ax.set_ylabel('peak memory while logging (MiB)')
-    ax.yaxis.label.set_color(t['ink2'])
-    ax.set_title('Log memory growth', loc='left')
-    if len(files) > 1:
-        leg = ax.legend(frameon=False, loc='upper left')
-        for txt in leg.get_texts():
-            txt.set_color(t['ink2'])
-    fig.tight_layout()
-    fig.savefig(out / 'log_scaling.png', dpi=150, facecolor=t['surface'])
-    plt.close(fig)
 
 
 def main(argv=None):
@@ -251,7 +252,7 @@ def main(argv=None):
     plot_speedup(files, labels, colors, t, out)
     plot_breakdown(files, labels, t, out, args.theme)
     plot_memory(files, labels, colors, t, out)
-    plot_log_scaling(files, labels, colors, t, out)
+    plot_sweeps(files, labels, colors, t, out)
     print('wrote', *sorted(p.name for p in out.glob('*.png')), 'to', out)
 
 

@@ -38,16 +38,15 @@ flowchart TD
     run --> M["worker: mem"]
     run --> C["worker: cold (5 repeats)"]
     T --> P1["clean pass<br/>warm-up, then 7 timed repeats"]
-    P1 --> P2["scope pass: coarse"]
-    P2 --> P3["scope pass: fine"]
+    P1 --> P2["scope pass<br/>all scopes, same step count"]
     M --> P4["memory pass<br/>tracemalloc around one run"]
     C --> P5["import, build vehicle,<br/>first and second step"]
-    P3 --> J[("results/LABEL.json")]
+    P2 --> J[("results/LABEL.json")]
     P4 --> J
     P5 --> J
 ```
 
-Scope tree of `closed_loop` (fine level):
+Scope tree of `closed_loop` (all scopes):
 
 ```mermaid
 flowchart TD
@@ -68,22 +67,24 @@ flowchart TD
 
 | term | definition | created by |
 |---|---|---|
-| case | named benchmark, such as `step_speeds`, with one or more parameter sets | `CASES` in `cases.py` |
+| case | named benchmark, such as `step_speeds`: a Runner class, parameter sets and how to measure them | `Case` entries in `CASES` (`cases.py`) |
 | case id | one case with one parameter set, such as `step_speeds[n=8,...]` | `cases.expand()` |
 | Runner | object that drives the simulation for one case id | `cases.build(name, params)` |
 | scope point | `ScopePoint(level, owner, attr, name)`: a callable that a Runner offers for timing | `Runner.scope_points()` |
-| scope | a scope point wrapped by `ScopeTimer` during a scope pass; a node in the scope tree | `ScopeTimer.wrap()` |
+| scope | a scope point wrapped by `ScopeTimer` during the scope pass; a node in the scope tree | `ScopeTimer.wrap()` |
 | worker | subprocess that runs `run.py` for one case id and one kind of pass | `run.py` `spawn()` |
-| pass | one measurement inside a worker: clean, scope (coarse or fine) or memory | worker functions in `run.py` |
+| pass | one measurement inside a worker: clean, scope or memory | worker functions in `run.py` |
 
 Relationships:
 
 * A case has one or more case ids, one per parameter set.
-* For each case id, `run.py` starts a `time` worker and a `mem` worker. `log_scaling`
-  starts only the `mem` worker. The `cold` worker belongs to no case id.
+* For each case id, `run.py` starts the workers named in the case's `measures`: `time`
+  and `mem` by default. `log_scaling` has `measures=('mem',)`. The `cold` worker belongs
+  to no case id.
 * Each worker builds its own Runner for its case id.
-* A Runner lists its scope points. Only scope passes use them. A scope pass wraps each
-  scope point's callable. Each wrapped callable becomes a scope at a path in the tree.
+* A Runner lists its scope points. Only the scope pass uses them. The scope pass wraps
+  each scope point's callable. Each wrapped callable becomes a scope at a path in the
+  tree.
 
 ```mermaid
 flowchart TD
@@ -98,7 +99,7 @@ flowchart TD
 
 ```
 uv sync
-uv run python scripts/benchmarks/run.py --label baseline     # full run, about 7 minutes on the dev VM
+uv run python scripts/benchmarks/run.py --label baseline     # full run, several minutes
 uv run python scripts/benchmarks/run.py --quick              # smoke test, not a measurement
 uv run python scripts/benchmarks/run.py --list-cases         # list case ids
 # change code
@@ -114,14 +115,14 @@ defaults to a timestamp.
 |---|---|---|
 | `run.py` | `--cases NAME ...` | run only these cases |
 | | `--repeats N` | timed repeats per case (default 7) |
-| | `--quick` | 3 repeats, fewer steps, no `log_scaling`, 3 cold-start repeats |
+| | `--quick` | 3 repeats, each case's `quick_steps`, cases without `quick_steps` skipped, 3 cold-start repeats |
 | | `--no-memory` | skip the memory pass |
 | | `--list-cases` | print case ids and exit |
-| | `--scopes off\|coarse\|fine\|both` | scope passes to run (default `both`) |
+| | `--no-scopes` | skip the scope pass |
 | | `--tree` | print the scope tree of each case |
 | `compare.py` | `--threshold PCT` | time regression limit (default 15) |
 | | `--mem-threshold PCT` | `tracemalloc` peak regression limit (default 10) |
-| | `--detail` | compare fine scopes instead of coarse |
+| | `--detail` | compare all scopes instead of the coarse view |
 | `plot.py` | `--out DIR`, `--theme light\|dark` | output directory, theme (at most 4 files) |
 
 `compare.py` exits with status 1 when a case's median time grows by more than
@@ -131,16 +132,17 @@ exempt from the memory check. The scope deltas are diagnostic and do not affect 
 exit status.
 
 `plot.py` writes `time_per_step.png`, `speedup.png` (two or more files),
-`breakdown.png`, `memory.png` and `log_scaling.png`.
+`breakdown.png`, `memory.png` and one `CASE.png` per sweep case (`log_scaling.png`).
 
 ## Cases
 
 A case is a named benchmark with a list of parameter sets. A case id has the form
-`name[param=value,...]`. `steps` appears in the id only for `log_scaling`.
+`name[param=value,...]`. `steps` appears in the id only when it is the case's sweep
+parameter (`log_scaling`).
 
 | case | parameter sets | steps | `run(n)` calls |
 |---|---|---|---|
-| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors, `thrust_model='fsolve'`, excited; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 300) | `Multirotor.step_speeds` |
+| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
 | `controller_step` | 8 rotors | 5000 | `Controller.step` with a fixed vehicle state |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
@@ -162,12 +164,12 @@ Common settings:
 
 Input types:
 
-* `excite=True`: cycles through 64 seeded vectors, each step selecting the next.
-  `step_speeds` speeds vary by ±5% around hover. `step_dynamics` z-force varies by ±5%
-  and torques by ±0.05 N·m.
+* `excite=True`: cycles through 64 seeded input vectors, each step selecting the next.
+  `step_speeds` speeds vary by up to ±`excite_frac` around hover (default 5%).
+  `step_dynamics` z-force varies by ±5% and torques by ±0.05 N·m.
 * `excite=False`: constant hover input.
 
-Hover input:
+Hover and restarts:
 
 * `cases.nominal_speed()` solves for the propeller speed at which one rotor carries
   its share of the weight (`helpers.find_nominal_speed` on the propeller's own thrust
@@ -176,9 +178,14 @@ Hover input:
 * With a motor model, `cases.hover_speeds()` returns the signal that settles the motor
   at the nominal speed (`cases.motor_signal()`). `StepSpeeds.reset()` starts the
   propellers and motors at the nominal speed.
-* At `excite=False`, the vehicle holds its initial state exactly for all three variants.
-* At `excite=True`, the inputs are open loop (no controller). The vehicle drifts away
-  from hover, so the cost per step depends on the step count.
+* At `excite=False`, the vehicle holds its initial state exactly for all variants.
+* At `excite=True`, the inputs are open loop (no controller). `run()` calls `reset()`
+  every 64 steps, so the vehicle restarts from hover at the start of each input cycle.
+  The trajectory repeats, and cost per step does not depend on the step count (for
+  64 steps or more). A restart costs about 34 µs for `step_speeds`, once per 64 steps.
+* The `fsolve` case uses `excite_frac=0.002`. In a 64-step probe, perturbations of ±1%
+  or more made `scipy.optimize.fsolve` fail to converge (thousands of
+  `RuntimeWarning`s) and raised the cost per step from 5.5 ms to 23 to 30 ms.
 
 ### Runner interface
 
@@ -191,7 +198,19 @@ Each case maps to a `Runner` class in `cases.py`.
 | `dt` | simulated seconds per step, for `real_time_factor` |
 | `scope_points()` | returns the `ScopePoint`s a scope pass wraps |
 
-To add a case, write a `Runner` in `cases.py` and add its parameter sets to `CASES`.
+### Case fields
+
+`CASES` maps a case name to a `Case` dataclass.
+
+| field | meaning |
+|---|---|
+| `runner` | `Runner` subclass built from each parameter set |
+| `params` | parameter sets; each yields one case id. `steps` is the steps per run and is not passed to the Runner |
+| `measures` | workers to start per case id: `'time'` and/or `'mem'` (default both) |
+| `sweep` | parameter that the parameter sets sweep, such as `'steps'`; result records carry it and plots draw the case as a line over it (default none) |
+| `quick_steps` | `steps` under `--quick`; `None` excludes the case from `--quick` |
+
+To add a case, write a `Runner` in `cases.py` and add a `Case` to `CASES`.
 
 ## Metrics
 
@@ -210,7 +229,7 @@ Fields:
 | `evals_per_step` | model evaluations requested by the integrator per step |
 | `warmup_s`, `build_s` | warm-up and construction time in seconds |
 | `peak_rss_mb` | peak RSS of the time worker process, including interpreter and libraries |
-| `scopes` | scope trees keyed by level (`coarse`, `fine`), each with `skipped` scope points; see Scope tree |
+| `scopes` | the scope tree, with `skipped` scope points and `vs_clean`; see Scope tree |
 | `tracemalloc` | `peak_kb`, `net_kb`, `peak_bytes_per_step`, `net_bytes_per_step` |
 
 Notes on `tracemalloc`:
@@ -220,8 +239,8 @@ Notes on `tracemalloc`:
 * `net_bytes_per_step` is meaningful for logging cases only. For other cases it is a
   small constant divided by the step count.
 
-`evals_per_step` values from the baseline run on the dev VM: 4.0 at hover. 10.7 to
-20.2 with excited inputs (`step_speeds`, `step_dynamics`).
+`evals_per_step` values from the baseline run on the dev VM: 4.0 at hover. 10.1 to
+16.3 with excited inputs (`step_speeds`, `step_dynamics`).
 
 ## Scope tree
 
@@ -246,16 +265,23 @@ Time that no child scope covers stays in the parent's exclusive time.
 
 ### Levels
 
-`Level` in `scopes.py` is an `IntEnum`: `Level.COARSE = 0`, `Level.FINE = 1`. Result
-files key the trees by `Level.key` (`'coarse'`, `'fine'`). Levels are cumulative: a
-pass at `Level.FINE` wraps the coarse scope points and the fine ones.
+`Level` in `scopes.py` is an `IntEnum`: `Level.COARSE = 0`, `Level.FINE = 1`. Each
+scope point carries a level. The scope pass wraps every scope point and stores one
+tree. Each item in the tree records its `level` (`'coarse'` or `'fine'`).
 
 | level | scopes |
 |---|---|
-| `coarse` | `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
-| `fine` | `coarse` plus `integrator`, `model`, `forces_torques`, `propeller` |
+| `coarse` | `loop`, `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
+| `fine` | `integrator`, `model`, `forces_torques`, `propeller` |
 
-Each level runs as its own pass, so coarse timings carry no fine-scope wrapper cost.
+`scopes.view(tree, Level.COARSE)` returns the coarse tree. It removes fine scopes from
+paths and adds their time to the exclusive time of the nearest coarse ancestor:
+
+* `exclusive'(p) = inclusive(p) - sum(inclusive(q))` over the nearest kept descendants
+  `q` of `p`.
+* The invariants above still hold.
+
+`compare.py` shows the coarse view by default and the full tree with `--detail`.
 
 ### Scope points
 
@@ -264,7 +290,7 @@ fields:
 
 | field | meaning |
 |---|---|
-| `level` | `Level.COARSE` or `Level.FINE`; the coarsest pass that wraps this point |
+| `level` | `Level.COARSE` or `Level.FINE`; the detail level of the scope, used by `view()` |
 | `owner` | instance or class that holds the callable |
 | `attr` | name of a callable attribute of `owner`; `owner.attr` must exist |
 | `name` | scope name in the tree |
@@ -275,7 +301,7 @@ Example: the following point times `controller.step` as the scope `controller`.
 ScopePoint(Level.COARSE, controller, 'step', 'controller')
 ```
 
-If `owner.attr` does not exist, the pass skips the point and lists `'Owner.attr'` under
+If `owner.attr` does not exist, the scope pass skips the point and lists `'Owner.attr'` under
 `skipped` in the scope tree. `run.py` prints a warning for skipped scopes. This
 happens, for example, for `Multirotor.integrator` on commits that predate it, and for
 misspelled attribute names.
@@ -330,6 +356,8 @@ Remaining details:
 * Each wrapper adds about 0.8 µs per call. `scopes.calibrate()` measures two constants
   (`a_ns`, `b_ns`, stored in the result file). `ScopeTimer.report()` subtracts them.
 * The scope pass runs the same number of steps as the clean pass, with GC disabled.
+* The scope pass records every scope at once, so its wrapper overhead is the fine
+  level's. `vs_clean` measures the remaining error.
 * `vs_clean` is the scope tree's `total_us` divided by the clean pass's median.
   `run.py` prints a warning when it exceeds 1.3.
 * `python scripts/benchmarks/scopes.py` self-tests the invariants.

@@ -8,12 +8,12 @@ A case is a named benchmark: a ``Runner`` class plus a list of parameter sets. A
 * ``dt``: simulated seconds per step, used for the real-time factor.
 * ``scope_points()``: the callables a scope pass times (see ``scopes.ScopePoint``).
 
-``CASES`` maps a case name to ``(Runner class, list of parameter sets)``.
-``QUICK_STEPS`` overrides the step counts for ``--quick`` smoke tests.
+``CASES`` maps a case name to a ``Case``: the Runner class, its parameter sets and
+how to measure it.
 """
 from copy import deepcopy
-from dataclasses import replace
-from typing import Dict, List
+from dataclasses import dataclass, field, replace
+from typing import Dict, List, Optional, Tuple, Type
 
 import numpy as np
 
@@ -107,13 +107,12 @@ def hover_speeds(vehicle: Multirotor) -> np.ndarray:
     return np.full(vehicle.params.nprops, u, vehicle.dtype)
 
 
-def settle_at_hover(vehicle: Multirotor) -> None:
-    """Start the propellers (and motors) at the hover speed instead of at rest."""
-    w = nominal_speed(vehicle)
+def settle_at_hover(vehicle: Multirotor, speed: float) -> None:
+    """Start the propellers (and motors) at ``speed`` instead of at rest."""
     for p in vehicle.propellers:
-        p.speed = w
+        p.speed = speed
         if p.motor is not None:
-            p.motor.speed = w
+            p.motor.speed = speed
 
 
 N_SCHEDULE = 64
@@ -186,22 +185,30 @@ class StepSpeeds(Runner):
     """Raw ODE step. Isolates ``Multirotor.step_speeds``.
 
     ``excite=False`` holds exact hover speeds (equilibrium: cheapest possible
-    integration). ``excite=True`` cycles through +-5% perturbed speeds.
+    integration). ``excite=True`` cycles through speeds perturbed by up to
+    ``+-excite_frac`` of hover (default 5%) and restarts
+    from hover every ``N_SCHEDULE`` steps, so the trajectory is periodic and the
+    cost per step does not depend on the step count.
     """
-    def __init__(self, n=8, thrust_model='quadratic', motor=False, excite=True):
+    def __init__(self, n=8, thrust_model='quadratic', motor=False, excite=True,
+                 excite_frac=0.05):
         self.v = make_vehicle(n, thrust_model, motor)
         hover = hover_speeds(self.v)
-        self.us = excitation(hover, 0.05) if excite else hover[None]
+        self.nominal = nominal_speed(self.v)
+        self.us = excitation(hover, excite_frac) if excite else hover[None]
+        self.cycle = N_SCHEDULE if excite else 0   # steps between restarts from hover
         self.dt = self.v.simulation.dt
 
     def reset(self):
         self.v.reset()
-        settle_at_hover(self.v)
+        settle_at_hover(self.v, self.nominal)
 
     def run(self, n):
         step, us = self.v.step_speeds, self.us
         m = len(us)
         for i in range(n):
+            if self.cycle and i and i % self.cycle == 0:
+                self.reset()   # restart the cycle from hover
             step(us[i % m])
 
     def scope_points(self):
@@ -213,13 +220,14 @@ class StepDynamics(Runner):
 
     ``excite=False`` holds hover (z-force = weight, other inputs zero).
     ``excite=True`` cycles through z-force within +-5% of the weight and torques
-    within +-0.05 N m.
+    within +-0.05 N m, and restarts from hover every ``N_SCHEDULE`` steps.
     """
     def __init__(self, n=8, excite=True):
         self.v = make_vehicle(n)
         hover = np.asarray([0, 0, self.v.params.mass * self.v.simulation.g, 0, 0, 0],
                            self.v.dtype)
         self.us = np.tile(hover, (N_SCHEDULE, 1)) if excite else hover[None]
+        self.cycle = N_SCHEDULE if excite else 0   # steps between restarts from hover
         if excite:
             rng = np.random.default_rng(0)
             self.us[:, 2] *= 1 + rng.uniform(-0.05, 0.05, N_SCHEDULE)
@@ -233,6 +241,8 @@ class StepDynamics(Runner):
         step, us = self.v.step_dynamics, self.us
         m = len(us)
         for i in range(n):
+            if self.cycle and i and i % self.cycle == 0:
+                self.reset()   # restart the cycle from hover
             step(us[i % m])
 
     def scope_points(self):
@@ -320,63 +330,88 @@ class RunSim(Runner):
                 + vehicle_points(self.v) + log_points())
 
 
-# case name -> (Runner class, list of parameter sets)
-CASES: Dict[str, tuple] = {
-    'step_speeds': (StepSpeeds, [
+@dataclass(frozen=True)
+class Case:
+    """A named benchmark.
+
+    Attributes
+    ----------
+    runner : type
+        ``Runner`` subclass built from each parameter set.
+    params : list of dict
+        Parameter sets; each yields one case id. ``steps`` is the number of steps
+        per run and is not passed to the Runner.
+    measures : tuple of str
+        Workers to start per case id: ``'time'`` (clean and scope passes) and/or
+        ``'mem'`` (memory pass).
+    sweep : str or None
+        Name of the parameter that the parameter sets sweep to show growth, for
+        example ``'steps'``. Result records carry it, and plots draw the case as a
+        line over that parameter.
+    quick_steps : int or None
+        ``steps`` under ``--quick``. ``None`` excludes the case from ``--quick``.
+    """
+    runner: Type[Runner]
+    params: List[Dict] = field(default_factory=list)
+    measures: Tuple[str, ...] = ('time', 'mem')
+    sweep: Optional[str] = None
+    quick_steps: Optional[int] = None
+
+
+CASES: Dict[str, Case] = {
+    'step_speeds': Case(StepSpeeds, quick_steps=100, params=[
         dict(n=n, thrust_model='quadratic', motor=False, excite=True, steps=1000)
         for n in (4, 6, 8)
     ] + [
         dict(n=8, thrust_model='quadratic', motor=True, excite=True, steps=1000),
-        dict(n=8, thrust_model='fsolve', motor=False, excite=True, steps=300),
+        # +-1% or more breaks fsolve's convergence (thousands of RuntimeWarnings, 5x
+        # the cost), so this case perturbs by +-0.2%.
+        dict(n=8, thrust_model='fsolve', motor=False, excite=True, excite_frac=0.002,
+             steps=128),
         # equilibrium reference: the integrator's best case
         dict(n=8, thrust_model='quadratic', motor=False, excite=False, steps=1000),
     ]),
-    'step_dynamics': (StepDynamics, [
+    'step_dynamics': Case(StepDynamics, quick_steps=100, params=[
         dict(n=8, excite=True, steps=1000), dict(n=8, excite=False, steps=1000),
     ]),
-    'controller_step': (ControllerStep, [dict(n=8, steps=5000)]),
-    'closed_loop': (ClosedLoop, [
+    'controller_step': Case(ControllerStep, quick_steps=500, params=[
+        dict(n=8, steps=5000)]),
+    'closed_loop': Case(ClosedLoop, quick_steps=200, params=[
         dict(n=8, thrust_model='quadratic', motor=False, log=False, steps=2000),
         dict(n=8, thrust_model='quadratic', motor=False, log=True, steps=2000),
     ]),
-    'run_sim': (RunSim, [dict(n=8, steps=1000)]),
-    # memory growth of DataLog: bytes/step slope across these
-    'log_scaling': (ClosedLoop, [
+    'run_sim': Case(RunSim, quick_steps=100, params=[dict(n=8, steps=1000)]),
+    # memory growth of DataLog across step counts
+    'log_scaling': Case(ClosedLoop, measures=('mem',), sweep='steps', params=[
         dict(n=8, log=True, steps=s) for s in (1000, 5000, 20000)
     ]),
 }
 
-# --quick: fewer steps so a smoke test takes seconds
-QUICK_STEPS = {'step_speeds': 100, 'step_dynamics': 100, 'controller_step': 500,
-               'closed_loop': 200, 'run_sim': 100}
-QUICK_SKIP = {'log_scaling'}
-
 
 def case_id(name: str, params: Dict) -> str:
-    shown = ','.join(f'{k}={v}' for k, v in params.items() if k != 'steps')
-    # log_scaling is identified by its step count, since steps is the swept axis
-    if name == 'log_scaling':
-        shown += f',steps={params["steps"]}'
+    """``name[param=value,...]``. ``steps`` appears only when it is the sweep axis."""
+    sweep = CASES[name].sweep
+    shown = ','.join(f'{k}={v}' for k, v in params.items()
+                     if k != 'steps' or sweep == 'steps')
     return f'{name}[{shown}]'
 
 
 def expand(names=None, quick=False) -> List[tuple]:
     """Return ``[(id, name, params), ...]`` for the selected cases."""
     out = []
-    for name, (_, grid) in CASES.items():
+    for name, case in CASES.items():
         if names and name not in names:
             continue
-        if quick and name in QUICK_SKIP:
+        if quick and case.quick_steps is None:
             continue
-        for params in grid:
+        for params in case.params:
             params = dict(params)
             if quick:
-                params['steps'] = QUICK_STEPS.get(name, params['steps'])
+                params['steps'] = case.quick_steps
             out.append((case_id(name, params), name, params))
     return out
 
 
 def build(name: str, params: Dict) -> Runner:
-    builder = CASES[name][0]
     kwargs = {k: v for k, v in params.items() if k != 'steps'}
-    return builder(**kwargs)
+    return CASES[name].runner(**kwargs)

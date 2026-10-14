@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import index_by_id, load_results  # noqa: E402
-from scopes import Level  # noqa: E402
+from scopes import Level, view  # noqa: E402
 
 
 def pct(new: float, old: float) -> float:
@@ -93,15 +93,16 @@ def main(argv=None) -> int:
             print(f'{cid:<60} (new in candidate)')
 
     # Diagnostic only: never affects the exit status.
-    level = (Level.FINE if args.detail else Level.COARSE).key
+    level = Level.FINE if args.detail else Level.COARSE
     shown = False
     for cid in ia:
-        sa = (ia[cid].get('scopes') or {}).get(level) if cid in ib else None
-        sb = (ib[cid].get('scopes') or {}).get(level) if cid in ib else None
+        sa = ia[cid].get('scopes') if cid in ib else None
+        sb = ib[cid].get('scopes') if cid in ib else None
         if not sa or not sb:
             continue
+        sa, sb = view(sa, level), view(sb, level)
         if not shown:
-            print(f'\nwhere the time went ({level} scopes; exclusive us/step, '
+            print(f'\nwhere the time went ({level.key} scopes; exclusive us/step, '
                   f'base>new; scopes under 1% of the step are hidden):')
             shown = True
         print(f'\n{cid}')
