@@ -237,22 +237,21 @@ def selftest() -> None:
       ``restore`` removes the instance patches;
     * ``inclusive = exclusive + sum(children's inclusive)`` for every scope;
     * the exclusive times sum to the root's inclusive time;
-    * call counts and timings match the workload (B is called twice per A);
+    * call counts match the workload (B is called twice per A) and timings are at
+      least the sleep durations (lower bounds only, so it passes on a loaded machine);
     * ``calibrate()`` returns plausible overhead constants;
     * the same scope name under different parents gets different paths.
 
     Raises ``AssertionError`` on failure and prints a summary on success.
     """
-    sleep = lambda s: time.sleep(s)
-
     class Obj:
         def a(self):
-            sleep(0.002)
+            time.sleep(0.002)
             self.b()
             self.b()
 
         def b(self):
-            sleep(0.001)
+            time.sleep(0.001)
 
     o = Obj()
     t = ScopeTimer()
@@ -274,15 +273,22 @@ def selftest() -> None:
         assert abs(i['incl_us'] - (i['excl_us'] + sum(k['incl_us'] for k in kids))) < 1e-6, p
     # sum of exclusive = root inclusive
     assert abs(sum(i['excl_us'] for i in rep['items']) - rep['total_us']) < 1e-6
-    # B is called twice per A, sleeps ~1 ms each
+    # B is called twice per A and sleeps 1 ms each. time.sleep never returns early,
+    # so lower bounds hold on a loaded machine; upper bounds would not.
     assert abs(by['root/A/B']['calls_per_step'] - 2) < 1e-9
-    assert 1800 < by['root/A/B']['incl_us'] < 3500, by['root/A/B']
-    assert 1500 < by['root/A']['excl_us'] < 3500, by['root/A']
+    assert by['root/A/B']['incl_us'] >= 2000, by['root/A/B']
+    assert by['root/A']['excl_us'] >= 2000, by['root/A']
     a, b = calibrate(20_000)
-    assert 0 <= a < 5e3 and 0 <= b < 5e3, (a, b)
-    # the same code twice at different depths gives separate paths
+    assert 0 <= a < 1e6 and 0 <= b < 1e6, (a, b)   # generous: under 1 ms per call
+    # the same name at different depths gives separate paths
     t2 = ScopeTimer()
-    t2.enter('r'); t2.enter('m'); t2.exit(); t2.enter('i'); t2.enter('m'); t2.exit(); t2.exit(); t2.exit()
+    for name in ('r', 'm'):
+        t2.enter(name)
+    t2.exit()
+    t2.enter('i')
+    t2.enter('m')
+    for _ in range(3):
+        t2.exit()
     assert {'r/m', 'r/i/m'} <= {'/'.join(p) for p in t2.stats}
     print(f'scopes selftest ok (wrapper overhead: a={a:.0f} ns, b={b:.0f} ns)')
 

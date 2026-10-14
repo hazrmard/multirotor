@@ -1,6 +1,7 @@
 """Benchmark case registry.
 
-A case is a builder ``fn(**params) -> Runner``. A ``Runner`` exposes:
+A case is a named benchmark: a ``Runner`` class plus a list of parameter sets. A
+``Runner`` exposes:
 
 * ``reset()``: restore the initial state (not timed).
 * ``run(n)``: advance the simulation by ``n`` steps (timed).
@@ -11,17 +12,17 @@ A case is a builder ``fn(**params) -> Runner``. A ``Runner`` exposes:
 ``QUICK_STEPS`` overrides the step counts for ``--quick`` smoke tests.
 """
 from copy import deepcopy
-from itertools import product
+from dataclasses import replace
 from typing import Dict, List
 
 import numpy as np
 
 from multirotor.env import DynamicsMultirotorEnv
-from multirotor.helpers import DataLog, vehicle_params_factory
+from multirotor.helpers import DataLog, find_nominal_speed, vehicle_params_factory
 from multirotor.models.tarott18 import MP, PP, SP
 from multirotor.optimize import get_controller, run_sim
 from multirotor.simulation import Multirotor
-from multirotor.vehicle import PropellerParams
+from multirotor.vehicle import MotorParams, PropellerParams
 
 from scopes import Level, ScopePoint
 
@@ -63,17 +64,56 @@ def make_vehicle(
         raise ValueError(
             f"unknown thrust_model {thrust_model!r}; expected 'quadratic' or 'fsolve'")
     if motor:
-        prop.motor = deepcopy(MP)
-        prop.__post_init__()
+        prop = replace(prop, motor=deepcopy(MP))
     vp = vehicle_params_factory(n, M_PROP, D_PROP, prop, M_BODY)
     return Multirotor(vp, SP)
 
 
-def hover_speeds(vehicle: Multirotor) -> np.ndarray:
-    """Per-rotor speed signal that roughly balances weight (quadratic thrust model)."""
+def nominal_speed(vehicle: Multirotor) -> float:
+    """Propeller speed (rad/s) at which one rotor carries its share of the weight.
+
+    Solved with ``helpers.find_nominal_speed`` on the propeller's own thrust
+    function, so it is correct for both thrust models.
+    """
     p = vehicle.params
-    w = np.sqrt(p.mass * vehicle.simulation.g / (p.nprops * PP.k_thrust))
-    return np.full(p.nprops, w, vehicle.dtype)
+    weight_per_rotor = p.mass * vehicle.simulation.g / p.nprops
+    thrust = vehicle.propellers[0].thrust
+    return float(find_nominal_speed(lambda w: thrust(float(np.ravel(w)[0])),
+                                    weight_per_rotor))
+
+
+def motor_signal(motor: MotorParams, speed: float) -> float:
+    """Speed signal that holds a motor at ``speed`` (rad/s) in steady state.
+
+    At steady state the electrical torque balances the load:
+    ``k_torque * i = k_drag * speed**2 + k_df * speed``, and the supply voltage is
+    ``V = k_emf * speed + resistance * i``. The motor converts the signal ``u`` to
+    voltage with ``V = speed_voltage_scaling * u``.
+    """
+    current = (motor.k_drag * speed**2 + motor.k_df * speed) / motor.k_torque
+    voltage = motor.k_emf * speed + motor.resistance * current
+    return voltage / motor.speed_voltage_scaling
+
+
+def hover_speeds(vehicle: Multirotor) -> np.ndarray:
+    """Per-rotor speed signals that hold the vehicle at hover.
+
+    Equals ``nominal_speed`` without a motor model. With a motor model it is the
+    signal that settles the motor at ``nominal_speed``.
+    """
+    w = nominal_speed(vehicle)
+    motor = vehicle.params.propellers[0].motor
+    u = w if motor is None else motor_signal(motor, w)
+    return np.full(vehicle.params.nprops, u, vehicle.dtype)
+
+
+def settle_at_hover(vehicle: Multirotor) -> None:
+    """Start the propellers (and motors) at the hover speed instead of at rest."""
+    w = nominal_speed(vehicle)
+    for p in vehicle.propellers:
+        p.speed = w
+        if p.motor is not None:
+            p.motor.speed = w
 
 
 N_SCHEDULE = 64
@@ -83,8 +123,8 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
     """Deterministic schedule of inputs, ``base * (1 +- frac)``, cycled per step.
 
     A vehicle fed exactly its hover inputs sits at equilibrium, where ``odeint``
-    takes the fewest right-hand-side calls. Perturbed inputs make it work for
-    its answer.
+    takes the fewest model evaluations. Perturbed inputs make it work for its
+    answer.
     """
     rng = np.random.default_rng(seed)
     noise = rng.uniform(-frac, frac, size=(N_SCHEDULE, *np.shape(base)))
@@ -156,6 +196,7 @@ class StepSpeeds(Runner):
 
     def reset(self):
         self.v.reset()
+        settle_at_hover(self.v)
 
     def run(self, n):
         step, us = self.v.step_speeds, self.us
@@ -168,15 +209,21 @@ class StepSpeeds(Runner):
 
 
 class StepDynamics(Runner):
-    """Raw ODE step with force/torque inputs. Isolates ``step_dynamics``."""
+    """Raw ODE step with force/torque inputs. Isolates ``step_dynamics``.
+
+    ``excite=False`` holds hover (z-force = weight, other inputs zero).
+    ``excite=True`` cycles through z-force within +-5% of the weight and torques
+    within +-0.05 N m.
+    """
     def __init__(self, n=8, excite=True):
         self.v = make_vehicle(n)
         hover = np.asarray([0, 0, self.v.params.mass * self.v.simulation.g, 0, 0, 0],
                            self.v.dtype)
-        self.us = excitation(hover, 0.05) if excite else hover[None]
-        # torques are zero at hover, so perturb them additively
+        self.us = np.tile(hover, (N_SCHEDULE, 1)) if excite else hover[None]
         if excite:
-            self.us[:, 3:] = excitation(np.ones(3, self.v.dtype), 0.5)[:, :] * 0.1 - 0.1
+            rng = np.random.default_rng(0)
+            self.us[:, 2] *= 1 + rng.uniform(-0.05, 0.05, N_SCHEDULE)
+            self.us[:, 3:] = rng.uniform(-0.05, 0.05, (N_SCHEDULE, 3))
         self.dt = self.v.simulation.dt
 
     def reset(self):
@@ -273,12 +320,7 @@ class RunSim(Runner):
                 + vehicle_points(self.v) + log_points())
 
 
-# name -> (builder, list of param dicts)
-def _grid(**axes) -> List[Dict]:
-    keys = list(axes)
-    return [dict(zip(keys, vals)) for vals in product(*axes.values())]
-
-
+# case name -> (Runner class, list of parameter sets)
 CASES: Dict[str, tuple] = {
     'step_speeds': (StepSpeeds, [
         dict(n=n, thrust_model='quadratic', motor=False, excite=True, steps=1000)

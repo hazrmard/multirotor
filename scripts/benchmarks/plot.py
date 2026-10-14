@@ -23,9 +23,12 @@ import numpy as np  # noqa: E402
 from common import index_by_id, load_results  # noqa: E402
 from scopes import Level  # noqa: E402
 
-# Categorical slots 1-4 from the reference palette, fixed order (light, dark).
-SERIES = {'light': ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'],
-          'dark': ['#3987e5', '#d95926', '#199e70', '#c98500']}
+# Categorical slots 1-7 from the reference palette, fixed order. One color per
+# result file (first 4) or per scope category (up to 7).
+SERIES = {
+    'light': ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6'],
+    'dark': ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9'],
+}
 THEMES = {
     'light': dict(surface='#fcfcfb', ink='#0b0b0b', ink2='#52514e', grid='#e1e0d9'),
     'dark': dict(surface='#1a1a19', ink='#f0efec', ink2='#c3c2b7', grid='#2c2c2a'),
@@ -81,10 +84,10 @@ def plot_time(files, labels, colors, t, out):
     ids = timed(files)
     idx = [index_by_id(f) for f in files]
     med = [[i.get(c, {}).get('stats', {}).get('median', np.nan) for c in ids] for i in idx]
-    lo = [[m - i.get(c, {}).get('stats', {}).get('min', m) if m == m else 0
-           for m, c in zip(row, ids)] for row, i in zip(med, idx)]
-    hi = [[i.get(c, {}).get('stats', {}).get('max', m) - m if m == m else 0
-           for m, c in zip(row, ids)] for row, i in zip(med, idx)]
+    lo = [[0 if np.isnan(m) else m - i[c]['stats']['min'] for m, c in zip(row, ids)]
+          for row, i in zip(med, idx)]
+    hi = [[0 if np.isnan(m) else i[c]['stats']['max'] - m for m, c in zip(row, ids)]
+          for row, i in zip(med, idx)]
     fig, ax = new_fig(t, 0.55 * len(ids) * len(files) ** .5 + 1.5)
     hbar_groups(ax, ids, med, colors, errs=[[l, h] for l, h in zip(lo, hi)])
     ax.set_xscale('log')
@@ -126,7 +129,7 @@ CATEGORY = {   # last element of a scope path -> chart category
 MAX_CATEGORIES = 7   # categorical slots 1-7; the rest folds into "other"
 
 
-def plot_breakdown(files, labels, colors, t, out, theme):
+def plot_breakdown(files, labels, t, out, theme):
     """100%-stacked bars: share of step time by scope (exclusive time)."""
     rows = []
     for f, label in zip(files, labels):
@@ -151,9 +154,7 @@ def plot_breakdown(files, labels, colors, t, out, theme):
     ranked = sorted(overall, key=overall.get, reverse=True)
     keep = ranked[:MAX_CATEGORIES]
     cats = keep + (['other'] if len(ranked) > MAX_CATEGORIES else [])
-    from_ramp = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6'] \
-        if theme == 'light' else \
-        ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9']
+    from_ramp = SERIES[theme][:MAX_CATEGORIES]
     muted = '#898781'
     cat_colors = {c: from_ramp[i] for i, c in enumerate(keep)}
     cat_colors['other'] = muted
@@ -248,7 +249,7 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     plot_time(files, labels, colors, t, out)
     plot_speedup(files, labels, colors, t, out)
-    plot_breakdown(files, labels, colors, t, out, args.theme)
+    plot_breakdown(files, labels, t, out, args.theme)
     plot_memory(files, labels, colors, t, out)
     plot_log_scaling(files, labels, colors, t, out)
     print('wrote', *sorted(p.name for p in out.glob('*.png')), 'to', out)

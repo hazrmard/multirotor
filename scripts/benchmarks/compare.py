@@ -55,6 +55,12 @@ def main(argv=None) -> int:
             print(f'{cid:<60} (missing in candidate)')
             continue
         ra, rb = ia[cid], ib[cid]
+        if 'error' in ra or 'error' in rb:
+            side = 'candidate' if 'error' in rb else 'baseline'
+            print(f'{cid:<60} (worker failed in {side})')
+            if 'error' in rb and 'error' not in ra:
+                regressions.append((cid, 'worker failed'))
+            continue
         if cid == 'cold_start':
             ta, tb = ra['first_step_s']['median'], rb['first_step_s']['median']
             print(f'{"cold_start first step (s)":<60} {ta:>10.2f} {tb:>10.2f}'
@@ -67,7 +73,7 @@ def main(argv=None) -> int:
             flag = ' !' if d > args.threshold else ''
             row += f' {ta:>10.1f} {tb:>10.1f} {d:>+8.1f}{flag}'
             if d > args.threshold:
-                regressions.append((cid, d))
+                regressions.append((cid, f'{d:+.1f}%'))
             row += f' {pct(rb["peak_rss_mb"], ra["peak_rss_mb"]):>+8.1f}'
         else:
             row += f' {"-":>10} {"-":>10} {"-":>8} {"-":>8}'
@@ -78,7 +84,7 @@ def main(argv=None) -> int:
             flag = '!' if big and d > args.mem_threshold else ' '
             row += f' {d:>+7.1f}{flag}'
             if flag == '!':
-                regressions.append((cid + ' (memory)', d))
+                regressions.append((cid + ' (memory)', f'{d:+.1f}%'))
         else:
             row += f' {"-":>8}'
         print(row)
@@ -118,8 +124,8 @@ def main(argv=None) -> int:
     if regressions:
         print(f'\n{len(regressions)} regression(s) (time > {args.threshold:.0f}%, '
               f'memory > {args.mem_threshold:.0f}%):')
-        for cid, d in regressions:
-            print(f'  {cid}: {d:+.1f}%')
+        for cid, what in regressions:
+            print(f'  {cid}: {what}')
         return 1
     print('\nno regressions over threshold.')
     return 0

@@ -167,6 +167,19 @@ Input types:
   and torques by ±0.05 N·m.
 * `excite=False`: constant hover input.
 
+Hover input:
+
+* `cases.nominal_speed()` solves for the propeller speed at which one rotor carries
+  its share of the weight (`helpers.find_nominal_speed` on the propeller's own thrust
+  function). The solution differs per thrust model: for 8 rotors it is 315.7 rad/s for
+  `'quadratic'` and 139.7 rad/s for `'fsolve'`.
+* With a motor model, `cases.hover_speeds()` returns the signal that settles the motor
+  at the nominal speed (`cases.motor_signal()`). `StepSpeeds.reset()` starts the
+  propellers and motors at the nominal speed.
+* At `excite=False`, the vehicle holds its initial state exactly for all three variants.
+* At `excite=True`, the inputs are open loop (no controller). The vehicle drifts away
+  from hover, so the cost per step depends on the step count.
+
 ### Runner interface
 
 Each case maps to a `Runner` class in `cases.py`.
@@ -208,7 +221,7 @@ Notes on `tracemalloc`:
   small constant divided by the step count.
 
 `evals_per_step` values from the baseline run on the dev VM: 4.0 at hover. 10.7 to
-22.2 with excited inputs (`step_speeds`, `step_dynamics`).
+20.2 with excited inputs (`step_speeds`, `step_dynamics`).
 
 ## Scope tree
 
@@ -332,12 +345,16 @@ Remaining details:
 * Each result file records the git SHA, a dirty flag, the CPU model, and the Python,
   numpy, scipy and numba versions.
 * `compare.py` warns when the CPUs differ and when either file comes from `--quick`.
+* A worker that fails does not abort the run. `run.py` stores the error text under
+  `error` in that case's record, continues, writes the result file, then exits with
+  status 1. `compare.py` counts a case that fails in the candidate only as a regression.
 
 Noise:
 
 * Two full runs of one commit on the dev VM differed by up to 11% per case. Short
   cases and the `fsolve` thrust model case varied most.
 * The default `--threshold` of 15% exceeds that spread.
-* `evals_per_step` is deterministic.
+* `evals_per_step` is deterministic for a fixed case id, step count and floating-point
+  behavior.
 * Run on an idle machine. Optionally pin the process (`taskset -c 0`). Compare only
   files from the same host.

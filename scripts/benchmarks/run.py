@@ -130,9 +130,9 @@ def worker_cold() -> dict:
     t0 = time.perf_counter()
     import numpy as np  # noqa: F401
     from multirotor.controller import Controller  # noqa: F401
-    from multirotor.simulation import Multirotor
+    from multirotor.simulation import Multirotor  # noqa: F401
+    import cases  # imports env, optimize, gym and optuna as well
     t_import = time.perf_counter() - t0
-    import cases
     t0 = time.perf_counter()
     v = cases.make_vehicle(8)
     t_construct = time.perf_counter() - t0
@@ -159,6 +159,10 @@ def run_worker(args) -> None:
     print('@@RESULT@@' + json.dumps(out))
 
 
+class WorkerError(RuntimeError):
+    """A worker subprocess exited without producing a result."""
+
+
 def spawn(mode: str, case: str = '', params: dict = None, repeats: int = 0,
           scopes: str = 'off') -> dict:
     cmd = [sys.executable, str(Path(__file__).resolve()), '--worker', mode]
@@ -169,7 +173,7 @@ def spawn(mode: str, case: str = '', params: dict = None, repeats: int = 0,
     for line in proc.stdout.splitlines():
         if line.startswith('@@RESULT@@'):
             return json.loads(line[len('@@RESULT@@'):])
-    raise RuntimeError(
+    raise WorkerError(
         f'worker {mode} {case} {params} failed (exit {proc.returncode}):\n'
         f'{proc.stderr[-2000:]}')
 
@@ -180,7 +184,8 @@ def main(argv=None) -> None:
     ap.add_argument('--label', default=None, help='name of the result file')
     ap.add_argument('--out', default=None, help='explicit output path')
     ap.add_argument('--cases', nargs='*', help='case names to run (default: all)')
-    ap.add_argument('--repeats', type=int, default=7)
+    ap.add_argument('--repeats', type=int, default=7,
+                    help='timed repeats per case (default 7; --quick uses 3)')
     ap.add_argument('--quick', action='store_true', help='smoke test: few steps')
     ap.add_argument('--no-memory', action='store_true', help='skip tracemalloc runs')
     ap.add_argument('--scopes', choices=list(SCOPE_MODES), default='both',
@@ -210,15 +215,24 @@ def main(argv=None) -> None:
 
     repeats = 3 if args.quick else args.repeats
     results = []
+    failed = []   # ids of cases whose worker failed
     for cid, name, params in selected:
         print(f'{cid:<62}', end=' ', flush=True)
         # log_scaling is a memory-only case: skip the timing repeats
         rec = dict(id=cid, case=name, params=params)
-        if name != 'log_scaling':
-            rec.update(spawn('time', name, params, repeats, args.scopes))
-        if not args.no_memory:
-            rec['tracemalloc'] = spawn('mem', name, params)
         results.append(rec)
+        try:
+            if name != 'log_scaling':
+                rec.update(spawn('time', name, params, repeats, args.scopes))
+            if not args.no_memory:
+                rec['tracemalloc'] = spawn('mem', name, params)
+        except WorkerError as e:
+            # Record the failure and keep going: a late failure must not discard
+            # the results of the cases that already ran.
+            rec['error'] = str(e)
+            failed.append(cid)
+            print(f'FAILED: {str(e).splitlines()[0]}')
+            continue
         msg = []
         if 'stats' in rec:
             msg.append(f'{rec["stats"]["median"]:9.1f} us/step '
@@ -242,17 +256,23 @@ def main(argv=None) -> None:
             print('  ' + format_tree(tree).replace('\n', '\n  '))
 
     print(f'{"cold_start":<62}', end=' ', flush=True)
-    cold = [spawn('cold') for _ in range(3 if args.quick else 5)]
-    cold_rec = dict(
-        id='cold_start', case='cold_start', params={},
-        first_step_s=summarize([c['first_step_s'] for c in cold]),
-        import_s=summarize([c['import_s'] for c in cold]),
-        construct_s=summarize([c['construct_s'] for c in cold]),
-        second_step_s=summarize([c['second_step_s'] for c in cold]),
-        peak_rss_mb=summarize([c['peak_rss_mb'] for c in cold])['median'],
-    )
+    cold_rec = dict(id='cold_start', case='cold_start', params={})
     results.append(cold_rec)
-    print(f'first step {cold_rec["first_step_s"]["median"]:.2f} s')
+    try:
+        cold = [spawn('cold') for _ in range(3 if args.quick else 5)]
+    except WorkerError as e:
+        cold_rec['error'] = str(e)
+        failed.append('cold_start')
+        print(f'FAILED: {str(e).splitlines()[0]}')
+    else:
+        cold_rec.update(
+            first_step_s=summarize([c['first_step_s'] for c in cold]),
+            import_s=summarize([c['import_s'] for c in cold]),
+            construct_s=summarize([c['construct_s'] for c in cold]),
+            second_step_s=summarize([c['second_step_s'] for c in cold]),
+            peak_rss_mb=summarize([c['peak_rss_mb'] for c in cold])['median'],
+        )
+        print(f'first step {cold_rec["first_step_s"]["median"]:.2f} s')
 
     label = args.label or time.strftime('%Y%m%d-%H%M%S')
     payload = dict(schema=SCHEMA_VERSION, label=label, quick=args.quick,
@@ -260,6 +280,8 @@ def main(argv=None) -> None:
     out = Path(args.out) if args.out else RESULTS_DIR / f'{label}.json'
     save_results(out, payload)
     print(f'wrote {out}')
+    if failed:
+        sys.exit(f'{len(failed)} case(s) failed: {", ".join(failed)}')
 
 
 if __name__ == '__main__':
