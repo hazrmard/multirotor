@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import index_by_id, load_results  # noqa: E402
+from scopes import Level  # noqa: E402
 
 
 def pct(new: float, old: float) -> float:
@@ -86,7 +87,7 @@ def main(argv=None) -> int:
             print(f'{cid:<60} (new in candidate)')
 
     # Diagnostic only: never affects the exit status.
-    level = 'fine' if args.detail else 'coarse'
+    level = (Level.FINE if args.detail else Level.COARSE).key
     shown = False
     for cid in ia:
         sa = (ia[cid].get('scopes') or {}).get(level) if cid in ib else None

@@ -5,9 +5,10 @@ A case is a builder ``fn(**params) -> Runner``. A ``Runner`` exposes:
 * ``reset()``: restore the initial state (not timed).
 * ``run(n)``: advance the simulation by ``n`` steps (timed).
 * ``dt``: simulated seconds per step, used for the real-time factor.
+* ``scope_points()``: the callables a scope pass times (see ``scopes.ScopePoint``).
 
-``CASES`` maps a case name to its parameter grid. ``QUICK`` overrides the
-grid with smaller step counts for smoke tests.
+``CASES`` maps a case name to ``(Runner class, list of parameter sets)``.
+``QUICK_STEPS`` overrides the step counts for ``--quick`` smoke tests.
 """
 from copy import deepcopy
 from itertools import product
@@ -22,29 +23,45 @@ from multirotor.optimize import get_controller, run_sim
 from multirotor.simulation import Multirotor
 from multirotor.vehicle import PropellerParams
 
+from scopes import Level, ScopePoint
+
 M_PROP = 0.5   # kg per propeller
 M_BODY = 4.0   # kg
 D_PROP = 0.635  # m, arm length (same as the tarott18 octorotor)
 ALTITUDE = 5.   # m, hold point for closed-loop cases
 
 
-def make_vehicle(n: int = 8, thrust: str = 'const', motor: bool = False) -> Multirotor:
-    """
+def make_vehicle(
+    n: int = 8, thrust_model: str = 'quadratic', motor: bool = False
+) -> Multirotor:
+    """Build a ``Multirotor`` with ``n`` identical rotors.
+
     Parameters
     ----------
-    n : number of rotors.
-    thrust : ``'const'`` uses ``k_thrust * w^2``; ``'blade'`` uses the blade
-        element model (``fsolve`` per rotor per right-hand-side call).
-    motor : attach the motor model to each propeller.
+    n : int
+        Number of rotors.
+    thrust_model : {'quadratic', 'fsolve'}
+        How each propeller computes thrust from its speed.
+
+        * ``'quadratic'``: thrust = ``k_thrust * speed**2``
+          (``PropellerParams.use_thrust_constant=True``). Constants come from
+          ``models.tarott18``.
+        * ``'fsolve'``: blade-element model (``use_thrust_constant=False``). For
+          every propeller and every model evaluation, ``physics.thrust`` solves
+          for the induced velocity with ``scipy.optimize.fsolve``. Uses an 18 in
+          diameter, 6 in pitch propeller.
+    motor : bool
+        Attach the ``tarott18`` motor model to each propeller.
     """
-    if thrust == 'const':
+    if thrust_model == 'quadratic':
         prop = deepcopy(PP)
-    elif thrust == 'blade':
+    elif thrust_model == 'fsolve':
         prop = PropellerParams(
             moment_of_inertia=PP.moment_of_inertia, use_thrust_constant=False,
             diameter=18., pitch=6., k_drag=PP.k_drag, k_thrust=PP.k_thrust)
     else:
-        raise ValueError(f'unknown thrust model {thrust!r}')
+        raise ValueError(
+            f"unknown thrust_model {thrust_model!r}; expected 'quadratic' or 'fsolve'")
     if motor:
         prop.motor = deepcopy(MP)
         prop.__post_init__()
@@ -53,7 +70,7 @@ def make_vehicle(n: int = 8, thrust: str = 'const', motor: bool = False) -> Mult
 
 
 def hover_speeds(vehicle: Multirotor) -> np.ndarray:
-    """Per-rotor speed signal that roughly balances weight (constant-thrust model)."""
+    """Per-rotor speed signal that roughly balances weight (quadratic thrust model)."""
     p = vehicle.params
     w = np.sqrt(p.mass * vehicle.simulation.g / (p.nprops * PP.k_thrust))
     return np.full(p.nprops, w, vehicle.dtype)
@@ -74,22 +91,26 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
     return (np.asarray(base) * (1 + noise)).astype(np.asarray(base).dtype)
 
 
-def vehicle_points(v: Multirotor) -> List[tuple]:
-    """Scope points for the vehicle: ``(level, owner, attribute, scope name)``."""
-    pts = [('coarse', v, 'step_speeds', 'step_speeds'),
-           ('coarse', v, 'step_dynamics', 'step_dynamics'),
-           ('fine', v, 'integrator', 'integrator'),
-           ('fine', v, 'dxdt_speeds', 'model'),
-           ('fine', v, 'dxdt_dynamics', 'model'),
-           ('fine', v, 'get_forces_torques', 'forces_torques')]
-    pts += [('fine', p, 'step', 'propeller') for p in v.propellers]
+def vehicle_points(v: Multirotor) -> List[ScopePoint]:
+    """Scope points for a vehicle: its step methods, integrator, model and propellers.
+
+    ``dxdt_speeds`` and ``dxdt_dynamics`` both become the scope ``model``; only the
+    one the case calls records anything.
+    """
+    pts = [ScopePoint(Level.COARSE, v, 'step_speeds', 'step_speeds'),
+           ScopePoint(Level.COARSE, v, 'step_dynamics', 'step_dynamics'),
+           ScopePoint(Level.FINE, v, 'integrator', 'integrator'),
+           ScopePoint(Level.FINE, v, 'dxdt_speeds', 'model'),
+           ScopePoint(Level.FINE, v, 'dxdt_dynamics', 'model'),
+           ScopePoint(Level.FINE, v, 'get_forces_torques', 'forces_torques')]
+    pts += [ScopePoint(Level.FINE, p, 'step', 'propeller') for p in v.propellers]
     return pts
 
 
-def log_points() -> List[tuple]:
+def log_points() -> List[ScopePoint]:
     # DataLog is created inside reset()/run_sim, so patch the class.
-    return [('coarse', DataLog, 'log', 'log'),
-            ('coarse', DataLog, 'done_logging', 'log_done')]
+    return [ScopePoint(Level.COARSE, DataLog, 'log', 'log'),
+            ScopePoint(Level.COARSE, DataLog, 'done_logging', 'log_done')]
 
 
 class Runner:
@@ -101,11 +122,22 @@ class Runner:
     def run(self, n: int) -> None:
         raise NotImplementedError
 
-    def scope_points(self) -> List[tuple]:
-        """Callables to time as scopes: ``(level, owner, attr, name)``.
+    def scope_points(self) -> List[ScopePoint]:
+        """Callables that a scope pass times as scopes.
 
-        Levels: ``coarse`` (controller, env, step, logging) and ``fine``
-        (integrator, model, propellers; includes coarse).
+        Each ``ScopePoint(level, owner, attr, name)`` names a callable attribute
+        ``attr`` of ``owner`` (an instance or a class) and the scope ``name`` it
+        records. ``owner.attr`` must exist. A missing attribute is skipped and
+        reported under ``skipped`` in the scope tree, so check ``skipped`` after
+        adding a point.
+
+        ``level`` is ``Level.COARSE`` or ``Level.FINE``. A pass at ``FINE`` wraps
+        both kinds.
+
+        Example::
+
+            def scope_points(self):
+                return [ScopePoint(Level.COARSE, self.c, 'step', 'controller')]
         """
         return []
 
@@ -116,8 +148,8 @@ class StepSpeeds(Runner):
     ``excite=False`` holds exact hover speeds (equilibrium: cheapest possible
     integration). ``excite=True`` cycles through +-5% perturbed speeds.
     """
-    def __init__(self, n=8, thrust='const', motor=False, excite=True):
-        self.v = make_vehicle(n, thrust, motor)
+    def __init__(self, n=8, thrust_model='quadratic', motor=False, excite=True):
+        self.v = make_vehicle(n, thrust_model, motor)
         hover = hover_speeds(self.v)
         self.us = excitation(hover, 0.05) if excite else hover[None]
         self.dt = self.v.simulation.dt
@@ -178,13 +210,13 @@ class ControllerStep(Runner):
             step(reference=ref)
 
     def scope_points(self):
-        return [('coarse', self.c, 'step', 'controller')]
+        return [ScopePoint(Level.COARSE, self.c, 'step', 'controller')]
 
 
 class ClosedLoop(Runner):
     """controller -> allocation -> ``step_speeds``; optionally logging to ``DataLog``."""
-    def __init__(self, n=8, thrust='const', motor=False, log=False):
-        self.v = make_vehicle(n, thrust, motor)
+    def __init__(self, n=8, thrust_model='quadratic', motor=False, log=False):
+        self.v = make_vehicle(n, thrust_model, motor)
         self.c = get_controller(self.v)
         self.ref = np.asarray([0, 0, ALTITUDE, 0], self.v.dtype)
         self.log = log
@@ -207,8 +239,8 @@ class ClosedLoop(Runner):
             dl.done_logging()
 
     def scope_points(self):
-        return ([('coarse', self.c, 'step', 'controller'),
-                 ('coarse', self.v, 'allocate_control', 'allocation')]
+        return ([ScopePoint(Level.COARSE, self.c, 'step', 'controller'),
+                 ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
                 + vehicle_points(self.v) + log_points())
 
 
@@ -234,10 +266,10 @@ class RunSim(Runner):
             raise RuntimeError(f'run_sim ended after {len(log)} of {n} steps')
 
     def scope_points(self):
-        return ([('coarse', self.c, 'step', 'controller'),
-                 ('coarse', self.env, 'step', 'env.step'),
-                 ('coarse', self.env, 'reward', 'reward'),
-                 ('coarse', self.v, 'allocate_control', 'allocation')]
+        return ([ScopePoint(Level.COARSE, self.c, 'step', 'controller'),
+                 ScopePoint(Level.COARSE, self.env, 'step', 'env.step'),
+                 ScopePoint(Level.COARSE, self.env, 'reward', 'reward'),
+                 ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
                 + vehicle_points(self.v) + log_points())
 
 
@@ -249,21 +281,21 @@ def _grid(**axes) -> List[Dict]:
 
 CASES: Dict[str, tuple] = {
     'step_speeds': (StepSpeeds, [
-        dict(n=n, thrust='const', motor=False, excite=True, steps=1000)
+        dict(n=n, thrust_model='quadratic', motor=False, excite=True, steps=1000)
         for n in (4, 6, 8)
     ] + [
-        dict(n=8, thrust='const', motor=True, excite=True, steps=1000),
-        dict(n=8, thrust='blade', motor=False, excite=True, steps=300),
+        dict(n=8, thrust_model='quadratic', motor=True, excite=True, steps=1000),
+        dict(n=8, thrust_model='fsolve', motor=False, excite=True, steps=300),
         # equilibrium reference: the integrator's best case
-        dict(n=8, thrust='const', motor=False, excite=False, steps=1000),
+        dict(n=8, thrust_model='quadratic', motor=False, excite=False, steps=1000),
     ]),
     'step_dynamics': (StepDynamics, [
         dict(n=8, excite=True, steps=1000), dict(n=8, excite=False, steps=1000),
     ]),
     'controller_step': (ControllerStep, [dict(n=8, steps=5000)]),
     'closed_loop': (ClosedLoop, [
-        dict(n=8, thrust='const', motor=False, log=False, steps=2000),
-        dict(n=8, thrust='const', motor=False, log=True, steps=2000),
+        dict(n=8, thrust_model='quadratic', motor=False, log=False, steps=2000),
+        dict(n=8, thrust_model='quadratic', motor=False, log=True, steps=2000),
     ]),
     'run_sim': (RunSim, [dict(n=8, steps=1000)]),
     # memory growth of DataLog: bytes/step slope across these

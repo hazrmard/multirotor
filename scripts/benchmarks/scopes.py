@@ -2,8 +2,28 @@
 
 ``ScopeTimer`` keeps a stack of open scopes and records, per scope *path*
 (e.g. ``loop/step_speeds/integrator/model``), the call count, inclusive time and
-exclusive time. A callable is turned into a scope by ``wrap``; the patch is
-undone by ``restore``.
+exclusive time. ``wrap`` turns a callable into a scope. ``restore`` removes the
+wrappers.
+
+Usage::
+
+    timer = ScopeTimer()
+    # Each wrap needs an owner object that has the named attribute.
+    timer.wrap(vehicle, 'step_speeds', 'step_speeds')   # vehicle.step_speeds is now timed
+    timer.wrap(vehicle, 'dxdt_speeds', 'model')
+
+    timer.enter('loop')                                 # root scope
+    for _ in range(1000):
+        vehicle.step_speeds(speeds)
+    timer.exit()
+    timer.restore()                                     # remove the wrappers
+
+    a_ns, b_ns = calibrate()                            # wrapper overhead
+    report = timer.report(1000, a_ns, b_ns)             # per-step costs, overhead removed
+    print(format_tree(report))
+
+``Level``, ``ScopePoint`` and ``Runner.scope_points()`` (in ``cases.py``) describe
+which callables a benchmark case wraps.
 
 Invariants (exact, by construction):
 
@@ -21,12 +41,41 @@ removes them:
 
 Run this module to self-test the invariants: ``python scopes.py``.
 """
+import enum
 import time
 from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 pc = time.perf_counter_ns
 Path = Tuple[str, ...]
+
+
+class Level(enum.IntEnum):
+    """Detail of a scope tree. Levels are cumulative: ``FINE`` includes ``COARSE``."""
+    COARSE = 0   # controller, allocation, env, reward, step_*, logging
+    FINE = 1     # adds integrator, model, forces_torques, propeller
+
+    @property
+    def key(self) -> str:
+        """Key of this level in result files: ``'coarse'`` or ``'fine'``."""
+        return self.name.lower()
+
+
+class ScopePoint(NamedTuple):
+    """A callable to time as a scope when a pass runs at ``level`` or finer.
+
+    ``owner.attr`` must exist: ``attr`` is the name of a method or callable
+    attribute of ``owner`` (an instance or a class). ``ScopeTimer.wrap`` replaces
+    it with a timed version. If it does not exist, the scope is skipped and listed
+    under ``skipped`` in the report.
+
+    Example: ``ScopePoint(Level.COARSE, controller, 'step', 'controller')`` times
+    ``controller.step`` as the scope ``controller``.
+    """
+    level: Level
+    owner: Any
+    attr: str
+    name: str
 
 
 class ScopeTimer:
@@ -34,6 +83,7 @@ class ScopeTimer:
         self.stack: List[list] = []             # frames: [path, t_start, child_ns]
         self.stats: Dict[Path, List[int]] = {}  # path -> [calls, incl_ns, excl_ns]
         self._restores: List[Callable] = []
+        self.skipped: List[str] = []            # 'Owner.attr' of scopes that could not be wrapped
 
     # -- recording ---------------------------------------------------------
     def enter(self, name: str) -> None:
@@ -56,14 +106,19 @@ class ScopeTimer:
             self.stack[-1][2] += dur
 
     def wrap(self, owner, attr: str, name: str) -> bool:
-        """Replace ``owner.attr`` (instance or class) with a timed version.
+        """Replace ``owner.attr`` with a version that records the scope ``name``.
 
-        Returns False, leaving everything untouched, if ``owner`` has no such
-        attribute (e.g. an older commit), so cases degrade instead of failing.
+        ``owner`` is an instance or a class. ``attr`` must be the name of a callable
+        attribute of ``owner``, for example ``wrap(vehicle, 'step_speeds', 'step')``.
+        ``wrap`` returns False and leaves ``owner`` untouched when ``attr`` does not
+        exist (for example on an older commit). It records ``'Owner.attr'`` in
+        ``self.skipped``, so a misspelled attribute shows up in the report.
         """
         try:
             orig = getattr(owner, attr)
         except AttributeError:
+            owner_name = owner.__name__ if isinstance(owner, type) else type(owner).__name__
+            self.skipped.append(f'{owner_name}.{attr}')
             return False
         had_own = attr in vars(owner)
         enter, exit_ = self.enter, self.exit
@@ -115,7 +170,7 @@ class ScopeTimer:
             for p in sorted(self.stats)
         ]
         return dict(total_us=root_incl * us, raw_total_us=raw_root * us,
-                    a_ns=a_ns, b_ns=b_ns, items=items)
+                    a_ns=a_ns, b_ns=b_ns, skipped=list(self.skipped), items=items)
 
 
 def calibrate(n: int = 200_000) -> Tuple[float, float]:
@@ -173,6 +228,21 @@ def evals_per_step(rep: Dict) -> Optional[float]:
 
 
 def selftest() -> None:
+    """Check ``ScopeTimer`` on a synthetic workload built from ``time.sleep``.
+
+    Wraps ``Obj.a`` (sleeps 2 ms, calls ``Obj.b`` twice) and ``Obj.b`` (sleeps 1 ms),
+    runs ``a`` five times under a root scope, then asserts that:
+
+    * ``wrap`` skips a missing attribute, records it in ``skipped``, and
+      ``restore`` removes the instance patches;
+    * ``inclusive = exclusive + sum(children's inclusive)`` for every scope;
+    * the exclusive times sum to the root's inclusive time;
+    * call counts and timings match the workload (B is called twice per A);
+    * ``calibrate()`` returns plausible overhead constants;
+    * the same scope name under different parents gets different paths.
+
+    Raises ``AssertionError`` on failure and prints a summary on success.
+    """
     sleep = lambda s: time.sleep(s)
 
     class Obj:
@@ -188,6 +258,7 @@ def selftest() -> None:
     t = ScopeTimer()
     assert t.wrap(o, 'a', 'A') and t.wrap(o, 'b', 'B')
     assert not t.wrap(o, 'missing', 'X')
+    assert t.skipped == ['Obj.missing'], t.skipped
     t.enter('root')
     for _ in range(5):
         o.a()

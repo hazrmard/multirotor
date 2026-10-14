@@ -2,6 +2,7 @@
 
     uv run python scripts/benchmarks/run.py --label baseline
     uv run python scripts/benchmarks/run.py --quick --cases step_speeds closed_loop
+    uv run python scripts/benchmarks/run.py --list-cases
 
 Every case runs in a fresh subprocess, once for timing and once for memory
 (``tracemalloc``), so the two never perturb each other and peak RSS is per case.
@@ -18,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from scopes import (ScopeTimer, calibrate, evals_per_step,  # noqa: E402
+from scopes import (Level, ScopeTimer, calibrate, evals_per_step,  # noqa: E402
                     format_tree)
 from common import (RESULTS_DIR, SCHEMA_VERSION, environment_metadata,  # noqa: E402
                     save_results, summarize)
@@ -32,18 +33,22 @@ def _peak_rss_mb() -> float:
     return rss / (1024 * 1024 if sys.platform == 'darwin' else 1024)
 
 
-LEVELS = {'coarse': 0, 'fine': 1}
+SCOPE_MODES = {'off': [], 'coarse': [Level.COARSE], 'fine': [Level.FINE],
+               'both': [Level.COARSE, Level.FINE]}   # values of --scopes
 
-def scope_profile(runner, steps: int, level: str, ab) -> dict:
-    """One instrumented pass: a scope tree at ``level`` ('coarse' or 'fine').
+
+def scope_profile(runner, steps: int, level: Level, ab) -> dict:
+    """One instrumented pass: a scope tree at ``level``.
 
     Separate from the clean timing pass because wrapping adds overhead.
     """
     timer = ScopeTimer()
     runner.reset()
-    for lvl, owner, attr, name in runner.scope_points():
-        if LEVELS[lvl] <= LEVELS[level]:
-            timer.wrap(owner, attr, name)
+    for point in runner.scope_points():
+        # Levels are cumulative: a FINE pass also wraps the COARSE scopes, so the
+        # fine tree contains every coarse scope plus the extra detail.
+        if point.level <= level:
+            timer.wrap(point.owner, point.attr, point.name)
     gc.collect()
     gc.disable()   # same as the clean pass, so GC pauses do not land in a scope
     timer.enter('loop')
@@ -85,11 +90,11 @@ def worker_time(name: str, params: dict, repeats: int, scopes: str) -> dict:
     if scopes != 'off' and runner.scope_points():
         ab = calibrate()
         n = steps  # same length as the clean pass: trajectories drift with step count
-        for level in (['coarse', 'fine'] if scopes == 'both' else [scopes]):
+        for level in SCOPE_MODES[scopes]:
             tree = scope_profile(runner, n, level, ab)
             tree['vs_clean'] = tree['total_us'] / stats['median']
-            trees[level] = tree
-    fine = trees.get('fine')
+            trees[level.key] = tree
+    fine = trees.get(Level.FINE.key)
     return dict(
         scopes=trees or None,
         evals_per_step=evals_per_step(fine) if fine else None,
@@ -178,11 +183,14 @@ def main(argv=None) -> None:
     ap.add_argument('--repeats', type=int, default=7)
     ap.add_argument('--quick', action='store_true', help='smoke test: few steps')
     ap.add_argument('--no-memory', action='store_true', help='skip tracemalloc runs')
-    ap.add_argument('--scopes', choices=['off', 'coarse', 'fine', 'both'], default='both',
+    ap.add_argument('--scopes', choices=list(SCOPE_MODES), default='both',
                     help='scope-tree instrumentation passes (default both)')
     ap.add_argument('--tree', action='store_true',
                     help='print the finest scope tree for each case')
-    ap.add_argument('--list', action='store_true', help='list case ids and exit')
+    ap.add_argument('--list-cases', action='store_true', help='list case ids and exit')
+    # Internal protocol: the parent process re-runs this script as a worker
+    # subprocess (see spawn()) with these options. Users never pass them, so they
+    # stay out of --help.
     ap.add_argument('--worker', choices=['time', 'mem', 'cold'], help=argparse.SUPPRESS)
     ap.add_argument('--case', help=argparse.SUPPRESS)
     ap.add_argument('--params', help=argparse.SUPPRESS)
@@ -193,7 +201,7 @@ def main(argv=None) -> None:
 
     import cases
     selected = cases.expand(args.cases, quick=args.quick)
-    if args.list:
+    if args.list_cases:
         for cid, _, _ in selected:
             print(cid)
         return
@@ -217,16 +225,20 @@ def main(argv=None) -> None:
                        f'(RTF {rec["real_time_factor"]:5.1f}x)')
             if rec.get('evals_per_step'):
                 msg.append(f'{rec["evals_per_step"]:4.1f} evals')
-            ratios = [t['vs_clean'] for t in (rec.get('scopes') or {}).values()]
+            trees = (rec.get('scopes') or {}).values()
+            ratios = [t['vs_clean'] for t in trees]
             if ratios and max(ratios) > 1.3:
                 msg.append(f'(!) instrumented/clean {max(ratios):.2f}: noisy scope timings')
+            skipped = sorted({s for t in trees for s in t['skipped']})
+            if skipped:
+                msg.append(f'(!) scopes skipped, attribute missing: {", ".join(skipped)}')
         if 'tracemalloc' in rec:
             msg.append(f'{rec["tracemalloc"]["net_bytes_per_step"]:8.1f} B/step net')
         print('  '.join(msg))
         if args.tree and rec.get('scopes'):
-            level = 'fine' if 'fine' in rec['scopes'] else 'coarse'
-            tree = rec['scopes'][level]
-            print(f'  [{level}] instrumented/clean = {tree["vs_clean"]:.2f}')
+            level = Level.FINE if Level.FINE.key in rec['scopes'] else Level.COARSE
+            tree = rec['scopes'][level.key]
+            print(f'  [{level.key}] instrumented/clean = {tree["vs_clean"]:.2f}')
             print('  ' + format_tree(tree).replace('\n', '\n  '))
 
     print(f'{"cold_start":<62}', end=' ', flush=True)

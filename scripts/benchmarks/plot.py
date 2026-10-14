@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from common import index_by_id, load_results  # noqa: E402
+from scopes import Level  # noqa: E402
 
 # Categorical slots 1-4 from the reference palette, fixed order (light, dark).
 SERIES = {'light': ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'],
@@ -131,7 +132,7 @@ def plot_breakdown(files, labels, colors, t, out, theme):
     for f, label in zip(files, labels):
         for cid, r in index_by_id(f).items():
             tree = (r.get('scopes') or {})
-            tree = tree.get('fine') or tree.get('coarse')
+            tree = tree.get(Level.FINE.key) or tree.get(Level.COARSE.key)
             if tree:
                 rows.append((cid if len(files) == 1 else f'{cid} [{label}]', tree))
     if not rows:

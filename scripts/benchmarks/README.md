@@ -64,13 +64,43 @@ flowchart TD
     m2 --> ft2["forces_torques<br/>get_forces_torques"]
 ```
 
+## Concepts
+
+| term | definition | created by |
+|---|---|---|
+| case | named benchmark, such as `step_speeds`, with one or more parameter sets | `CASES` in `cases.py` |
+| case id | one case with one parameter set, such as `step_speeds[n=8,...]` | `cases.expand()` |
+| Runner | object that drives the simulation for one case id | `cases.build(name, params)` |
+| scope point | `ScopePoint(level, owner, attr, name)`: a callable that a Runner offers for timing | `Runner.scope_points()` |
+| scope | a scope point wrapped by `ScopeTimer` during a scope pass; a node in the scope tree | `ScopeTimer.wrap()` |
+| worker | subprocess that runs `run.py` for one case id and one kind of pass | `run.py` `spawn()` |
+| pass | one measurement inside a worker: clean, scope (coarse or fine) or memory | worker functions in `run.py` |
+
+Relationships:
+
+* A case has one or more case ids, one per parameter set.
+* For each case id, `run.py` starts a `time` worker and a `mem` worker. `log_scaling`
+  starts only the `mem` worker. The `cold` worker belongs to no case id.
+* Each worker builds its own Runner for its case id.
+* A Runner lists its scope points. Only scope passes use them. A scope pass wraps each
+  scope point's callable. Each wrapped callable becomes a scope at a path in the tree.
+
+```mermaid
+flowchart TD
+    case["case<br/>name + parameter sets"] -->|"one per parameter set"| id["case id"]
+    id -->|"run.py spawns"| worker["worker<br/>time or mem"]
+    worker -->|"cases.build()"| runner["Runner<br/>reset, run, dt, scope_points"]
+    runner -->|"scope_points()"| sp["scope points<br/>level, owner, attr, name"]
+    sp -->|"scope pass: ScopeTimer.wrap()"| scope["scope<br/>node in the scope tree"]
+```
+
 ## Usage
 
 ```
 uv sync
 uv run python scripts/benchmarks/run.py --label baseline     # full run, about 7 minutes on the dev VM
 uv run python scripts/benchmarks/run.py --quick              # smoke test, not a measurement
-uv run python scripts/benchmarks/run.py --list               # list case ids
+uv run python scripts/benchmarks/run.py --list-cases         # list case ids
 # change code
 uv run python scripts/benchmarks/run.py --label candidate
 uv run python scripts/benchmarks/compare.py scripts/benchmarks/results/baseline.json scripts/benchmarks/results/candidate.json
@@ -86,6 +116,7 @@ defaults to a timestamp.
 | | `--repeats N` | timed repeats per case (default 7) |
 | | `--quick` | 3 repeats, fewer steps, no `log_scaling`, 3 cold-start repeats |
 | | `--no-memory` | skip the memory pass |
+| | `--list-cases` | print case ids and exit |
 | | `--scopes off\|coarse\|fine\|both` | scope passes to run (default `both`) |
 | | `--tree` | print the scope tree of each case |
 | `compare.py` | `--threshold PCT` | time regression limit (default 15) |
@@ -109,7 +140,7 @@ A case is a named benchmark with a list of parameter sets. A case id has the for
 
 | case | parameter sets | steps | `run(n)` calls |
 |---|---|---|---|
-| `step_speeds` | 4, 6, 8 rotors, constant thrust, excited; 8 rotors with motor model, excited; 8 rotors with blade-element thrust, excited; 8 rotors, constant thrust, hover | 1000 (blade: 300) | `Multirotor.step_speeds` |
+| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors, `thrust_model='fsolve'`, excited; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 300) | `Multirotor.step_speeds` |
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
 | `controller_step` | 8 rotors | 5000 | `Controller.step` with a fixed vehicle state |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
@@ -122,7 +153,11 @@ Common settings:
 * `models.tarott18` propeller and motor constants, `dt=0.01`, `float32`.
 * Vehicles come from `vehicle_params_factory` (0.5 kg per propeller, 4 kg body,
   0.635 m arms).
-* The blade-element model uses an 18 in diameter, 6 in pitch propeller.
+* `thrust_model='quadratic'`: thrust = `k_thrust * speed**2`
+  (`PropellerParams.use_thrust_constant=True`).
+* `thrust_model='fsolve'`: blade-element model (`use_thrust_constant=False`). For each
+  propeller and model evaluation, `physics.thrust` solves for the induced velocity
+  with `scipy.optimize.fsolve`. The propeller has an 18 in diameter and 6 in pitch.
 * Reference for controlled cases: hold 5 m altitude.
 
 Input types:
@@ -141,7 +176,7 @@ Each case maps to a `Runner` class in `cases.py`.
 | `reset()` | restores the initial state; not timed |
 | `run(n)` | advances the simulation by `n` steps; timed |
 | `dt` | simulated seconds per step, for `real_time_factor` |
-| `scope_points()` | lists the callables to time as scopes |
+| `scope_points()` | returns the `ScopePoint`s a scope pass wraps |
 
 To add a case, write a `Runner` in `cases.py` and add its parameter sets to `CASES`.
 
@@ -162,7 +197,7 @@ Fields:
 | `evals_per_step` | model evaluations requested by the integrator per step |
 | `warmup_s`, `build_s` | warm-up and construction time in seconds |
 | `peak_rss_mb` | peak RSS of the time worker process, including interpreter and libraries |
-| `scopes` | scope trees, see below |
+| `scopes` | scope trees keyed by level (`coarse`, `fine`), each with `skipped` scope points; see Scope tree |
 | `tracemalloc` | `peak_kb`, `net_kb`, `peak_bytes_per_step`, `net_bytes_per_step` |
 
 Notes on `tracemalloc`:
@@ -198,13 +233,39 @@ Time that no child scope covers stays in the parent's exclusive time.
 
 ### Levels
 
+`Level` in `scopes.py` is an `IntEnum`: `Level.COARSE = 0`, `Level.FINE = 1`. Result
+files key the trees by `Level.key` (`'coarse'`, `'fine'`). Levels are cumulative: a
+pass at `Level.FINE` wraps the coarse scope points and the fine ones.
+
 | level | scopes |
 |---|---|
 | `coarse` | `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
 | `fine` | `coarse` plus `integrator`, `model`, `forces_torques`, `propeller` |
 
 Each level runs as its own pass, so coarse timings carry no fine-scope wrapper cost.
-Each case declares its scopes in `Runner.scope_points()`.
+
+### Scope points
+
+Each Runner declares its scopes in `Runner.scope_points()`. A `ScopePoint` has four
+fields:
+
+| field | meaning |
+|---|---|
+| `level` | `Level.COARSE` or `Level.FINE`; the coarsest pass that wraps this point |
+| `owner` | instance or class that holds the callable |
+| `attr` | name of a callable attribute of `owner`; `owner.attr` must exist |
+| `name` | scope name in the tree |
+
+Example: the following point times `controller.step` as the scope `controller`.
+
+```python
+ScopePoint(Level.COARSE, controller, 'step', 'controller')
+```
+
+If `owner.attr` does not exist, the pass skips the point and lists `'Owner.attr'` under
+`skipped` in the scope tree. `run.py` prints a warning for skipped scopes. This
+happens, for example, for `Multirotor.integrator` on commits that predate it, and for
+misspelled attribute names.
 
 ### Scope definitions
 
@@ -236,8 +297,9 @@ Remaining details:
   child of `model`.
 * Jitted functions (`apply_forces_torques`, `torque`) cannot be wrapped. Their time
   stays in the exclusive time of the calling scope.
-* `Multirotor.integrator` exists since the injectable-integrator change. Callables
-  that do not exist on a commit are skipped. The scope is then absent.
+* `Multirotor.integrator` exists since the injectable-integrator change. On earlier
+  commits the point is skipped, the `integrator` scope is absent and `skipped` lists
+  `Multirotor.integrator`.
 
 ### Mapping to simulation components
 
@@ -274,7 +336,7 @@ Remaining details:
 Noise:
 
 * Two full runs of one commit on the dev VM differed by up to 11% per case. Short
-  cases and the blade-element case varied most.
+  cases and the `fsolve` thrust model case varied most.
 * The default `--threshold` of 15% exceeds that spread.
 * `evals_per_step` is deterministic.
 * Run on an idle machine. Optionally pin the process (`taskset -c 0`). Compare only
