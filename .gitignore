@@ -6,3 +6,5 @@ dist/
 docs/_build
 .venv/
 docs/autoapi/
+
+scripts/benchmarks/results/

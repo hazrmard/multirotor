@@ -10,6 +10,40 @@ from .physics import thrust, torque, apply_forces_torques
 from .helpers import control_allocation_matrix
 
 
+Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
+"""
+A solver for one simulation step: ``integrator(fun, y0, dt, args) -> y``.
+
+Advances the initial state ``y0`` from ``t=0`` to ``t=dt`` under
+``dy/dt = fun(t, y, *args)`` and returns the state at ``t=dt``.
+"""
+
+
+def odeint_integrator(
+    fun: Callable, y0: np.ndarray, dt: float, args: tuple = ()
+) -> np.ndarray:
+    """
+    The default :data:`Integrator`: LSODA via `scipy.integrate.odeint`.
+
+    Parameters
+    ----------
+    fun : Callable
+        The derivative function, with signature ``fun(t, y, *args)``.
+    y0 : np.ndarray
+        The state at the start of the step.
+    dt : float
+        The step duration.
+    args : tuple, optional
+        Extra arguments passed to ``fun``.
+
+    Returns
+    -------
+    np.ndarray
+        The state at the end of the step.
+    """
+    return odeint(fun, y0, (0, dt), args=args, rtol=1e-4, atol=1e-4, tfirst=True)[-1]
+
+
 
 class Propeller:
     """
@@ -247,7 +281,10 @@ class Multirotor:
     The multirotor class models dynamics and control allocation of a vehicle.
     """
 
-    def __init__(self, params: VehicleParams, simulation: SimulationParams) -> None:
+    def __init__(
+        self, params: VehicleParams, simulation: SimulationParams,
+        integrator: Integrator = odeint_integrator
+    ) -> None:
         """
         Parameters
         ----------
@@ -257,9 +294,14 @@ class Multirotor:
             object is isolated from this instance.
         simulation : SimulationParams
             The simulation parameters.
+        integrator : Integrator, optional
+            The solver used to advance the state by one time step in
+            `step_dynamics()` and `step_speeds()`. By default
+            `odeint_integrator` (LSODA, rtol=atol=1e-4).
         """
         self.params: VehicleParams = deepcopy(params)
         self.simulation: SimulationParams = simulation
+        self.integrator: Integrator = integrator
         self.dtype = self.params.inertia_matrix.dtype if simulation.dtype is None \
                      else simulation.dtype
         self.state: np.ndarray = None
@@ -521,11 +563,9 @@ class Multirotor:
         """
         self.t += self.simulation.dt
         self._dxdt = self.dxdt_dynamics(t=self.t, x=self.state, u=u)
-        self.state = odeint(
-            self.dxdt_dynamics, self.state, (0, self.simulation.dt),
-            args=(u,),
-            rtol=1e-4, atol=1e-4, tfirst=True
-        )[-1]
+        self.state = self.integrator(
+            self.dxdt_dynamics, self.state, self.simulation.dt, (u,)
+        )
         self.state = np.around(self.state, 4).astype(self.dtype)
         # TODO: inverse solve for speed = forces to set propeller speeds
         return self.state
@@ -561,11 +601,10 @@ class Multirotor:
             disturb_forces=disturb_forces, disturb_torques=disturb_torques
         )
         # print('pre-x', self.t // self.simulation.dt, self.state.dtype)
-        self.state = odeint(
-            self.dxdt_speeds, self.state, (0, self.simulation.dt),
-            args=(u, disturb_forces, disturb_torques),
-            rtol=1e-4, atol=1e-4, tfirst=True
-        )[-1]
+        self.state = self.integrator(
+            self.dxdt_speeds, self.state, self.simulation.dt,
+            (u, disturb_forces, disturb_torques)
+        )
         self.state = np.around(self.state, 4).astype(self.dtype)
         # print('post-x', self.t // self.simulation.dt, self.state.dtype)
         for u_, prop in zip(u, self.propellers):
