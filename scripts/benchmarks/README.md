@@ -142,7 +142,7 @@ parameter (`log_scaling`).
 
 | case | parameter sets | steps | `run(n)` calls |
 |---|---|---|---|
-| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
+| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors with motor and battery models, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
 | `controller_step` | 8 rotors | 5000 | `Controller.step` with a fixed vehicle state |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
@@ -160,6 +160,9 @@ Common settings:
 * `thrust_model='fsolve'`: blade-element model (`use_thrust_constant=False`). For each
   propeller and model evaluation, `physics.thrust` solves for the induced velocity
   with `scipy.optimize.fsolve`. The propeller has an 18 in diameter and 6 in pitch.
+* `battery=True`: `models.tarott18` battery voltage (22.2 V) with a 10 Ah capacity
+  and 0.02 ohm internal resistance. The battery resets with the vehicle every
+  64 steps.
 * Reference for controlled cases: hold 5 m altitude.
 
 Input types:

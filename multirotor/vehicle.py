@@ -92,7 +92,35 @@ class PropellerParams:
 class BatteryParams:
 
     max_voltage: float = np.inf
-    "Maximum voltage of the battery"
+    """Maximum voltage of the battery. Without a battery model (``capacity=None``)
+    it limits the motors' voltage. With a battery model and no OCV table, it is
+    the open-circuit voltage."""
+    capacity: float = None
+    """Capacity (Ah). None means no battery model: the battery is a fixed
+    voltage limit, and its charge is not tracked."""
+    internal_resistance: float = 0.
+    "Series resistance (ohm). The terminal voltage sags by resistance x current."
+    ocv_soc: np.ndarray = None
+    "State of charge (0 to 1, increasing) at which ``ocv_voltage`` is given."
+    ocv_voltage: np.ndarray = None
+    "Open-circuit voltage (V) at each ``ocv_soc``. Interpolated linearly."
+    min_voltage: float = 0.
+    """Cutoff voltage. When the terminal voltage falls below it, the battery
+    cuts the motors' voltage to zero until it is reset."""
+
+
+    def __post_init__(self):
+        if (self.ocv_soc is None) != (self.ocv_voltage is None):
+            raise ValueError('Give both ocv_soc and ocv_voltage, or neither.')
+        if self.ocv_soc is not None:
+            self.ocv_soc = np.asarray(self.ocv_soc, dtype=float)
+            self.ocv_voltage = np.asarray(self.ocv_voltage, dtype=float)
+            if self.ocv_soc.shape != self.ocv_voltage.shape or self.ocv_soc.ndim != 1:
+                raise ValueError('ocv_soc and ocv_voltage must be 1D and of the same length.')
+            if np.any(np.diff(self.ocv_soc) <= 0):
+                raise ValueError('ocv_soc must be increasing.')
+        if self.capacity is not None and self.ocv_soc is None and not np.isfinite(self.max_voltage):
+            raise ValueError('A battery model needs a finite max_voltage or an OCV table.')
 
 
 

@@ -13,8 +13,9 @@ from numba import njit
 
 from .coords import rotating_frame_derivative
 from .physics import (
-    body_derivative, body_torques, forces_torques, motor_acc, thrusts_physics,
-    PROP_K_DRAG
+    battery_ocv, battery_operating_point, body_derivative, body_torques,
+    forces_torques, motor_acc, thrusts_physics,
+    BATTERY_CAPACITY, BATTERY_INTERNAL_RESISTANCE, PROP_K_DRAG
 )
 
 N_BODY_STATES = 12
@@ -153,6 +154,106 @@ def rhs_motor(
         forces + disturbance[:3], torques + disturbance[3:], x, g, mass,
         inertia_matrix, inertia_matrix_inverse)
     dydt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
+    return dydt
+
+
+
+@njit
+def battery_state(
+    speeds: np.ndarray, u: np.ndarray, charge: float, cutoff: bool,
+    motor_params: np.ndarray, battery_params: np.ndarray, ocv_soc: np.ndarray,
+    ocv_voltage: np.ndarray
+) -> Tuple[float, float, float]:
+    """
+    The battery's terminal voltage and current, and the voltage limit it puts
+    on the motors.
+
+    Parameters
+    ----------
+    speeds : np.ndarray
+        Motor speeds (rad/s), shape (n,).
+    u : np.ndarray
+        Speed signals, shape (n,).
+    charge : float
+        Total charge (C) drawn from the battery since it was full.
+    cutoff : bool
+        Whether the battery has cut off the motors.
+    motor_params : np.ndarray
+        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    battery_params : np.ndarray
+        Battery parameters, shape (N_BATTERY_PARAMS,), indexed by the
+        ``BATTERY_*`` constants in `multirotor.physics`.
+    ocv_soc : np.ndarray
+        States of charge of the open-circuit voltage table.
+    ocv_voltage : np.ndarray
+        Open-circuit voltage (V) at each ``ocv_soc``.
+
+    Returns
+    -------
+    Tuple[float, float, float]
+        The terminal voltage (V), the battery current (A), and the motors'
+        voltage limit (V).
+    """
+    soc = 1. - charge / battery_params[BATTERY_CAPACITY]
+    open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
+    if cutoff:
+        return open_circuit_voltage, 0., 0.
+    terminal_voltage, power, _ = battery_operating_point(
+        speeds, u, open_circuit_voltage,
+        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
+    return terminal_voltage, power / terminal_voltage, terminal_voltage
+
+
+
+@njit
+def rhs_motor_battery(
+    t: float, y: np.ndarray, u: np.ndarray, cutoff: bool,
+    disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
+    inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
+    motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
+    battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
+    charge_drawn: float
+) -> np.ndarray:
+    """
+    Like `rhs_motor`, with a battery model. The battery's terminal voltage
+    limits the motors' voltage, and sags with the current they draw and as the
+    battery discharges.
+
+    The integrated state ``y`` is the 12 body states, the ``n`` motor speeds,
+    and the charge (C) drawn from the battery during the current time step.
+
+    Parameters
+    ----------
+    t, y, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
+        As in `rhs_motor`. ``y`` has one more element: the charge drawn during
+        the step.
+    cutoff : bool
+        Whether the battery has cut off the motors (their voltage is zero).
+    battery_params, ocv_soc, ocv_voltage
+        As in `battery_state`.
+    charge_drawn : float
+        Charge (C) drawn from the battery before the current time step.
+
+    Returns
+    -------
+    np.ndarray
+        The rate of change of ``y``.
+    """
+    n = u.shape[0]
+    x = y[:N_BODY_STATES]
+    speeds = y[N_BODY_STATES:N_BODY_STATES + n]
+    charge = charge_drawn + y[N_BODY_STATES + n]
+    _, battery_current, motor_voltage_limit = battery_state(
+        speeds, u, charge, cutoff, motor_params, battery_params, ocv_soc,
+        ocv_voltage)
+    forces, torques = forces_torques(speeds, prop_params, clockwise, positions)
+    dydt = np.empty_like(y)
+    dydt[:N_BODY_STATES] = body_derivative(
+        forces + disturbance[:3], torques + disturbance[3:], x, g, mass,
+        inertia_matrix, inertia_matrix_inverse)
+    dydt[N_BODY_STATES:N_BODY_STATES + n] = motor_acc(
+        speeds, u, motor_voltage_limit, motor_params)
+    dydt[N_BODY_STATES + n] = battery_current
     return dydt
 
 

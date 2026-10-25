@@ -7,12 +7,15 @@ from scipy.integrate import odeint
 from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams, BatteryParams
 from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from .physics import (
-    thrust, thrusts_physics, body_torques, motor_electrical,
-    PROP_K_THRUST, PROP_K_DRAG
+    thrust, thrusts_physics, body_torques, motor_electrical, battery_ocv,
+    battery_operating_point,
+    PROP_K_THRUST, PROP_K_DRAG, BATTERY_CAPACITY, BATTERY_INTERNAL_RESISTANCE,
+    N_BATTERY_PARAMS
 )
 from .data import MotorData, PropellerData
 from .dynamics import (
-    rhs_body, rhs_motor, rhs_motor_blade_element, rhs_motor_only, N_BODY_STATES
+    rhs_body, rhs_motor, rhs_motor_battery, rhs_motor_blade_element,
+    rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
 
@@ -398,17 +401,91 @@ class Motor:
 
 class Battery:
     """
-    Models the state of charge of the battery of the Multirotor.
+    Models the battery of the Multirotor.
+
+    Without a battery model (``BatteryParams.capacity`` is None), the battery is
+    a fixed voltage limit for the motors. With one, it tracks the charge drawn,
+    and its terminal voltage sags with the current drawn and as it discharges.
+    `Multirotor` integrates the battery together with the body and motors, and
+    updates it after each step.
     """
 
 
     def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
         self.params = deepcopy(params)
         self.simulation = simulation
+        self.voltage: float = None
+        "Terminal voltage (V)"
+        self.current: float = 0.
+        "Current (A), averaged over the last step"
+        self.charge_drawn: float = 0.
+        "Charge (C) drawn since the battery was full"
+        self.cutoff: bool = False
+        "Whether the terminal voltage fell below min_voltage, cutting off the motors"
+        self.overload: bool = False
+        "Whether the last step demanded more power than the battery can deliver"
+
+        if self.has_model:
+            # Parameters for the kernels in `multirotor.dynamics`
+            self._params_vector = np.zeros(N_BATTERY_PARAMS)
+            self._params_vector[BATTERY_CAPACITY] = 3600. * self.params.capacity
+            self._params_vector[BATTERY_INTERNAL_RESISTANCE] = self.params.internal_resistance
+            if self.params.ocv_soc is None:
+                # Constant open-circuit voltage
+                self._ocv_soc = np.asarray([0., 1.])
+                self._ocv_voltage = np.full(2, float(self.params.max_voltage))
+            else:
+                self._ocv_soc = self.params.ocv_soc
+                self._ocv_voltage = self.params.ocv_voltage
+        self.reset()
+
+
+    @property
+    def has_model(self) -> bool:
+        """Whether the battery's charge and voltage are modeled."""
+        return self.params.capacity is not None
+
+
+    @property
+    def soc(self) -> float:
+        """State of charge, from 0 (empty) to 1 (full)."""
+        if not self.has_model:
+            return 1.
+        return 1. - self.charge_drawn / self._params_vector[BATTERY_CAPACITY]
+
+
+    @property
+    def motor_voltage_limit(self) -> float:
+        """The maximum voltage the battery supplies to the motors."""
+        return 0. if self.cutoff else self.voltage
+
+
+    def open_circuit_voltage(self, charge_drawn: float=None) -> float:
+        """
+        Open-circuit voltage (V) after drawing ``charge_drawn`` coulombs from a
+        full battery. By default, the charge drawn so far.
+        """
+        if not self.has_model:
+            return self.params.max_voltage
+        charge_drawn = self.charge_drawn if charge_drawn is None else charge_drawn
+        soc = 1. - charge_drawn / self._params_vector[BATTERY_CAPACITY]
+        return battery_ocv(soc, self._ocv_soc, self._ocv_voltage)
 
 
     def reset(self):
-        self.voltage = self.params.max_voltage
+        """
+        Return the battery to full charge.
+
+        Returns
+        -------
+        float
+            The terminal voltage.
+        """
+        self.charge_drawn = 0.
+        self.current = 0.
+        self.cutoff = False
+        self.overload = False
+        self.voltage = self.open_circuit_voltage()
         return self.voltage
 
 
@@ -417,8 +494,73 @@ class Battery:
         return self.voltage
 
 
-    def step(self):
-        pass
+    def step(self, load: float=None):
+        """
+        Draw a constant current from the battery for one time step. Without a
+        load, or without a battery model, this does nothing.
+
+        Parameters
+        ----------
+        load : float, optional
+            The current (A) drawn, by default None
+        """
+        if load is None or not self.has_model:
+            return
+        self.charge_drawn += load * self.simulation.dt
+        self.current = load
+        resistance = self._params_vector[BATTERY_INTERNAL_RESISTANCE]
+        self.voltage = self.open_circuit_voltage() - resistance * load
+        self._check_cutoff()
+
+
+    def _kernel_params(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The battery's arguments for `dynamics.rhs_motor_battery`."""
+        return self._params_vector, self._ocv_soc, self._ocv_voltage
+
+
+    def _end_step(
+        self, charge: float, motor_speeds: np.ndarray, u: np.ndarray,
+        motor_params: np.ndarray
+    ) -> float:
+        """
+        Update the battery after `Multirotor` integrated one time step.
+
+        Parameters
+        ----------
+        charge : float
+            Charge (C) drawn during the step.
+        motor_speeds : np.ndarray
+            Motor speeds at the end of the step.
+        u : np.ndarray
+            Speed signals during the step.
+        motor_params : np.ndarray
+            The `MotorData.params` matrix.
+
+        Returns
+        -------
+        float
+            The motors' voltage limit at the end of the step.
+        """
+        self.charge_drawn += charge
+        self.current = charge / self.simulation.dt
+        open_circuit_voltage = self.open_circuit_voltage()
+        if self.cutoff:
+            self.voltage = open_circuit_voltage
+            return 0.
+        self.voltage, _, ok = battery_operating_point(
+            motor_speeds, u, open_circuit_voltage,
+            self._params_vector[BATTERY_INTERNAL_RESISTANCE], motor_params)
+        self.overload = not ok
+        motor_voltage_limit = self.voltage
+        # The cutoff takes effect from the next step
+        self._check_cutoff()
+        return motor_voltage_limit
+
+
+    def _check_cutoff(self) -> None:
+        """Cut off the motors if the terminal voltage is below min_voltage."""
+        if self.voltage < self.params.min_voltage:
+            self.cutoff = True
 
 
 
@@ -470,10 +612,21 @@ class Multirotor:
         # The right-hand side used when forces are fixed over the step. Kept as
         # an attribute so it can be wrapped, e.g. for profiling.
         self._rhs_body = rhs_body
+        if self.params.battery is not None:
+            self.battery = Battery(self.params.battery, self.simulation)
+        else:
+            self.battery = Battery(BatteryParams(max_voltage=np.inf), self.simulation)
+        if self.battery.has_model and self._data.motors is None:
+            raise ValueError('A battery model needs motors to draw current.')
+        if self.battery.has_model and not self._data.use_thrust_constant:
+            raise ValueError('A battery model is not supported with blade-element thrust.')
         # With motors, motors and body are integrated together. The integrated
-        # state is the 12 body states followed by the motor speeds.
+        # state is the 12 body states followed by the motor speeds and, with a
+        # battery model, the charge drawn during the step.
         if self._data.motors is None:
             self._rhs = None
+        elif self.battery.has_model:
+            self._rhs = rhs_motor_battery
         elif self._data.use_thrust_constant:
             self._rhs = rhs_motor
         else:
@@ -491,11 +644,6 @@ class Multirotor:
         )
         if self._rhs is rhs_motor_blade_element:
             self._kernel_params += (float(self.simulation.rho),)
-
-        if self.params.battery is not None:
-            self.battery = Battery(self.params.battery, self.simulation)
-        else:
-            self.battery = Battery(BatteryParams(max_voltage=np.inf), self.simulation)
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
@@ -591,12 +739,34 @@ class Multirotor:
 
 
     @property
-    def current_average(self) -> float:
-        """Duty-cycle adjusted currrent draw from battery."""
-        peak_voltage = self.battery.params.max_voltage
+    def motor_currents(self) -> np.ndarray:
+        """
+        Current (A) drawn by each motor, on the motor side of its speed
+        controller. None if the vehicle has no motors.
+        """
+        if self._data.motors is None:
+            return None
+        return self._data.motors.current.copy()
+
+
+    @property
+    def battery_current(self) -> float:
+        """
+        Current (A) drawn from the battery, on the battery side of the speed
+        controllers, which are modeled as lossless.
+
+        With a battery model, the average over the last step. Without one, the
+        motors' power divided by ``BatteryParams.max_voltage``. NaN if the
+        vehicle has no motors, or has no battery model and an infinite
+        ``max_voltage``.
+        """
+        if self.battery.has_model:
+            return self.battery.current
         motors = self._data.motors
-        duty_cycle = motors.voltage / peak_voltage
-        return np.sum(duty_cycle * motors.current)
+        max_voltage = self.battery.params.max_voltage
+        if motors is None or not np.isfinite(max_voltage):
+            return np.nan
+        return np.sum(motors.current * motors.voltage) / max_voltage
 
 
     @property
@@ -613,7 +783,10 @@ class Multirotor:
         integrating the motors on their own, without changing their state.
         """
         motors = self._data.motors
-        args = (np.asarray(u, dtype=float), float(self.battery.voltage), motors.params)
+        args = (
+            np.asarray(u, dtype=float), float(self.battery.motor_voltage_limit),
+            motors.params
+        )
         return self.integrator(
             rhs_motor_only, motors.speed.copy(), self.simulation.dt, args)
 
@@ -629,15 +802,17 @@ class Multirotor:
         return self._motor_speeds_after_step(u)
 
 
-    def _set_motor_state(self, speed: np.ndarray, u: np.ndarray) -> None:
+    def _set_motor_state(
+        self, speed: np.ndarray, u: np.ndarray, max_voltage: float
+    ) -> None:
         """
         Set motor speeds, and the voltages and currents at those speeds under
-        speed signals ``u``.
+        speed signals ``u`` and voltage limit ``max_voltage``.
         """
         motors = self._data.motors
         motors.speed[:] = speed
         motors.voltage[:], motors.current[:] = motor_electrical(
-            motors.speed, np.asarray(u, dtype=float), float(self.battery.voltage),
+            motors.speed, np.asarray(u, dtype=float), float(max_voltage),
             motors.params)
 
 
@@ -649,7 +824,8 @@ class Multirotor:
         if self._data.motors is None:
             self._data.speed[:] = u
         else:
-            self._set_motor_state(self._motor_speeds_after_step(u), u)
+            self._set_motor_state(
+                self._motor_speeds_after_step(u), u, self.battery.motor_voltage_limit)
 
 
     def _thrusts(self, speeds: np.ndarray, airstream_velocities: np.ndarray) -> np.ndarray:
@@ -845,7 +1021,6 @@ class Multirotor:
             self._step_with_fixed_forces(u, disturb_forces, disturb_torques)
         else:
             self._step_with_varying_forces(u, disturb_forces, disturb_torques)
-        self.battery.step()
         return self.state
 
 
@@ -929,16 +1104,30 @@ class Multirotor:
             Disturbing x,y,z torques in the vehicle's local frame.
         """
         motors = self._data.motors
+        battery = self.battery
         u = np.asarray(u, dtype=float)
         disturbance = np.zeros(6)
         disturbance[:3] += disturb_forces
         disturbance[3:] += disturb_torques
-        args = (u, float(self.battery.voltage), disturbance) + self._kernel_params
         y0 = np.concatenate((self.state.astype(float), motors.speed))
+        if battery.has_model:
+            # One more state: the charge drawn during this step
+            y0 = np.append(y0, 0.)
+            args = (u, battery.cutoff, disturbance) + self._kernel_params \
+                   + battery._kernel_params() + (battery.charge_drawn,)
+        else:
+            args = (u, float(battery.motor_voltage_limit), disturbance) \
+                   + self._kernel_params
         self._dxdt = self._rhs(self.t, y0, *args)[:N_BODY_STATES].astype(self.dtype)
         y = self.integrator(self._rhs, y0, self.simulation.dt, args)
+
         self.state = y[:N_BODY_STATES].astype(self.dtype)
-        self._set_motor_state(y[N_BODY_STATES:], u)
+        motor_speeds = y[N_BODY_STATES:N_BODY_STATES + len(motors)]
+        if battery.has_model:
+            motor_voltage_limit = battery._end_step(y[-1], motor_speeds, u, motors.params)
+        else:
+            motor_voltage_limit = battery.motor_voltage_limit
+        self._set_motor_state(motor_speeds, u, motor_voltage_limit)
 
 
     def allocate_control(self, thrust: float, torques: np.ndarray) -> np.ndarray:

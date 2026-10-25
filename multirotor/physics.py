@@ -35,6 +35,12 @@ MOTOR_SPEED_VOLTAGE_SCALING = 6
 MOTOR_MAX_CURRENT = 7
 N_MOTOR_PARAMS = 8
 
+# Battery parameter vector (see `simulation.Battery`)
+BATTERY_CAPACITY = 0
+"Capacity in coulombs."
+BATTERY_INTERNAL_RESISTANCE = 1
+N_BATTERY_PARAMS = 2
+
 
 
 @njit
@@ -189,6 +195,148 @@ def motor_acc(
         drag = p[MOTOR_K_DRAG, i] * speed[i]**2
         acc[i] = (torque - friction - drag) / p[MOTOR_MOMENT_OF_INERTIA, i]
     return acc
+
+
+
+@njit
+def motor_power(
+    speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+) -> float:
+    """
+    Total electrical power (W) drawn by the motors.
+
+    Parameters
+    ----------
+    speed, u, max_voltage, motor_params
+        As in `motor_electrical`.
+
+    Returns
+    -------
+    float
+        The sum of each motor's voltage times its current.
+    """
+    voltage, current = motor_electrical(speed, u, max_voltage, motor_params)
+    return (voltage * current).sum()
+
+
+
+@njit
+def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> float:
+    """
+    Open-circuit voltage of the battery at a state of charge, interpolated
+    linearly from a table. Outside the table, the nearest end's voltage is used.
+
+    Parameters
+    ----------
+    soc : float
+        State of charge, from 0 (empty) to 1 (full).
+    ocv_soc : np.ndarray
+        States of charge of the table, increasing.
+    ocv_voltage : np.ndarray
+        Open-circuit voltage (V) at each ``ocv_soc``.
+
+    Returns
+    -------
+    float
+        The open-circuit voltage (V).
+    """
+    return np.interp(soc, ocv_soc, ocv_voltage)
+
+
+
+@njit
+def battery_terminal(
+    power: float, open_circuit_voltage: float, internal_resistance: float
+) -> Tuple[float, bool]:
+    """
+    Terminal voltage of a battery delivering ``power``, modeling the motors'
+    speed controllers as lossless.
+
+    The terminal voltage is ``V = V_oc - R * I`` with current ``I = P / V``, so
+    ``V = (V_oc + sqrt(V_oc**2 - 4 R P)) / 2``. If the battery can't deliver
+    the power (``V_oc**2 < 4 R P``), the voltage is clamped at ``V_oc / 2``,
+    where the battery delivers its maximum power.
+
+    Parameters
+    ----------
+    power : float
+        The power (W) drawn from the battery.
+    open_circuit_voltage : float
+        The open-circuit voltage (V).
+    internal_resistance : float
+        The battery's series resistance (ohm).
+
+    Returns
+    -------
+    Tuple[float, bool]
+        The terminal voltage (V), and whether the battery can deliver the power.
+    """
+    if internal_resistance == 0.:
+        return open_circuit_voltage, True
+    discriminant = open_circuit_voltage**2 - 4. * internal_resistance * power
+    if discriminant < 0.:
+        return 0.5 * open_circuit_voltage, False
+    return 0.5 * (open_circuit_voltage + np.sqrt(discriminant)), True
+
+
+
+@njit
+def battery_operating_point(
+    speed: np.ndarray, u: np.ndarray, open_circuit_voltage: float,
+    internal_resistance: float, motor_params: np.ndarray
+) -> Tuple[float, float, bool]:
+    """
+    Terminal voltage and power at which the battery and the motors agree: the
+    terminal voltage limits the motors' voltage, and the power the motors draw
+    sets the terminal voltage.
+
+    If no motor's voltage reaches the terminal voltage, the power doesn't
+    depend on it, and `battery_terminal` gives the answer directly. Otherwise
+    the terminal voltage is found by bisection on ``[0, V_oc]``. The bisection
+    always converges: a higher terminal voltage lets the motors draw more power,
+    which lowers the terminal voltage, so there is exactly one solution.
+
+    Parameters
+    ----------
+    speed : np.ndarray
+        Motor speeds (rad/s), shape (n,).
+    u : np.ndarray
+        Speed signals, shape (n,).
+    open_circuit_voltage : float
+        The open-circuit voltage (V).
+    internal_resistance : float
+        The battery's series resistance (ohm).
+    motor_params : np.ndarray
+        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+
+    Returns
+    -------
+    Tuple[float, float, bool]
+        The terminal voltage (V), the power (W) the motors draw, and whether the
+        battery can deliver that power.
+    """
+    v_oc = open_circuit_voltage
+    requested_voltage = motor_params[MOTOR_SPEED_VOLTAGE_SCALING] * u
+    # Power with motor voltages limited only by the open-circuit voltage
+    power = motor_power(speed, u, v_oc, motor_params)
+    terminal_voltage, ok = battery_terminal(power, v_oc, internal_resistance)
+    if requested_voltage.max() <= terminal_voltage:
+        return terminal_voltage, power, ok
+    # Some motors are limited by the terminal voltage. Find the voltage V at
+    # which V equals the terminal voltage for the power drawn at V.
+    low, high = 0., v_oc
+    while high - low > 1e-12 * v_oc:
+        middle = 0.5 * (low + high)
+        power = motor_power(speed, u, middle, motor_params)
+        terminal_voltage, ok = battery_terminal(power, v_oc, internal_resistance)
+        if middle < terminal_voltage:
+            low = middle
+        else:
+            high = middle
+    terminal_voltage = 0.5 * (low + high)
+    power = motor_power(speed, u, terminal_voltage, motor_params)
+    _, ok = battery_terminal(power, v_oc, internal_resistance)
+    return terminal_voltage, power, ok
 
 
 
