@@ -7,11 +7,12 @@ import numpy as np
 import pytest
 
 from multirotor.env import DynamicsMultirotorEnv, SpeedsMultirotorEnv
-from multirotor.helpers import DataLog
+from multirotor.helpers import DataLog, get_vehicle_ability
 from multirotor.optimize import get_controller
 from multirotor.simulation import Multirotor
 
 from common import atol_for, hover_signals, make_pair, make_params
+from legacy.helpers import get_vehicle_ability as legacy_get_vehicle_ability
 
 STEPS = 100
 
@@ -78,3 +79,13 @@ def test_controls_system_builds(motor):
     vehicle = Multirotor(vp, sp)
     sys = vehicle.nonlinear_speeds_controls_system()
     assert sys.nstates == 12
+
+
+
+def test_vehicle_ability_matches_oracle():
+    vp, sp = make_params(8, 'quadratic', False, dtype=np.float64)
+    vp.clockwise = vp.clockwise[::-1].copy()
+    new, old = get_vehicle_ability(vp, sp), legacy_get_vehicle_ability(vp, sp)
+    assert new.keys() == old.keys()
+    for key in new:
+        assert new[key] == old[key], key

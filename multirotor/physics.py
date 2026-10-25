@@ -162,55 +162,43 @@ def motor_step_explicit(
 
 
 @njit
-def torque(
-    position_vector: np.ndarray, force: np.ndarray,
-    moment_of_inertia: float, prop_angular_acceleration: float,
-    drag_coefficient: float, prop_angular_velocity: float,
-    clockwise: int
+def body_torques(
+    thrusts: np.ndarray, drag_torques: np.ndarray, clockwise: np.ndarray,
+    positions: np.ndarray
 ) -> np.ndarray:
     """
-    Calculates the torque acting on the three body axes (roll, pitch, yaw), due 
-    to a single propeller.
+    Torque on the three body axes (roll, pitch, yaw) due to each propeller.
+    Thrust acts along the body z-axis. The propeller's drag torque acts about
+    the z-axis, opposite to its direction of rotation.
 
     Parameters
     ----------
-    position_vector : np.ndarray
-        Position vector of force, relative to center of mass. If multiple vectors,
-        should be in shape 3 x n_vectors.
-    force : np.ndarray
-        Force vector acting at that position (nominally thrust). If multiple vectors,
-        should be in shape 3 x n_vectors.
-    moment_of_inertia : float
-        Moment of inertia of the body.
-    prop_angular_acceleration : float
-        Angular acceleration experienced by propeller.
-    drag_coefficient : float
-        The drag coefficient of propeller.
-    prop_angular_velocity : float
-        Propeller speed (rad/s)
-    clockwise : int
-        Whether propeller is spinning clockwise or counter clockwise.
+    thrusts : np.ndarray
+        Thrust (N) of each propeller, shape (n,).
+    drag_torques : np.ndarray
+        Magnitude of the drag torque (N m) of each propeller, shape (n,). For a
+        propeller, ``k_drag * speed**2``.
+    clockwise : np.ndarray
+        1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
+    positions : np.ndarray
+        Position of each propeller relative to the center of mass, shape (3, n).
 
     Returns
     -------
     np.ndarray
-        The torque due to the propeller acting on the center of mass.
+        Torque of each propeller, shape (3, n), in the data type of ``thrusts``.
     """
     # TODO: See here
     # https://andrew.gibiansky.com/downloads/pdf/Quadcopter%20Dynamics,%20Simulation,%20and%20Control.pdf
-    # Total moments in the body frame
-    # yaw moments
-    # tau = I . d omega/dt
-    tau_rot = (
-        # angular acceleration of propellers is assumed to be negligible
-        # clockwise * moment_of_inertia * prop_angular_acceleration + 
-        clockwise * drag_coefficient * prop_angular_velocity**2
-    )
-    # tau = r x F
-    # numba does not support axis arguments for cross(), so taking transpose and
-    # then undoing it for result:
-    tau = np.cross(position_vector.T, force.T).T
-    tau[2] = tau[2] + tau_rot
+    # Angular acceleration of propellers is assumed to be negligible, so it
+    # contributes no torque.
+    n = thrusts.shape[0]
+    tau = np.empty((3, n), dtype=thrusts.dtype)
+    for i in range(n):
+        # tau = r x F, with F = (0, 0, thrust)
+        tau[0, i] = positions[1, i] * thrusts[i]
+        tau[1, i] = -(positions[0, i] * thrusts[i])
+        tau[2, i] = clockwise[i] * drag_torques[i]
     return tau
 
 

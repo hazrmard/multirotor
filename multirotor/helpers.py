@@ -5,7 +5,7 @@ import numpy as np
 from scipy.optimize import fsolve
 
 from .vehicle import PropellerParams, VehicleParams, SimulationParams
-from .physics import torque
+from .physics import body_torques
 
 
 
@@ -251,15 +251,11 @@ def get_vehicle_ability(
     # excessive thrust (above weight) that can contribute to torque
     thrust_vec[2] = np.asarray(thrusts) - (vp.mass * sp.g / n)
     k_drag_vec = np.asarray([p.k_drag for p in vp.propellers])
-    inertia_vec = np.asarray([p.moment_of_inertia for p in vp.propellers])
-    torques = torque(
-        position_vector=vp.propeller_vectors,
-        force=thrust_vec,
+    torques = body_torques(
+        thrusts=thrust_vec[2],
+        drag_torques=k_drag_vec * max_rads**2,
         clockwise=np.asarray(vp.clockwise).astype(float),
-        drag_coefficient=k_drag_vec,
-        moment_of_inertia=inertia_vec,
-        prop_angular_acceleration=0,
-        prop_angular_velocity=max_rads
+        positions=vp.propeller_vectors
     )
     torques = (torques * (torques > 0)).sum(axis=1)
     I = vp.inertia_matrix.diagonal()

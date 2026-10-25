@@ -88,3 +88,24 @@ def test_apply_speed_and_dxdt_are_pure(motor):
         new.dxdt_speeds(0., new.state, u)
         new.get_forces_torques(u, new.state)
     assert_snapshots_close(snapshot(new), before, 0., 'after pure calls')
+
+
+
+@pytest.mark.parametrize('excite', (True, False), ids=('excited', 'hover'))
+@pytest.mark.parametrize('dtype', DTYPES, ids=lambda d: d.__name__)
+@pytest.mark.parametrize('n', (4, 6, 8))
+def test_fixed_forces_path_is_bit_identical(n, dtype, excite):
+    # Vehicles without motors and with quadratic thrust calculate forces once
+    # per step. Their trajectories must equal the oracle's exactly.
+    vp, sp = make_params(n, 'quadratic', False, dtype)
+    new, old = make_pair(n, 'quadratic', False, dtype)
+    assert new._forces_fixed_over_step
+    speed = nominal_speed(vp, sp)
+    for v in (new, old):
+        settle_at_hover(v, speed)
+    hover = hover_signals(vp, sp)
+    us = schedule(hover, 0.05, N_SCHEDULE) if excite else np.tile(hover, (N_SCHEDULE, 1))
+    for i in range(200):
+        u = us[i % N_SCHEDULE]
+        np.testing.assert_array_equal(new.step_speeds(u), old.step_speeds(u), err_msg=f'step {i}')
+        np.testing.assert_array_equal(new.acceleration, old.acceleration, err_msg=f'step {i}')

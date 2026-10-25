@@ -334,7 +334,7 @@ Remaining details:
   into Python.
 * `model` exclusive time is the jitted kernel plus rounding. `forces_torques` is a
   child of `model`.
-* Jitted functions (`body_derivative`, `torque`) cannot be wrapped. Their time
+* Jitted functions (`body_derivative`, `body_torques`) cannot be wrapped. Their time
   stays in the exclusive time of the calling scope.
 * `Multirotor.integrator` exists since the injectable-integrator change. On earlier
   commits the point is skipped, the `integrator` scope is absent and `skipped` lists

@@ -7,10 +7,11 @@ from scipy.integrate import odeint
 from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams, BatteryParams
 from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from .physics import (
-    thrust, thrusts_physics, torque, body_derivative, motor_step_explicit,
+    thrust, thrusts_physics, body_torques, motor_step_explicit,
     PROP_K_THRUST, PROP_K_DRAG
 )
 from .data import MotorData, PropellerData
+from .dynamics import rhs_body
 from .helpers import control_allocation_matrix
 
 
@@ -425,6 +426,14 @@ class Multirotor:
             Propeller._view(self._data, i, params, self.simulation)
             for i, params in enumerate(self.params.propellers)
         ]
+        # Without motors, propeller speed equals the speed signal, which is
+        # fixed over a time step. With thrust = k_thrust * speed**2, forces and
+        # torques then don't depend on the vehicle's state during the step.
+        self._forces_fixed_over_step = \
+            self._data.motors is None and self._data.use_thrust_constant
+        # The right-hand side used when forces are fixed over the step. Kept as
+        # an attribute so it can be wrapped, e.g. for profiling.
+        self._rhs_body = rhs_body
 
         if self.params.battery is not None:
             self.battery = Battery(self.params.battery, self.simulation)
@@ -457,6 +466,10 @@ class Multirotor:
         self.params.inertia_matrix = self.params.inertia_matrix.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self._clockwise = np.asarray(self.params.clockwise)
+        self._body_params = (
+            self.simulation.g, self.params.mass,
+            self.params.inertia_matrix, self.params.inertia_matrix_inverse
+        )
         self.state = np.zeros(12, dtype=self.dtype)
         self._dxdt = np.zeros_like(self.state)
         return self.state
@@ -628,20 +641,12 @@ class Multirotor:
             angular_vel_body)
 
         speeds = self._apply_speeds(speeds)
-        thrust_vec = np.zeros((3, len(self.propellers)), dtype=self.dtype)
-        thrust_vec[2] = self._thrusts(speeds, airstream_velocity_inertial)
-        # Propeller angular acceleration does not contribute to torque (see
-        # `physics.torque`), so 0 is passed for it and for the moment of inertia.
-        torque_vec = torque(
-            self.params.propeller_vectors, thrust_vec,
-            0., 0.,
-            self._data.params[PROP_K_DRAG], speeds,
-            self._clockwise
-        )
-        # torque() returns a transposed array. Summing a C-contiguous copy adds
-        # the propellers' torques in the same order as before vectorization.
-        torque_vec = np.ascontiguousarray(torque_vec)
-        forces = thrust_vec.sum(axis=1)
+        thrusts = self._thrusts(speeds, airstream_velocity_inertial).astype(self.dtype)
+        drag_torques = self._data.params[PROP_K_DRAG] * speeds**2
+        torque_vec = body_torques(
+            thrusts, drag_torques, self._clockwise, self.params.propeller_vectors)
+        forces = np.zeros(3, dtype=self.dtype)
+        forces[2] = thrusts.sum()
         torques = torque_vec.sum(axis=1)
         return forces, torques
 
@@ -671,10 +676,8 @@ class Multirotor:
         # Do not need to get forces/torques on body, since the action array
         # already is a 6d vector of forces/torques.
         # forces, torques = self.get_forces_torques(u, x)
-        dxdt = body_derivative(
-            u[:3], u[3:], x.astype(self.dtype), self.simulation.g,
-            self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        return np.around(dxdt, self.dxdt_decimals)
+        return rhs_body(
+            t, x, u[:3], u[3:], self._body_params, self.dtype, self.dxdt_decimals)
 
 
     def dxdt_speeds(
@@ -706,14 +709,10 @@ class Multirotor:
         # This method must not have any side-effects. It should not change the
         # state of the vehicle. This method is called multiple times from the 
         # same state by the odeint() function, and the results should be consistent.
-        forces, torques = self.get_forces_torques(
-            u, x)
-        # print('dxdt-x', self.t // self.simulation.dt, x.dtype)
-        dxdt = body_derivative(
-            forces+disturb_forces, torques+disturb_torques, x.astype(self.dtype), self.simulation.g,
-            self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
-        # print('dxdt', self.t // self.simulation.dt, dxdt.dtype)
-        return np.around(dxdt, self.dxdt_decimals)
+        forces, torques = self.get_forces_torques(u, x)
+        return rhs_body(
+            t, x, forces + disturb_forces, torques + disturb_torques,
+            self._body_params, self.dtype, self.dxdt_decimals)
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -733,9 +732,10 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
-        self._dxdt = self.dxdt_dynamics(t=self.t, x=self.state, u=u)
+        args = (u[:3], u[3:], self._body_params, self.dtype, self.dxdt_decimals)
+        self._dxdt = self._rhs_body(self.t, self.state, *args)
         self.state = self.integrator(
-            self.dxdt_dynamics, self.state, self.simulation.dt, (u,)
+            self._rhs_body, self.state, self.simulation.dt, args
         )
         self.state = np.around(self.state, 4).astype(self.dtype)
         # TODO: inverse solve for speed = forces to set propeller speeds
@@ -767,15 +767,28 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
-        self._dxdt = self.dxdt_speeds(
-            t=self.t, x=self.state, u=u,
-            disturb_forces=disturb_forces, disturb_torques=disturb_torques
-        )
-        # print('pre-x', self.t // self.simulation.dt, self.state.dtype)
-        self.state = self.integrator(
-            self.dxdt_speeds, self.state, self.simulation.dt,
-            (u, disturb_forces, disturb_torques)
-        )
+        if self._forces_fixed_over_step:
+            # Forces and torques depend only on the speed signals, which are
+            # fixed over the step, so they are calculated once instead of at
+            # every evaluation of the derivative.
+            forces, torques = self.get_forces_torques(u, self.state)
+            args = (
+                forces + disturb_forces, torques + disturb_torques,
+                self._body_params, self.dtype, self.dxdt_decimals
+            )
+            self._dxdt = self._rhs_body(self.t, self.state, *args)
+            self.state = self.integrator(
+                self._rhs_body, self.state, self.simulation.dt, args
+            )
+        else:
+            self._dxdt = self.dxdt_speeds(
+                t=self.t, x=self.state, u=u,
+                disturb_forces=disturb_forces, disturb_torques=disturb_torques
+            )
+            self.state = self.integrator(
+                self.dxdt_speeds, self.state, self.simulation.dt,
+                (u, disturb_forces, disturb_torques)
+            )
         self.state = np.around(self.state, 4).astype(self.dtype)
         # print('post-x', self.t // self.simulation.dt, self.state.dtype)
         self._step_propellers(u)

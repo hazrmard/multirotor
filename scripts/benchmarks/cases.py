@@ -133,14 +133,15 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
 def vehicle_points(v: Multirotor) -> List[ScopePoint]:
     """Scope points for a vehicle: its step methods, integrator, model and propellers.
 
-    ``dxdt_speeds`` and ``dxdt_dynamics`` both become the scope ``model``; only the
-    one the case calls records anything.
+    ``dxdt_speeds``, ``dxdt_dynamics`` and ``_rhs_body`` all become the scope
+    ``model``; only the ones the case calls record anything.
     """
     pts = [ScopePoint(Level.COARSE, v, 'step_speeds', 'step_speeds'),
            ScopePoint(Level.COARSE, v, 'step_dynamics', 'step_dynamics'),
            ScopePoint(Level.FINE, v, 'integrator', 'integrator'),
            ScopePoint(Level.FINE, v, 'dxdt_speeds', 'model'),
            ScopePoint(Level.FINE, v, 'dxdt_dynamics', 'model'),
+           ScopePoint(Level.FINE, v, '_rhs_body', 'model'),
            ScopePoint(Level.FINE, v, 'get_forces_torques', 'forces_torques')]
     pts.append(ScopePoint(Level.FINE, v, '_step_propellers', 'propeller'))
     return pts
