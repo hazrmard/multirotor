@@ -151,6 +151,28 @@ def atol_for(dtype: type) -> float:
 
 
 
+def tolerances(dtype: type, motor: bool=False) -> Tuple[float, float]:
+    """
+    Relative and absolute tolerance for comparing a current and a legacy
+    vehicle.
+
+    The legacy motor computed its voltage as a Python float times a float32
+    speed signal, which numpy evaluates in float32. The vectorized motor update
+    computes in float64, so float32 vehicles with motors differ by float32
+    rounding: motor speeds by up to about 1e-6 relative over 64 steps. The
+    vehicle state is unaffected, since it is rounded to 4 decimals.
+
+    Returns
+    -------
+    Tuple[float, float]
+        ``(rtol, atol)``
+    """
+    if dtype == np.float32 and motor:
+        return 1e-5, 1e-4
+    return 0., atol_for(dtype)
+
+
+
 def snapshot(vehicle) -> dict:
     """
     The observable state of a current or legacy vehicle, as arrays.
@@ -169,11 +191,13 @@ def snapshot(vehicle) -> dict:
 
 
 
-def assert_snapshots_close(new: dict, old: dict, atol: float, context: str='') -> None:
+def assert_snapshots_close(
+    new: dict, old: dict, atol: float, context: str='', rtol: float=0.
+) -> None:
     """
-    Assert that two `snapshot` results match within ``atol``.
+    Assert that two `snapshot` results match within ``atol`` and ``rtol``.
     """
     assert new.keys() == old.keys(), context
     for key in new:
         np.testing.assert_allclose(
-            new[key], old[key], rtol=0, atol=atol, err_msg=f'{context}: {key}')
+            new[key], old[key], rtol=rtol, atol=atol, err_msg=f'{context}: {key}')

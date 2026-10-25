@@ -142,7 +142,7 @@ def vehicle_points(v: Multirotor) -> List[ScopePoint]:
            ScopePoint(Level.FINE, v, 'dxdt_speeds', 'model'),
            ScopePoint(Level.FINE, v, 'dxdt_dynamics', 'model'),
            ScopePoint(Level.FINE, v, 'get_forces_torques', 'forces_torques')]
-    pts += [ScopePoint(Level.FINE, p, 'step', 'propeller') for p in v.propellers]
+    pts.append(ScopePoint(Level.FINE, v, '_step_propellers', 'propeller'))
     return pts
 
 

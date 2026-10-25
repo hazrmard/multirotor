@@ -6,6 +6,37 @@ from scipy.optimize import fsolve
 
 
 
+# Row indices of the parameter matrices in `multirotor.data`. Each matrix has
+# one column per propeller. Kernels index rows with these constants, which numba
+# treats as compile-time constants.
+
+# PropellerData.params
+PROP_K_THRUST = 0
+PROP_K_DRAG = 1
+PROP_MOMENT_OF_INERTIA = 2
+PROP_RADIUS = 3
+PROP_AREA = 4
+PROP_LIFT_SLOPE = 5
+PROP_BLADES = 6
+PROP_CHORD = 7
+PROP_EFFICIENCY = 8
+PROP_THETA0 = 9
+PROP_THETA1 = 10
+N_PROP_PARAMS = 11
+
+# MotorData.params
+MOTOR_RESISTANCE = 0
+MOTOR_K_EMF = 1
+MOTOR_K_TORQUE = 2
+MOTOR_K_DF = 3
+MOTOR_K_DRAG = 4
+MOTOR_MOMENT_OF_INERTIA = 5
+MOTOR_SPEED_VOLTAGE_SCALING = 6
+MOTOR_MAX_CURRENT = 7
+N_MOTOR_PARAMS = 8
+
+
+
 @njit
 def thrustEqn(vi, *prop_params):
     R,A,rho,a,b,c,eta,theta0,theta1,u,v,w,Omega = prop_params
@@ -45,6 +76,88 @@ def thrust(
     vprime = np.sqrt(u**2 + v**2 + (w - vi)**2)
     thrust = eta * 2 * vi * rho * A * vprime
     return thrust
+
+
+
+def thrusts_physics(
+    speeds: np.ndarray, airstream_velocities: np.ndarray, prop_params: np.ndarray,
+    rho: float
+) -> np.ndarray:
+    """
+    Thrust of each propeller from the blade-element model, by solving `thrust`
+    for each propeller in turn.
+
+    Parameters
+    ----------
+    speeds : np.ndarray
+        Propeller speeds (rad/s), shape (n,).
+    airstream_velocities : np.ndarray
+        Airstream velocity at each propeller, shape (3, n).
+    prop_params : np.ndarray
+        The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    rho : float
+        Air density (kg/m^3).
+
+    Returns
+    -------
+    np.ndarray
+        The thrust (N) of each propeller, shape (n,).
+    """
+    p = prop_params
+    thrusts = np.zeros(len(speeds))
+    for i in range(len(speeds)):
+        thrusts[i] = thrust(
+            speeds[i], airstream_velocities[:, i],
+            p[PROP_RADIUS, i], p[PROP_AREA, i], rho, p[PROP_LIFT_SLOPE, i],
+            p[PROP_BLADES, i], p[PROP_CHORD, i], p[PROP_EFFICIENCY, i],
+            p[PROP_THETA0, i], p[PROP_THETA1, i]
+        )
+    return thrusts
+
+
+
+def motor_step_explicit(
+    speed: np.ndarray, last_acc: np.ndarray, u: np.ndarray, max_voltage: float,
+    motor_params: np.ndarray, dt: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Advance motors by one time step with an explicit two-point update: the
+    acceleration is computed from the speed at the start of the step and
+    averaged with the previous step's acceleration.
+
+    Parameters
+    ----------
+    speed : np.ndarray
+        Motor speeds (rad/s) at the start of the step, shape (n,).
+    last_acc : np.ndarray
+        Motor angular accelerations from the previous step, shape (n,).
+    u : np.ndarray
+        Speed signals, shape (n,).
+    max_voltage : float
+        The maximum voltage the power source can supply.
+    motor_params : np.ndarray
+        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    dt : float
+        The time step.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        The new speeds, voltages, currents and angular accelerations.
+    """
+    p = motor_params
+    voltage = np.clip(p[MOTOR_SPEED_VOLTAGE_SCALING] * u, 0, max_voltage)
+    current = np.clip(
+        (voltage - speed * p[MOTOR_K_EMF]) / p[MOTOR_RESISTANCE],
+        0, p[MOTOR_MAX_CURRENT]
+    )
+    torque = p[MOTOR_K_TORQUE] * current
+    # Subtract drag torque and dynamic friction from electrical torque
+    net_torque = torque - p[MOTOR_K_DF] * speed - p[MOTOR_K_DRAG] * speed**2
+    acc = net_torque / p[MOTOR_MOMENT_OF_INERTIA]
+    # Trapezoidal average of the last and the current acceleration
+    new_speed = speed + dt * (last_acc + acc) / 2.0
+    return new_speed, voltage, current, acc
 
 
 
@@ -103,7 +216,7 @@ def torque(
 
 
 # @njit
-def _apply_forces_torques(
+def _body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
@@ -187,4 +300,4 @@ def _apply_forces_torques(
     return xdot
 
 
-apply_forces_torques = njit(_apply_forces_torques)
+body_derivative = njit(_body_derivative)

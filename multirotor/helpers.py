@@ -362,7 +362,7 @@ class DataLog:
         """
         self._arrayed = False
         if self.vehicle is not None:
-            self._states.append(self.vehicle.state)
+            self._states.append(np.copy(self.vehicle.state))
             self._times.append(self.vehicle.t)
         if self.controller is not None:
             self._actions.append(self.controller.action)

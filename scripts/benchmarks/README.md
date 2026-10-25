@@ -57,7 +57,7 @@ flowchart TD
     loop --> logdone["log_done<br/>DataLog.done_logging"]
     step --> m1["model: 1 call<br/>dxdt_speeds"]
     step --> integ["integrator<br/>Multirotor.integrator"]
-    step --> prop["propeller: 1 call per rotor<br/>Propeller.step"]
+    step --> prop["propeller: 1 call<br/>Multirotor._step_propellers"]
     m1 --> ft1["forces_torques<br/>get_forces_torques"]
     integ --> m2["model: evals_per_step calls<br/>dxdt_speeds"]
     m2 --> ft2["forces_torques<br/>get_forces_torques"]
@@ -319,7 +319,7 @@ misspelled attribute names.
 | `integrator` | `Multirotor.integrator` | one solver call |
 | `model` | `Multirotor.dxdt_speeds`, `Multirotor.dxdt_dynamics` | one model evaluation |
 | `forces_torques` | `Multirotor.get_forces_torques` | per-rotor forces and torques |
-| `propeller` | `Propeller.step` | one rotor |
+| `propeller` | `Multirotor._step_propellers` | all rotors, after integration |
 | `log`, `log_done` | `DataLog.log`, `DataLog.done_logging` | |
 
 Within `step_speeds` and `step_dynamics`, the model has two paths:
@@ -334,7 +334,7 @@ Remaining details:
   into Python.
 * `model` exclusive time is the jitted kernel plus rounding. `forces_torques` is a
   child of `model`.
-* Jitted functions (`apply_forces_torques`, `torque`) cannot be wrapped. Their time
+* Jitted functions (`body_derivative`, `torque`) cannot be wrapped. Their time
   stays in the exclusive time of the calling scope.
 * `Multirotor.integrator` exists since the injectable-integrator change. On earlier
   commits the point is skipped, the `integrator` scope is absent and `skipped` lists
