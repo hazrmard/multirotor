@@ -22,15 +22,15 @@ from .helpers import control_allocation_matrix
 
 Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
 """
-A solver for one simulation step: ``integrator(fun, y0, dt, args) -> y``.
+A solver for one simulation step: ``integrator(fun, x0, dt, args) -> x``.
 
-Advances the initial state ``y0`` from ``t=0`` to ``t=dt`` under
-``dy/dt = fun(t, y, *args)`` and returns the state at ``t=dt``.
+Advances the initial state ``x0`` from ``t=0`` to ``t=dt`` under
+``dx/dt = fun(t, x, *args)`` and returns the state at ``t=dt``.
 """
 
 
 def odeint_integrator(
-    fun: Callable, y0: np.ndarray, dt: float, args: tuple = ()
+    fun: Callable, x0: np.ndarray, dt: float, args: tuple = ()
 ) -> np.ndarray:
     """
     The default :data:`Integrator`: LSODA via `scipy.integrate.odeint`.
@@ -38,8 +38,8 @@ def odeint_integrator(
     Parameters
     ----------
     fun : Callable
-        The derivative function, with signature ``fun(t, y, *args)``.
-    y0 : np.ndarray
+        The derivative function, with signature ``fun(t, x, *args)``.
+    x0 : np.ndarray
         The state at the start of the step.
     dt : float
         The step duration.
@@ -51,7 +51,7 @@ def odeint_integrator(
     np.ndarray
         The state at the end of the step.
     """
-    return odeint(fun, y0, (0, dt), args=args, rtol=1e-4, atol=1e-4, tfirst=True)[-1]
+    return odeint(fun, x0, (0, dt), args=args, rtol=1e-4, atol=1e-4, tfirst=True)[-1]
 
 
 
@@ -1109,22 +1109,22 @@ class Multirotor:
         disturbance = np.zeros(6)
         disturbance[:3] += disturb_forces
         disturbance[3:] += disturb_torques
-        y0 = np.concatenate((self.state.astype(float), motors.speed))
+        x0 = np.concatenate((self.state.astype(float), motors.speed))
         if battery.has_model:
             # One more state: the charge drawn during this step
-            y0 = np.append(y0, 0.)
+            x0 = np.append(x0, 0.)
             args = (u, battery.cutoff, disturbance) + self._kernel_params \
                    + battery._kernel_params() + (battery.charge_drawn,)
         else:
             args = (u, float(battery.motor_voltage_limit), disturbance) \
                    + self._kernel_params
-        self._dxdt = self._rhs(self.t, y0, *args)[:N_BODY_STATES].astype(self.dtype)
-        y = self.integrator(self._rhs, y0, self.simulation.dt, args)
+        self._dxdt = self._rhs(self.t, x0, *args)[:N_BODY_STATES].astype(self.dtype)
+        x = self.integrator(self._rhs, x0, self.simulation.dt, args)
 
-        self.state = y[:N_BODY_STATES].astype(self.dtype)
-        motor_speeds = y[N_BODY_STATES:N_BODY_STATES + len(motors)]
+        self.state = x[:N_BODY_STATES].astype(self.dtype)
+        motor_speeds = x[N_BODY_STATES:N_BODY_STATES + len(motors)]
         if battery.has_model:
-            motor_voltage_limit = battery._end_step(y[-1], motor_speeds, u, motors.params)
+            motor_voltage_limit = battery._end_step(x[-1], motor_speeds, u, motors.params)
         else:
             motor_voltage_limit = battery.motor_voltage_limit
         self._set_motor_state(motor_speeds, u, motor_voltage_limit)

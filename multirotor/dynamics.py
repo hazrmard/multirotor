@@ -1,9 +1,9 @@
 """
 Right-hand sides of the vehicle's equations of motion, one per vehicle
-configuration. Each function has an integrator's signature ``(t, y, *args)`` and
-returns ``dy/dt`` for the whole integrated state ``y``.
+configuration. Each function has an integrator's signature ``(t, x, *args)`` and
+returns ``dx/dt`` for the whole integrated state ``x``.
 
-This module is the only code that knows the layout of ``y``. It slices ``y``,
+This module is the only code that knows the layout of ``x``. It slices ``x``,
 calls the subsystem equations in `multirotor.physics`, and stacks their results.
 """
 from typing import Tuple
@@ -98,7 +98,7 @@ def rhs_motor_only(
 
 @njit
 def rhs_motor(
-    t: float, y: np.ndarray, u: np.ndarray, max_voltage: float,
+    t: float, x: np.ndarray, u: np.ndarray, max_voltage: float,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray
@@ -108,14 +108,14 @@ def rhs_motor(
     thrust is ``k_thrust * speed**2``. Motors and body evolve together: forces
     at each evaluation come from the motor speeds at that instant.
 
-    The integrated state ``y`` is the 12 body states followed by the ``n``
+    The integrated state ``x`` is the 12 body states followed by the ``n``
     motor speeds.
 
     Parameters
     ----------
     t : float
         Time. The equations are time invariant.
-    y : np.ndarray
+    x : np.ndarray
         The integrated state, shape (12 + n,).
     u : np.ndarray
         Speed signals, shape (n,).
@@ -143,17 +143,17 @@ def rhs_motor(
     Returns
     -------
     np.ndarray
-        The rate of change of ``y``.
+        The rate of change of ``x``.
     """
-    x = y[:N_BODY_STATES]
-    speeds = y[N_BODY_STATES:]
+    body_state = x[:N_BODY_STATES]
+    speeds = x[N_BODY_STATES:]
     forces, torques = forces_torques(speeds, prop_params, clockwise, positions)
-    dydt = np.empty_like(y)
-    dydt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], x, g, mass,
+    dxdt = np.empty_like(x)
+    dxdt[:N_BODY_STATES] = body_derivative(
+        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
         inertia_matrix, inertia_matrix_inverse)
-    dydt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
-    return dydt
+    dxdt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
+    return dxdt
 
 
 
@@ -206,7 +206,7 @@ def battery_state(
 
 @njit
 def rhs_motor_battery(
-    t: float, y: np.ndarray, u: np.ndarray, cutoff: bool,
+    t: float, x: np.ndarray, u: np.ndarray, cutoff: bool,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
@@ -218,13 +218,13 @@ def rhs_motor_battery(
     limits the motors' voltage, and sags with the current they draw and as the
     battery discharges.
 
-    The integrated state ``y`` is the 12 body states, the ``n`` motor speeds,
+    The integrated state ``x`` is the 12 body states, the ``n`` motor speeds,
     and the charge (C) drawn from the battery during the current time step.
 
     Parameters
     ----------
-    t, y, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `rhs_motor`. ``y`` has one more element: the charge drawn during
+    t, x, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
+        As in `rhs_motor`. ``x`` has one more element: the charge drawn during
         the step.
     cutoff : bool
         Whether the battery has cut off the motors (their voltage is zero).
@@ -236,29 +236,29 @@ def rhs_motor_battery(
     Returns
     -------
     np.ndarray
-        The rate of change of ``y``.
+        The rate of change of ``x``.
     """
     n = u.shape[0]
-    x = y[:N_BODY_STATES]
-    speeds = y[N_BODY_STATES:N_BODY_STATES + n]
-    charge = charge_drawn + y[N_BODY_STATES + n]
+    body_state = x[:N_BODY_STATES]
+    speeds = x[N_BODY_STATES:N_BODY_STATES + n]
+    charge = charge_drawn + x[N_BODY_STATES + n]
     _, battery_current, motor_voltage_limit = battery_state(
         speeds, u, charge, cutoff, motor_params, battery_params, ocv_soc,
         ocv_voltage)
     forces, torques = forces_torques(speeds, prop_params, clockwise, positions)
-    dydt = np.empty_like(y)
-    dydt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], x, g, mass,
+    dxdt = np.empty_like(x)
+    dxdt[:N_BODY_STATES] = body_derivative(
+        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
         inertia_matrix, inertia_matrix_inverse)
-    dydt[N_BODY_STATES:N_BODY_STATES + n] = motor_acc(
+    dxdt[N_BODY_STATES:N_BODY_STATES + n] = motor_acc(
         speeds, u, motor_voltage_limit, motor_params)
-    dydt[N_BODY_STATES + n] = battery_current
-    return dydt
+    dxdt[N_BODY_STATES + n] = battery_current
+    return dxdt
 
 
 
 def rhs_motor_blade_element(
-    t: float, y: np.ndarray, u: np.ndarray, max_voltage: float,
+    t: float, x: np.ndarray, u: np.ndarray, max_voltage: float,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
@@ -272,7 +272,7 @@ def rhs_motor_blade_element(
 
     Parameters
     ----------
-    t, y, u, max_voltage, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
+    t, x, u, max_voltage, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
         As in `rhs_motor`.
     rho : float
         Air density (kg/m^3).
@@ -280,19 +280,20 @@ def rhs_motor_blade_element(
     Returns
     -------
     np.ndarray
-        The rate of change of ``y``.
+        The rate of change of ``x``.
     """
-    x = y[:N_BODY_STATES]
-    speeds = y[N_BODY_STATES:]
+    body_state = x[:N_BODY_STATES]
+    speeds = x[N_BODY_STATES:]
     # Same airstream inputs as `Multirotor.get_forces_torques`.
-    airstream_velocities = rotating_frame_derivative(positions, x[:3], x[3:6])
+    airstream_velocities = rotating_frame_derivative(
+        positions, body_state[:3], body_state[3:6])
     thrusts = thrusts_physics(speeds, airstream_velocities, prop_params, rho)
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
     torques = body_torques(thrusts, drag_torques, clockwise, positions)
     forces = np.asarray([0., 0., thrusts.sum()])
-    dydt = np.empty_like(y)
-    dydt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], x, g, mass,
+    dxdt = np.empty_like(x)
+    dxdt[:N_BODY_STATES] = body_derivative(
+        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
         inertia_matrix, inertia_matrix_inverse)
-    dydt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
-    return dydt
+    dxdt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
+    return dxdt

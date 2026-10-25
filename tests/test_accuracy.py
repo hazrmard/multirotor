@@ -40,14 +40,14 @@ def reference_trajectory(vehicle: Multirotor, us: np.ndarray) -> np.ndarray:
     np.ndarray
         The body states and motor speeds after each step, shape (steps, 12 + n).
     """
-    y = np.concatenate((vehicle.state.astype(float), vehicle._data.motors.speed))
+    x = np.concatenate((vehicle.state.astype(float), vehicle._data.motors.speed))
     out = []
     for u in us:
         args = (np.asarray(u, float), float(vehicle.battery.voltage), np.zeros(6)) \
                + vehicle._kernel_params
-        y = odeint(vehicle._rhs, y, (0, vehicle.simulation.dt), args=args,
+        x = odeint(vehicle._rhs, x, (0, vehicle.simulation.dt), args=args,
                    rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
-        out.append(y)
+        out.append(x)
     return np.asarray(out)
 
 
@@ -90,13 +90,13 @@ def test_body_equations_match_oracle():
     oracle.dxdt_decimals = 12
     rng = np.random.default_rng(0)
     for _ in range(10):
-        x = rng.uniform(-0.5, 0.5, 12)
+        body_state = rng.uniform(-0.5, 0.5, 12)
         speeds = nominal_speed(vp, sp) * rng.uniform(0.8, 1.2, 8)
-        y = np.concatenate((x, speeds))
+        x = np.concatenate((body_state, speeds))
         args = (speeds, np.inf, np.zeros(6)) + vehicle._kernel_params
-        dydt = vehicle._rhs(0., y, *args)
+        dxdt = vehicle._rhs(0., x, *args)
         np.testing.assert_allclose(
-            dydt[:N_BODY_STATES], oracle.dxdt_speeds(0., x, speeds), rtol=0, atol=1e-12)
+            dxdt[:N_BODY_STATES], oracle.dxdt_speeds(0., body_state, speeds), rtol=0, atol=1e-12)
 
 
 
