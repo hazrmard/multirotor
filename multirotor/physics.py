@@ -346,9 +346,9 @@ def body_torques(
     positions: np.ndarray
 ) -> np.ndarray:
     """
-    Torque on the three body axes (roll, pitch, yaw) due to each propeller.
-    Thrust acts along the body z-axis. The propeller's drag torque acts about
-    the z-axis, opposite to its direction of rotation.
+    Total torque on the three body axes (roll, pitch, yaw) due to the
+    propellers' loads. Thrust acts along the body z-axis. Each propeller's drag
+    torque acts about the z-axis, opposite to its direction of rotation.
 
     Parameters
     ----------
@@ -365,20 +365,21 @@ def body_torques(
     Returns
     -------
     np.ndarray
-        Torque of each propeller, shape (3, n), in the data type of ``thrusts``.
+        The torque (N m) on the body, shape (3,).
     """
     # TODO: See here
     # https://andrew.gibiansky.com/downloads/pdf/Quadcopter%20Dynamics,%20Simulation,%20and%20Control.pdf
     # Angular acceleration of propellers is assumed to be negligible, so it
     # contributes no torque.
-    n = thrusts.shape[0]
-    tau = np.empty((3, n), dtype=thrusts.dtype)
-    for i in range(n):
-        # tau = r x F, with F = (0, 0, thrust)
-        tau[0, i] = positions[1, i] * thrusts[i]
-        tau[1, i] = -(positions[0, i] * thrusts[i])
-        tau[2, i] = clockwise[i] * drag_torques[i]
-    return tau
+    torque = np.zeros(3)
+    for i in range(thrusts.shape[0]):
+        # tau = r x F. Thrust acts only along the body z-axis, F = (0, 0, thrust),
+        # so the cross product reduces to these two terms. Propellers tilted away
+        # from the z-axis would need the full cross product.
+        torque[0] += positions[1, i] * thrusts[i]
+        torque[1] -= positions[0, i] * thrusts[i]
+        torque[2] += clockwise[i] * drag_torques[i]
+    return torque
 
 
 
@@ -412,7 +413,7 @@ def forces_torques(
     torques = body_torques(thrusts, drag_torques, clockwise, positions)
     forces = np.zeros(3)
     forces[2] = thrusts.sum()
-    return forces, torques.sum(axis=1)
+    return forces, torques
 
 
 

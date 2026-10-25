@@ -879,12 +879,11 @@ class Multirotor:
         speeds = self._apply_speeds(speeds)
         thrusts = self._thrusts(speeds, airstream_velocity_inertial).astype(self.dtype)
         drag_torques = self._data.params[PROP_K_DRAG] * speeds**2
-        torque_vec = body_torques(
+        torques = body_torques(
             thrusts, drag_torques, self._clockwise, self.params.propeller_vectors)
         forces = np.zeros(3, dtype=self.dtype)
         forces[2] = thrusts.sum()
-        torques = torque_vec.sum(axis=1)
-        return forces, torques
+        return forces, torques.astype(self.dtype)
 
 
     def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray, params=None):

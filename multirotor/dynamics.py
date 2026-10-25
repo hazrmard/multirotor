@@ -288,7 +288,7 @@ def rhs_motor_blade_element(
     airstream_velocities = rotating_frame_derivative(positions, x[:3], x[3:6])
     thrusts = thrusts_physics(speeds, airstream_velocities, prop_params, rho)
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
-    torques = body_torques(thrusts, drag_torques, clockwise, positions).sum(axis=1)
+    torques = body_torques(thrusts, drag_torques, clockwise, positions)
     forces = np.asarray([0., 0., thrusts.sum()])
     dydt = np.empty_like(y)
     dydt[:N_BODY_STATES] = body_derivative(
