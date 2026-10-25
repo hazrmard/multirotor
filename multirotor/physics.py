@@ -116,48 +116,79 @@ def thrusts_physics(
 
 
 
-def motor_step_explicit(
-    speed: np.ndarray, last_acc: np.ndarray, u: np.ndarray, max_voltage: float,
-    motor_params: np.ndarray, dt: float
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+@njit
+def motor_electrical(
+    speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Advance motors by one time step with an explicit two-point update: the
-    acceleration is computed from the speed at the start of the step and
-    averaged with the previous step's acceleration.
+    Voltage and current of each motor. The current responds instantly to the
+    voltage and back-EMF; the motors' inductance is neglected.
 
     Parameters
     ----------
     speed : np.ndarray
-        Motor speeds (rad/s) at the start of the step, shape (n,).
-    last_acc : np.ndarray
-        Motor angular accelerations from the previous step, shape (n,).
+        Motor speeds (rad/s), shape (n,).
+    u : np.ndarray
+        Speed signals, shape (n,). The voltage is
+        ``speed_voltage_scaling * u``, clipped to ``[0, max_voltage]``.
+    max_voltage : float
+        The maximum voltage the power source can supply.
+    motor_params : np.ndarray
+        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        The voltage (V) and current (A) of each motor.
+    """
+    p = motor_params
+    n = speed.shape[0]
+    voltage = np.empty(n)
+    current = np.empty(n)
+    for i in range(n):
+        voltage[i] = min(max(p[MOTOR_SPEED_VOLTAGE_SCALING, i] * u[i], 0.), max_voltage)
+        back_emf = speed[i] * p[MOTOR_K_EMF, i]
+        current[i] = min(
+            max((voltage[i] - back_emf) / p[MOTOR_RESISTANCE, i], 0.),
+            p[MOTOR_MAX_CURRENT, i]
+        )
+    return voltage, current
+
+
+
+@njit
+def motor_acc(
+    speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+) -> np.ndarray:
+    """
+    Angular acceleration of each motor: electrical torque minus viscous friction
+    and propeller drag, divided by the moment of inertia.
+
+    Parameters
+    ----------
+    speed : np.ndarray
+        Motor speeds (rad/s), shape (n,).
     u : np.ndarray
         Speed signals, shape (n,).
     max_voltage : float
         The maximum voltage the power source can supply.
     motor_params : np.ndarray
         The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-    dt : float
-        The time step.
 
     Returns
     -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        The new speeds, voltages, currents and angular accelerations.
+    np.ndarray
+        Angular acceleration (rad/s^2) of each motor, shape (n,).
     """
     p = motor_params
-    voltage = np.clip(p[MOTOR_SPEED_VOLTAGE_SCALING] * u, 0, max_voltage)
-    current = np.clip(
-        (voltage - speed * p[MOTOR_K_EMF]) / p[MOTOR_RESISTANCE],
-        0, p[MOTOR_MAX_CURRENT]
-    )
-    torque = p[MOTOR_K_TORQUE] * current
-    # Subtract drag torque and dynamic friction from electrical torque
-    net_torque = torque - p[MOTOR_K_DF] * speed - p[MOTOR_K_DRAG] * speed**2
-    acc = net_torque / p[MOTOR_MOMENT_OF_INERTIA]
-    # Trapezoidal average of the last and the current acceleration
-    new_speed = speed + dt * (last_acc + acc) / 2.0
-    return new_speed, voltage, current, acc
+    _, current = motor_electrical(speed, u, max_voltage, motor_params)
+    acc = np.empty(speed.shape[0])
+    for i in range(speed.shape[0]):
+        torque = p[MOTOR_K_TORQUE, i] * current[i]
+        friction = p[MOTOR_K_DF, i] * speed[i]
+        drag = p[MOTOR_K_DRAG, i] * speed[i]**2
+        acc[i] = (torque - friction - drag) / p[MOTOR_MOMENT_OF_INERTIA, i]
+    return acc
 
 
 
@@ -200,6 +231,40 @@ def body_torques(
         tau[1, i] = -(positions[0, i] * thrusts[i])
         tau[2, i] = clockwise[i] * drag_torques[i]
     return tau
+
+
+
+@njit
+def forces_torques(
+    speeds: np.ndarray, prop_params: np.ndarray, clockwise: np.ndarray,
+    positions: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Total force and torque on the body from propellers whose thrust is
+    ``k_thrust * speed**2`` and drag torque is ``k_drag * speed**2``.
+
+    Parameters
+    ----------
+    speeds : np.ndarray
+        Propeller speeds (rad/s), shape (n,).
+    prop_params : np.ndarray
+        The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    clockwise : np.ndarray
+        1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
+    positions : np.ndarray
+        Position of each propeller relative to the center of mass, shape (3, n).
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        The force (N) and torque (N m) on the body, each shape (3,).
+    """
+    thrusts = prop_params[PROP_K_THRUST] * speeds**2
+    drag_torques = prop_params[PROP_K_DRAG] * speeds**2
+    torques = body_torques(thrusts, drag_torques, clockwise, positions)
+    forces = np.zeros(3)
+    forces[2] = thrusts.sum()
+    return forces, torques.sum(axis=1)
 
 
 

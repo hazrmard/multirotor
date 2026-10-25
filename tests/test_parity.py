@@ -1,6 +1,8 @@
 """
 Parity tests: the current implementation against the frozen oracle in
-``tests/legacy``, for the vehicle configurations whose numerics must not change.
+``tests/legacy``, for the vehicle configurations whose numerics must not change:
+vehicles without motors. Vehicles with motors integrate motors and body together
+and are checked for accuracy in ``test_accuracy.py`` instead.
 """
 import numpy as np
 import pytest
@@ -8,7 +10,7 @@ import pytest
 from common import (
     EXCITE_FRAC, N_SCHEDULE, assert_snapshots_close, atol_for, hover_signals,
     make_pair, make_params, nominal_speed, schedule, settle_at_hover,
-    snapshot, tolerances
+    snapshot
 )
 
 DTYPES = (np.float32, np.float64)
@@ -19,9 +21,6 @@ CONFIGS = [
     (6, 'quadratic', False, N_SCHEDULE),
     (8, 'quadratic', False, N_SCHEDULE),
     (8, 'fsolve', False, 16),
-    (4, 'quadratic', True, N_SCHEDULE),
-    (8, 'quadratic', True, N_SCHEDULE),
-    (8, 'fsolve', True, 8),
 ]
 
 
@@ -34,16 +33,16 @@ def run_parity(n, thrust_model, motor, steps, dtype, excite=True):
         settle_at_hover(v, speed)
     hover = hover_signals(vp, sp)
     us = schedule(hover, EXCITE_FRAC[thrust_model], steps) if excite else np.tile(hover, (steps, 1))
-    rtol, atol = tolerances(dtype, motor)
-    assert_snapshots_close(snapshot(new), snapshot(old), atol, 'initial', rtol)
+    atol = atol_for(dtype)
+    assert_snapshots_close(snapshot(new), snapshot(old), atol, 'initial')
     for i, u in enumerate(us):
         f_new, t_new = new.get_forces_torques(u, new.state)
         f_old, t_old = old.get_forces_torques(u, old.state)
-        np.testing.assert_allclose(f_new, f_old, rtol=rtol, atol=atol, err_msg=f'step {i}: forces')
-        np.testing.assert_allclose(t_new, t_old, rtol=rtol, atol=atol, err_msg=f'step {i}: torques')
+        np.testing.assert_allclose(f_new, f_old, rtol=0, atol=atol, err_msg=f'step {i}: forces')
+        np.testing.assert_allclose(t_new, t_old, rtol=0, atol=atol, err_msg=f'step {i}: torques')
         new.step_speeds(u)
         old.step_speeds(u)
-        assert_snapshots_close(snapshot(new), snapshot(old), atol, f'step {i}', rtol)
+        assert_snapshots_close(snapshot(new), snapshot(old), atol, f'step {i}')
 
 
 

@@ -64,9 +64,6 @@ class MotorData:
         self.speed = np.zeros(n)
         self.voltage = np.zeros(n)
         self.current = np.zeros(n)
-        # Angular acceleration from the last step, used by the explicit motor
-        # update (`physics.motor_step_explicit`).
-        self._last_acc = np.zeros(n)
 
 
     def __len__(self) -> int:
@@ -78,7 +75,6 @@ class MotorData:
         self.speed[:] = 0.
         self.voltage[:] = 0.
         self.current[:] = 0.
-        self._last_acc[:] = 0.
 
 
 

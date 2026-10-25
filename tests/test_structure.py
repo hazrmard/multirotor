@@ -85,10 +85,12 @@ def test_setters_write_through():
     assert vehicle.propellers[2].speed == 100.
     vehicle.propellers[3].speed = 50.
     assert vehicle.propellers[3].motor.speed == 50.
-    # The next step starts from the speed that was set
+    # The next step starts from the speed that was set. Motors integrated with
+    # the body agree with motors integrated on their own to the solver's
+    # tolerance.
     expected = vehicle.propellers[2].apply_speed(0.)
     vehicle.step_speeds(np.zeros(8, vehicle.dtype))
-    assert vehicle.propellers[2].speed == pytest.approx(expected)
+    assert vehicle.propellers[2].speed == pytest.approx(expected, rel=1e-3)
 
 
 
