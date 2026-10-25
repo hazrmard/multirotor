@@ -1,7 +1,8 @@
 """
 Functional tests for the modules that depend on the simulation: environments,
 controller, data logging and the control-library system. Each runs once with the
-current vehicle and once with the frozen oracle, and the results must match.
+current vehicle and once with the frozen oracle, and the results must match. The
+comparisons run in float64 (see ``test_parity.py``).
 """
 import numpy as np
 import pytest
@@ -19,8 +20,8 @@ STEPS = 100
 
 
 def test_speeds_env_matches_oracle():
-    vp, sp = make_params(8, 'quadratic', False)
-    new, old = make_pair(8, 'quadratic', False)
+    vp, sp = make_params(8, 'quadratic', False, np.float64)
+    new, old = make_pair(8, 'quadratic', False, np.float64)
     envs = [SpeedsMultirotorEnv(new), SpeedsMultirotorEnv(old)]
     for env in envs:
         env.seed(0)
@@ -35,7 +36,7 @@ def test_speeds_env_matches_oracle():
 
 
 def test_dynamics_env_with_allocation_matches_oracle():
-    new, old = make_pair(8, 'quadratic', False)
+    new, old = make_pair(8, 'quadratic', False, np.float64)
     envs = [DynamicsMultirotorEnv(new, allocate=True), DynamicsMultirotorEnv(old, allocate=True)]
     for env in envs:
         env.seed(0)
@@ -48,7 +49,7 @@ def test_dynamics_env_with_allocation_matches_oracle():
 
 
 def test_closed_loop_matches_oracle():
-    new, old = make_pair(8, 'quadratic', False)
+    new, old = make_pair(8, 'quadratic', False, np.float64)
     ref = np.asarray([1., 0.5, 2., 0.], new.dtype)
     controllers = [get_controller(new), get_controller(old)]
     for i in range(STEPS):

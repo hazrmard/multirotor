@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 from scipy.integrate import odeint
 
+import legacy.simulation
 from multirotor.data import MotorData
-from multirotor.dynamics import N_BODY_STATES
+from multirotor.dynamics import N_BODY_STATES, rhs_body
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import motor_acc
 from multirotor.simulation import Motor, Multirotor
@@ -188,3 +189,48 @@ def test_motor_step_response_does_not_overshoot():
     oracle = LegacyMotor(params, sp)
     oracle_speeds = np.asarray([oracle.step(u) for _ in range(50)])
     assert oracle_speeds.max() > target * 1.2
+
+
+
+def test_small_time_steps_converge(monkeypatch):
+    # Hold each speed signal for 10 ms and step at dt = 1 ms and 0.1 ms. The
+    # state is not rounded, so the vehicle moves at small time steps, and the
+    # error shrinks as dt does. (Rounding the state to 4 decimals each step
+    # froze the vehicle: each step moved it less than 1e-4 m.)
+    hold_time = 0.01
+    vp, sp = make_params(8, 'quadratic', False, np.float64, dt=hold_time)
+    vehicle = Multirotor(vp, sp)
+    settle_at_hover(vehicle, nominal_speed(vp, sp))
+    us = schedule(hover_signals(vp, sp), 0.05, N_SCHEDULE)
+    # Reference: forces are fixed while a signal is held
+    x, reference = np.zeros(12), []
+    for u in us:
+        forces, torques = vehicle.get_forces_torques(u, x)
+        args = (forces, torques) + vehicle._body_kernel_params()
+        x = odeint(rhs_body, x, (0, hold_time), args=args,
+                   rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
+        reference.append(x[:3])
+    reference = np.asarray(reference)
+
+    def position_error(vehicle, dt):
+        hold = int(round(hold_time / dt))
+        positions = []
+        for u in us:
+            for _ in range(hold):
+                vehicle.step_speeds(u)
+            positions.append(np.asarray(vehicle.position, float))
+        return np.abs(np.asarray(positions) - reference).max()
+
+    error = {}
+    for dt in (1e-3, 1e-4):
+        vp, sp = make_params(8, 'quadratic', False, np.float64, dt=dt)
+        error[dt] = position_error(Multirotor(vp, sp), dt)
+    assert error[1e-3] < 1e-5, error
+    assert error[1e-4] < error[1e-3] / 5, error
+
+    # The oracle, with its rounding restored, doesn't move at dt = 1 ms
+    monkeypatch.setattr(legacy.simulation, 'np', np)
+    vp, sp = make_params(8, 'quadratic', False, np.float64, dt=1e-3)
+    oracle = LegacyMultirotor(vp, sp)
+    assert position_error(oracle, 1e-3) == pytest.approx(np.abs(reference).max())
+    np.testing.assert_array_equal(oracle.position, 0.)

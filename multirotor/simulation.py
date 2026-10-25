@@ -595,7 +595,6 @@ class Multirotor:
         self.state: np.ndarray = None
         self.t: float = 0.
         self._dxdt = None
-        self.dxdt_decimals = max(1, 1 - int(np.log10(self.simulation.dt)))
 
         # Parameters and state of all propellers (and motors) as arrays. Each
         # Propeller indexes into it.
@@ -633,6 +632,7 @@ class Multirotor:
             self._rhs = rhs_motor_blade_element
         # float64 copies of the parameters, for the right-hand side kernels. They
         # are copied before reset() casts the parameters to the vehicle's dtype.
+        # The first four are the body's parameters, used by rhs_body.
         self._kernel_params = (
             float(self.simulation.g), float(self.params.mass),
             self.params.inertia_matrix.astype(float),
@@ -671,10 +671,6 @@ class Multirotor:
         self.params.inertia_matrix = self.params.inertia_matrix.astype(self.dtype)
         self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self._clockwise = np.asarray(self.params.clockwise)
-        self._body_params = (
-            self.simulation.g, self.params.mass,
-            self.params.inertia_matrix, self.params.inertia_matrix_inverse
-        )
         self.state = np.zeros(12, dtype=self.dtype)
         self._dxdt = np.zeros_like(self.state)
         return self.state
@@ -846,12 +842,14 @@ class Multirotor:
             Thrust of each propeller, shape (n,).
         """
         if self._data.use_thrust_constant:
-            # k_thrust takes the dtype of the speeds, which reproduces the
-            # arithmetic of a Python float times a numpy scalar.
-            k_thrust = self._data.params[PROP_K_THRUST].astype(speeds.dtype)
-            return k_thrust * speeds**2
+            return self._data.params[PROP_K_THRUST] * speeds**2
         return thrusts_physics(
             speeds, airstream_velocities, self._data.params, self.simulation.rho)
+
+
+    def _body_kernel_params(self) -> Tuple[float, float, np.ndarray, np.ndarray]:
+        """Gravity, mass, inertia matrix and its inverse, in float64."""
+        return self._kernel_params[:4]
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -914,8 +912,9 @@ class Multirotor:
         # Do not need to get forces/torques on body, since the action array
         # already is a 6d vector of forces/torques.
         # forces, torques = self.get_forces_torques(u, x)
+        u = np.asarray(u, dtype=float)
         return rhs_body(
-            t, x, u[:3], u[3:], self._body_params, self.dtype, self.dxdt_decimals)
+            t, np.asarray(x, dtype=float), u[:3], u[3:], *self._body_kernel_params())
 
 
     def dxdt_speeds(
@@ -956,8 +955,10 @@ class Multirotor:
         # same state by the odeint() function, and the results should be consistent.
         forces, torques = self.get_forces_torques(u, x)
         return rhs_body(
-            t, x, forces + disturb_forces, torques + disturb_torques,
-            self._body_params, self.dtype, self.dxdt_decimals)
+            t, np.asarray(x, dtype=float),
+            forces.astype(float) + disturb_forces,
+            torques.astype(float) + disturb_torques,
+            *self._body_kernel_params())
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -977,12 +978,13 @@ class Multirotor:
             The new state of the vehicle.
         """
         self.t += self.simulation.dt
-        args = (u[:3], u[3:], self._body_params, self.dtype, self.dxdt_decimals)
-        self._dxdt = self._rhs_body(self.t, self.state, *args)
+        u = np.asarray(u, dtype=float)
+        args = (u[:3], u[3:]) + self._body_kernel_params()
+        x0 = self.state.astype(float)
+        self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
-            self._rhs_body, self.state, self.simulation.dt, args
-        )
-        self.state = np.around(self.state, 4).astype(self.dtype)
+            self._rhs_body, x0, self.simulation.dt, args
+        ).astype(self.dtype)
         # TODO: inverse solve for speed = forces to set propeller speeds
         return self.state
 
@@ -1044,15 +1046,14 @@ class Multirotor:
             Disturbing x,y,z torques in the vehicle's local frame.
         """
         forces, torques = self.get_forces_torques(u, self.state)
-        args = (
-            forces + disturb_forces, torques + disturb_torques,
-            self._body_params, self.dtype, self.dxdt_decimals
-        )
-        self._dxdt = self._rhs_body(self.t, self.state, *args)
+        forces = forces.astype(float) + disturb_forces
+        torques = torques.astype(float) + disturb_torques
+        args = (forces, torques) + self._body_kernel_params()
+        x0 = self.state.astype(float)
+        self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
-            self._rhs_body, self.state, self.simulation.dt, args
-        )
-        self.state = np.around(self.state, 4).astype(self.dtype)
+            self._rhs_body, x0, self.simulation.dt, args
+        ).astype(self.dtype)
         self._step_propellers(u)
 
 
@@ -1074,15 +1075,15 @@ class Multirotor:
         disturb_torques : np.ndarray
             Disturbing x,y,z torques in the vehicle's local frame.
         """
+        x0 = self.state.astype(float)
         self._dxdt = self.dxdt_speeds(
-            t=self.t, x=self.state, u=u,
+            t=self.t, x=x0, u=u,
             disturb_forces=disturb_forces, disturb_torques=disturb_torques
-        )
+        ).astype(self.dtype)
         self.state = self.integrator(
-            self.dxdt_speeds, self.state, self.simulation.dt,
+            self.dxdt_speeds, x0, self.simulation.dt,
             (u, disturb_forces, disturb_torques)
-        )
-        self.state = np.around(self.state, 4).astype(self.dtype)
+        ).astype(self.dtype)
         self._step_propellers(u)
 
 

@@ -23,10 +23,10 @@ N_BODY_STATES = 12
 
 
 
+@njit
 def rhs_body(
-    t: float, x: np.ndarray, forces: np.ndarray, torques: np.ndarray,
-    body_params: Tuple[float, float, np.ndarray, np.ndarray], dtype: type,
-    decimals: int
+    t: float, x: np.ndarray, forces: np.ndarray, torques: np.ndarray, g: float,
+    mass: float, inertia_matrix: np.ndarray, inertia_matrix_inverse: np.ndarray
 ) -> np.ndarray:
     """
     Rate of change of the vehicle's 12 body states under forces and torques that
@@ -43,26 +43,25 @@ def rhs_body(
     x : np.ndarray
         The body state: position, velocity, orientation, angular rate.
     forces : np.ndarray
-        Forces (N) in the body frame.
+        Forces (N) in the body frame, shape (3,).
     torques : np.ndarray
-        Torques (N m) in the body frame.
-    body_params : Tuple[float, float, np.ndarray, np.ndarray]
-        Gravitational acceleration, mass, inertia matrix and its inverse.
-    dtype : type
-        The data type in which to evaluate the equations.
-    decimals : int
-        The number of decimals to which the derivative is rounded.
+        Torques (N m) in the body frame, shape (3,).
+    g : float
+        Gravitational acceleration.
+    mass : float
+        Mass of the vehicle.
+    inertia_matrix : np.ndarray
+        Inertia matrix, shape (3, 3).
+    inertia_matrix_inverse : np.ndarray
+        Inverse of the inertia matrix, shape (3, 3).
 
     Returns
     -------
     np.ndarray
         The rate of change of the body state.
     """
-    g, mass, inertia_matrix, inertia_matrix_inverse = body_params
-    dxdt = body_derivative(
-        forces, torques, x.astype(dtype), g, mass,
-        inertia_matrix, inertia_matrix_inverse)
-    return np.around(dxdt, decimals)
+    return body_derivative(
+        forces, torques, x, g, mass, inertia_matrix, inertia_matrix_inverse)
 
 
 
