@@ -121,6 +121,10 @@ class BatteryParams:
                 raise ValueError('ocv_soc and ocv_voltage must be 1D and of the same length.')
             if np.any(np.diff(self.ocv_soc) <= 0):
                 raise ValueError('ocv_soc must be increasing.')
+        if self.capacity is not None and self.capacity <= 0:
+            raise ValueError('capacity must be positive.')
+        if self.internal_resistance < 0:
+            raise ValueError('internal_resistance must not be negative.')
         if self.capacity is not None and self.ocv_soc is None and not np.isfinite(self.max_voltage):
             raise ValueError('A battery model needs a finite max_voltage or an OCV table.')
 

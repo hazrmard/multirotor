@@ -44,6 +44,11 @@ def test_battery_params_validation():
         BatteryParams(capacity=5., ocv_soc=[1, 0], ocv_voltage=[22, 18])
     with pytest.raises(ValueError, match='finite'):
         BatteryParams(capacity=5.)
+    for capacity in (0., -1.):
+        with pytest.raises(ValueError, match='positive'):
+            BatteryParams(max_voltage=22.2, capacity=capacity)
+    with pytest.raises(ValueError, match='negative'):
+        BatteryParams(max_voltage=22.2, capacity=5., internal_resistance=-0.01)
 
 
 

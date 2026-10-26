@@ -1,4 +1,4 @@
-from typing import Callable, List, Tuple
+from typing import Callable, List, NamedTuple, Tuple
 from copy import deepcopy
 
 import numpy as np
@@ -52,6 +52,25 @@ def odeint_integrator(
         The state at the end of the step.
     """
     return odeint(fun, x0, (0, dt), args=args, rtol=1e-4, atol=1e-4, tfirst=True)[-1]
+
+
+
+class KernelParams(NamedTuple):
+    """
+    float64 copies of a vehicle's parameters, in the order the right-hand sides
+    in `multirotor.dynamics` take them after their per-step arguments.
+    """
+    g: float
+    mass: float
+    inertia_matrix: np.ndarray
+    inertia_matrix_inverse: np.ndarray
+    prop_params: np.ndarray
+    "The `PropellerData.params` matrix."
+    motor_params: np.ndarray
+    "The `MotorData.params` matrix, or None without motors."
+    clockwise: np.ndarray
+    positions: np.ndarray
+    "Position of each propeller relative to the center of mass, shape (3, n)."
 
 
 
@@ -650,20 +669,17 @@ class Multirotor:
             self._rhs = rhs_motor
         else:
             self._rhs = rhs_motor_blade_element
-        # float64 copies of the parameters, for the right-hand side kernels. They
-        # are copied before reset() casts the parameters to the vehicle's dtype.
-        # The first four are the body's parameters, used by rhs_body.
-        self._kernel_params = (
-            float(self.simulation.g), float(self.params.mass),
-            self.params.inertia_matrix.astype(float),
-            self.params.inertia_matrix_inverse.astype(float),
-            self._data.params,
-            None if self._data.motors is None else self._data.motors.params,
-            np.asarray(self.params.clockwise, dtype=float),
-            self.params.propeller_vectors.astype(float),
+        # Copied before reset() casts the parameters to the vehicle's dtype
+        self._kernel_params = KernelParams(
+            g=float(self.simulation.g),
+            mass=float(self.params.mass),
+            inertia_matrix=self.params.inertia_matrix.astype(float),
+            inertia_matrix_inverse=self.params.inertia_matrix_inverse.astype(float),
+            prop_params=self._data.params,
+            motor_params=None if self._data.motors is None else self._data.motors.params,
+            clockwise=np.asarray(self.params.clockwise, dtype=float),
+            positions=self.params.propeller_vectors.astype(float),
         )
-        if self._rhs is rhs_motor_blade_element:
-            self._kernel_params += (float(self.simulation.rho),)
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
@@ -682,8 +698,7 @@ class Multirotor:
         """
         self.t = 0.
         self._data.reset()
-        if self.battery is not None:
-            self.battery.reset()
+        self.battery.reset()
 
         self.alloc = self.alloc.astype(self.dtype)
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
@@ -868,8 +883,9 @@ class Multirotor:
 
 
     def _body_kernel_params(self) -> Tuple[float, float, np.ndarray, np.ndarray]:
-        """Gravity, mass, inertia matrix and its inverse, in float64."""
-        return self._kernel_params[:4]
+        """Gravity, mass, inertia matrix and its inverse: the parameters `rhs_body` takes."""
+        p = self._kernel_params
+        return p.g, p.mass, p.inertia_matrix, p.inertia_matrix_inverse
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -1135,9 +1151,13 @@ class Multirotor:
             x0 = np.append(x0, 0.)
             args = (u, battery.cutoff, disturbance) + self._kernel_params \
                    + battery._kernel_params() + (battery.charge_drawn,)
-        else:
+        elif self._data.use_thrust_constant:
             args = (u, float(battery.motor_voltage_limit), disturbance) \
                    + self._kernel_params
+        else:
+            # Blade-element thrust also needs the air density
+            args = (u, float(battery.motor_voltage_limit), disturbance) \
+                   + self._kernel_params + (float(self.simulation.rho),)
         self._dxdt = self._rhs(self.t, x0, *args)[:N_BODY_STATES].astype(self.dtype)
         x = self.integrator(self._rhs, x0, self.simulation.dt, args)
 

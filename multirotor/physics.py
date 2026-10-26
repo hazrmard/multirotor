@@ -1,3 +1,10 @@
+"""
+Equations of the vehicle's subsystems: propeller thrust and drag, motor
+electrical and mechanical behavior, battery voltage, and the rigid body's
+response to forces and torques. Each function computes one quantity from its
+inputs. `multirotor.dynamics` combines them into the right-hand sides that the
+integrator advances.
+"""
 from typing import Iterable, Tuple
 
 import numpy as np
@@ -420,8 +427,8 @@ def forces_torques(
 
 
 
-# @njit
-def _body_derivative(
+@njit
+def body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
@@ -503,6 +510,3 @@ def _body_derivative(
     xdot[9:12] = I_inv @ (torques - gyro)
     
     return xdot
-
-
-body_derivative = njit(_body_derivative)
