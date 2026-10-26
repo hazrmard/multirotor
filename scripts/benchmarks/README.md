@@ -57,7 +57,7 @@ flowchart TD
     loop --> logdone["log_done<br/>DataLog.done_logging"]
     step --> m1["model: 1 call<br/>dxdt_speeds"]
     step --> integ["integrator<br/>Multirotor.integrator"]
-    step --> prop["propeller: 1 call per rotor<br/>Propeller.step"]
+    step --> prop["propeller: 1 call<br/>Multirotor._step_propellers"]
     m1 --> ft1["forces_torques<br/>get_forces_torques"]
     integ --> m2["model: evals_per_step calls<br/>dxdt_speeds"]
     m2 --> ft2["forces_torques<br/>get_forces_torques"]
@@ -142,7 +142,7 @@ parameter (`log_scaling`).
 
 | case | parameter sets | steps | `run(n)` calls |
 |---|---|---|---|
-| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
+| `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors with motor and battery models, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
 | `controller_step` | 8 rotors | 5000 | `Controller.step` with a fixed vehicle state |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
@@ -160,6 +160,9 @@ Common settings:
 * `thrust_model='fsolve'`: blade-element model (`use_thrust_constant=False`). For each
   propeller and model evaluation, `physics.thrust` solves for the induced velocity
   with `scipy.optimize.fsolve`. The propeller has an 18 in diameter and 6 in pitch.
+* `battery=True`: `models.tarott18` battery voltage (22.2 V) with a 10 Ah capacity
+  and 0.02 ohm internal resistance. The battery resets with the vehicle every
+  64 steps.
 * Reference for controlled cases: hold 5 m altitude.
 
 Input types:
@@ -319,7 +322,7 @@ misspelled attribute names.
 | `integrator` | `Multirotor.integrator` | one solver call |
 | `model` | `Multirotor.dxdt_speeds`, `Multirotor.dxdt_dynamics` | one model evaluation |
 | `forces_torques` | `Multirotor.get_forces_torques` | per-rotor forces and torques |
-| `propeller` | `Propeller.step` | one rotor |
+| `propeller` | `Multirotor._step_propellers` | all rotors, after integration |
 | `log`, `log_done` | `DataLog.log`, `DataLog.done_logging` | |
 
 Within `step_speeds` and `step_dynamics`, the model has two paths:
@@ -334,7 +337,7 @@ Remaining details:
   into Python.
 * `model` exclusive time is the jitted kernel plus rounding. `forces_torques` is a
   child of `model`.
-* Jitted functions (`apply_forces_torques`, `torque`) cannot be wrapped. Their time
+* Jitted functions (`body_derivative`, `body_torques`) cannot be wrapped. Their time
   stays in the exclusive time of the calling scope.
 * `Multirotor.integrator` exists since the injectable-integrator change. On earlier
   commits the point is skipped, the `integrator` scope is absent and `skipped` lists

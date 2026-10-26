@@ -19,7 +19,7 @@ import numpy as np
 
 from multirotor.env import DynamicsMultirotorEnv
 from multirotor.helpers import DataLog, find_nominal_speed, vehicle_params_factory
-from multirotor.models.tarott18 import MP, PP, SP
+from multirotor.models.tarott18 import BP, MP, PP, SP
 from multirotor.optimize import get_controller, run_sim
 from multirotor.simulation import Multirotor
 from multirotor.vehicle import MotorParams, PropellerParams
@@ -33,7 +33,8 @@ ALTITUDE = 5.   # m, hold point for closed-loop cases
 
 
 def make_vehicle(
-    n: int = 8, thrust_model: str = 'quadratic', motor: bool = False
+    n: int = 8, thrust_model: str = 'quadratic', motor: bool = False,
+    battery: bool = False
 ) -> Multirotor:
     """Build a ``Multirotor`` with ``n`` identical rotors.
 
@@ -53,6 +54,9 @@ def make_vehicle(
           diameter, 6 in pitch propeller.
     motor : bool
         Attach the ``tarott18`` motor model to each propeller.
+    battery : bool
+        Fly on a battery model: the ``tarott18`` battery voltage, 10 Ah, and
+        0.02 ohm internal resistance. Needs ``motor=True``.
     """
     if thrust_model == 'quadratic':
         prop = deepcopy(PP)
@@ -66,6 +70,8 @@ def make_vehicle(
     if motor:
         prop = replace(prop, motor=deepcopy(MP))
     vp = vehicle_params_factory(n, M_PROP, D_PROP, prop, M_BODY)
+    if battery:
+        vp.battery = replace(BP, capacity=10., internal_resistance=0.02)
     return Multirotor(vp, SP)
 
 
@@ -133,16 +139,20 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
 def vehicle_points(v: Multirotor) -> List[ScopePoint]:
     """Scope points for a vehicle: its step methods, integrator, model and propellers.
 
-    ``dxdt_speeds`` and ``dxdt_dynamics`` both become the scope ``model``; only the
-    one the case calls records anything.
+    ``dxdt_speeds``, ``dxdt_dynamics``, ``_rhs_body`` and ``_rhs`` all become the
+    scope ``model``; only the ones the case calls record anything.
     """
     pts = [ScopePoint(Level.COARSE, v, 'step_speeds', 'step_speeds'),
            ScopePoint(Level.COARSE, v, 'step_dynamics', 'step_dynamics'),
            ScopePoint(Level.FINE, v, 'integrator', 'integrator'),
            ScopePoint(Level.FINE, v, 'dxdt_speeds', 'model'),
            ScopePoint(Level.FINE, v, 'dxdt_dynamics', 'model'),
+           ScopePoint(Level.FINE, v, '_rhs_body', 'model'),
            ScopePoint(Level.FINE, v, 'get_forces_torques', 'forces_torques')]
-    pts += [ScopePoint(Level.FINE, p, 'step', 'propeller') for p in v.propellers]
+    pts.append(ScopePoint(Level.FINE, v, '_step_propellers', 'propeller'))
+    if v._rhs is not None:
+        # Vehicles with motors integrate the body and motors with this kernel
+        pts.append(ScopePoint(Level.FINE, v, '_rhs', 'model'))
     return pts
 
 
@@ -191,8 +201,8 @@ class StepSpeeds(Runner):
     cost per step does not depend on the step count.
     """
     def __init__(self, n=8, thrust_model='quadratic', motor=False, excite=True,
-                 excite_frac=0.05):
-        self.v = make_vehicle(n, thrust_model, motor)
+                 excite_frac=0.05, battery=False):
+        self.v = make_vehicle(n, thrust_model, motor, battery)
         hover = hover_speeds(self.v)
         self.nominal = nominal_speed(self.v)
         self.us = excitation(hover, excite_frac) if excite else hover[None]
@@ -364,6 +374,8 @@ CASES: Dict[str, Case] = {
         for n in (4, 6, 8)
     ] + [
         dict(n=8, thrust_model='quadratic', motor=True, excite=True, steps=1000),
+        dict(n=8, thrust_model='quadratic', motor=True, battery=True, excite=True,
+             steps=1000),
         # +-1% or more breaks fsolve's convergence (thousands of RuntimeWarnings, 5x
         # the cost), so this case perturbs by +-0.2%.
         dict(n=8, thrust_model='fsolve', motor=False, excite=True, excite_frac=0.002,
