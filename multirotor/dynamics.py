@@ -165,7 +165,8 @@ def battery_state(
 ) -> Tuple[float, float, float]:
     """
     The battery's terminal voltage and current, and the voltage limit it puts
-    on the motors.
+    on the motors. A battery that is cut off or empty supplies no current, and
+    the motors get no voltage.
 
     Parameters
     ----------
@@ -195,7 +196,7 @@ def battery_state(
     """
     soc = 1. - charge / battery_params[BATTERY_CAPACITY]
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
-    if cutoff:
+    if cutoff or soc <= 0.:
         return open_circuit_voltage, 0., 0.
     terminal_voltage, power, _ = battery_operating_point(
         speeds, u, open_circuit_voltage,

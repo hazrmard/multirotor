@@ -225,6 +225,7 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
     """
     Open-circuit voltage of the battery at a state of charge, interpolated
     linearly from a table. Outside the table, the nearest end's voltage is used.
+    An empty battery (``soc <= 0``) has no voltage.
 
     Parameters
     ----------
@@ -240,6 +241,8 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
     float
         The open-circuit voltage (V).
     """
+    if soc <= 0.:
+        return 0.
     return np.interp(soc, ocv_soc, ocv_voltage)
 
 

@@ -406,6 +406,8 @@ class Battery:
     Without a battery model (``BatteryParams.capacity`` is None), the battery is
     a fixed voltage limit for the motors. With one, it tracks the charge drawn,
     and its terminal voltage sags with the current drawn and as it discharges.
+    Once all of its charge is drawn, it is empty: it has no voltage and supplies
+    no current until it is reset.
     `Multirotor` integrates the battery together with the body and motors, and
     updates it after each step.
     """
@@ -444,6 +446,12 @@ class Battery:
     def has_model(self) -> bool:
         """Whether the battery's charge and voltage are modeled."""
         return self.params.capacity is not None
+
+
+    @property
+    def empty(self) -> bool:
+        """Whether all of the battery's charge has been drawn."""
+        return self.has_model and self.soc <= 0.
 
 
     @property
@@ -506,11 +514,21 @@ class Battery:
         """
         if load is None or not self.has_model:
             return
-        self.charge_drawn += load * self.simulation.dt
-        self.current = load
+        # An empty battery supplies no more charge
+        charge = min(load * self.simulation.dt, self._charge_remaining())
+        self.charge_drawn += charge
+        self.current = charge / self.simulation.dt
+        if self.empty:
+            self.voltage = 0.
+            return
         resistance = self._params_vector[BATTERY_INTERNAL_RESISTANCE]
-        self.voltage = self.open_circuit_voltage() - resistance * load
+        self.voltage = self.open_circuit_voltage() - resistance * self.current
         self._check_cutoff()
+
+
+    def _charge_remaining(self) -> float:
+        """Charge (C) left in the battery."""
+        return self._params_vector[BATTERY_CAPACITY] - self.charge_drawn
 
 
     def _kernel_params(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -541,10 +559,12 @@ class Battery:
         float
             The motors' voltage limit at the end of the step.
         """
+        # The integrator can overshoot the capacity by its tolerance
+        charge = min(charge, self._charge_remaining())
         self.charge_drawn += charge
         self.current = charge / self.simulation.dt
         open_circuit_voltage = self.open_circuit_voltage()
-        if self.cutoff:
+        if self.cutoff or self.empty:
             self.voltage = open_circuit_voltage
             return 0.
         self.voltage, _, ok = battery_operating_point(

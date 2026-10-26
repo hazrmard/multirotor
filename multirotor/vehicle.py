@@ -97,7 +97,8 @@ class BatteryParams:
     the open-circuit voltage."""
     capacity: float = None
     """Capacity (Ah). None means no battery model: the battery is a fixed
-    voltage limit, and its charge is not tracked."""
+    voltage limit, and its charge is not tracked. Once the whole capacity is
+    drawn, the battery is empty and supplies no voltage or current."""
     internal_resistance: float = 0.
     "Series resistance (ohm). The terminal voltage sags by resistance x current."
     ocv_soc: np.ndarray = None
@@ -105,8 +106,9 @@ class BatteryParams:
     ocv_voltage: np.ndarray = None
     "Open-circuit voltage (V) at each ``ocv_soc``. Interpolated linearly."
     min_voltage: float = 0.
-    """Cutoff voltage. When the terminal voltage falls below it, the battery
-    cuts the motors' voltage to zero until it is reset."""
+    """Cutoff voltage, a protection on top of the battery model. When the
+    terminal voltage falls below it, the battery cuts the motors' voltage to
+    zero until it is reset. 0 disables the cutoff."""
 
 
     def __post_init__(self):

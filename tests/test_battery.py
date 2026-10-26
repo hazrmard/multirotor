@@ -185,8 +185,9 @@ def test_motors_are_limited_by_a_discharged_battery():
         capacity=0.002, ocv_soc=[0., 1.], ocv_voltage=[6., 22.2]))
     u = hover(vehicle)
     requested = MP.speed_voltage_scaling * u[0]
-    for _ in range(200):
+    for _ in range(20):
         vehicle.step_speeds(u)
+    assert not vehicle.battery.empty
     assert vehicle.battery.voltage < requested
     np.testing.assert_allclose(vehicle._data.motors.voltage, vehicle.battery.voltage, rtol=1e-6)
     assert vehicle.inertial_velocity[2] < 0
@@ -227,6 +228,73 @@ def test_cutoff_latches_until_reset():
     assert vehicle.battery.cutoff
     vehicle.reset()
     assert not vehicle.battery.cutoff and vehicle.battery.voltage == 22.2
+
+
+
+def test_standalone_battery_empties():
+    battery = Battery(BatteryParams(
+        capacity=1. / 3600., ocv_soc=[0., 1.], ocv_voltage=[18., 22.]), SP)
+    # 1 C of capacity, drawn at 40 A: 0.4 C per step
+    for _ in range(2):
+        battery.step(load=40.)
+    assert not battery.empty and battery.voltage > 18.
+    # The third step runs out halfway through
+    battery.step(load=40.)
+    assert battery.empty and battery.soc == 0.
+    assert battery.charge_drawn == pytest.approx(1.)
+    assert battery.current == pytest.approx(20.)
+    assert battery.voltage == 0. and battery.open_circuit_voltage() == 0.
+    battery.step(load=40.)
+    assert battery.current == 0. and battery.charge_drawn == pytest.approx(1.)
+    assert not battery.cutoff, 'empty is not a cutoff'
+    assert battery.reset() == 22. and not battery.empty
+
+
+
+def test_empty_battery_supplies_nothing():
+    # No cutoff: the battery runs until all of its charge is drawn
+    capacity = 0.002
+    vehicle = make_vehicle(BatteryParams(
+        capacity=capacity, internal_resistance=0.02, ocv_soc=[0., 1.],
+        ocv_voltage=[20., 22.2]))
+    u = hover(vehicle)
+    battery = vehicle.battery
+    currents = []
+    while not battery.empty:
+        vehicle.step_speeds(u)
+        currents.append(battery.current)
+        assert len(currents) < 100
+    # The charge drawn stops at the capacity, partway through the last step
+    assert battery.charge_drawn == pytest.approx(3600. * capacity, abs=1e-12)
+    assert 0. < currents[-1] < currents[-2]
+    vehicle.step_speeds(u)
+    assert battery.current == 0. and battery.voltage == 0.
+    assert not vehicle._data.motors.voltage.any()
+    assert not vehicle._data.motors.current.any()
+    assert not battery.cutoff, 'empty is not a cutoff'
+    for _ in range(50):
+        vehicle.step_speeds(u)
+    assert battery.charge_drawn == pytest.approx(3600. * capacity, abs=1e-12)
+    assert vehicle.inertial_velocity[2] < -0.5, 'the vehicle falls'
+    vehicle.reset()
+    assert not battery.empty and battery.voltage == 22.2
+
+
+
+def test_empty_battery_draws_no_charge_within_a_step():
+    # The right-hand side stops drawing charge once the capacity is reached
+    vehicle = make_vehicle(BatteryParams(
+        capacity=0.002, ocv_soc=[0., 1.], ocv_voltage=[20., 22.2]))
+    capacity = 3600. * 0.002
+    u = hover(vehicle)
+    n = len(u)
+    x = np.concatenate((vehicle.state, vehicle._data.motors.speed, [0.]))
+    battery_args = vehicle.battery._kernel_params()
+    for charge_drawn, drawing in ((capacity - 0.1, True), (capacity, False), (capacity + 0.1, False)):
+        dxdt = rhs_motor_battery(
+            0., x, u, False, np.zeros(6), *vehicle._kernel_params, *battery_args, charge_drawn)
+        assert (dxdt[-1] > 0.) == drawing
+        assert (dxdt[12:12 + n] > -1e-9).all() == drawing, 'motors spin down when empty'
 
 
 
