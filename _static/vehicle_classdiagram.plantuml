@@ -12,10 +12,16 @@ class PropellerParams {
     {field} k_thrust,k_drag
     {field} motor
 }
+class BatteryParams {
+    {field} max_voltage, min_voltage
+    {field} capacity, internal_resistance
+    {field} ocv_soc, ocv_voltage
+}
 class VehicleParams {
     {field} propellers
     {field} angles, distances, clockwise
     {field} mass, inertia_matrix
+    {field} battery
 }
 
 class Propeller {
@@ -30,10 +36,19 @@ class Motor {
     reset()
     step()
 }
+class Battery {
+    {field} params
+    {field} voltage, current
+    {field} soc, charge_drawn
+    {field} cutoff, empty, overload
+    reset()
+    step()
+}
 class Multirotor {
     {field} params
     {field} state
     {field} propellers: Propeller
+    {field} battery: Battery
     step_dynamics()
     step_speeds()
     allocate_control()
@@ -53,11 +68,14 @@ class SpeedsMultirotorEnv
 BaseMultirotorEnv *-- Multirotor
 Multirotor "1" *-- "many" Propeller : contains
 Multirotor *-- VehicleParams
+Multirotor "1" *-- "1" Battery
+Battery *-- BatteryParams
 Propeller "1" *-- "1" Motor
 Propeller *-- PropellerParams
 Motor *-- MotorParams
 VehicleParams "1" *-- "many" PropellerParams : contains
 PropellerParams "1" *-- "1" MotorParams
+VehicleParams "1" *-- "0..1" BatteryParams
 
 BaseMultirotorEnv <|.. DynamicsMultirotorEnv : extends
 BaseMultirotorEnv <|.. SpeedsMultirotorEnv : extends
