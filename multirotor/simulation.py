@@ -7,15 +7,15 @@ from scipy.integrate import odeint
 from .vehicle import MotorParams, PropellerParams, SimulationParams, VehicleParams, BatteryParams
 from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from .physics import (
-    thrust, thrusts_physics, body_torques, motor_electrical, battery_ocv,
-    battery_operating_point,
+    thrust_blade_element_model, thrusts_blade_element_model, body_torques,
+    motor_electrical, battery_ocv, battery_operating_point,
     PROP_K_THRUST, PROP_K_DRAG, BATTERY_CAPACITY, BATTERY_INTERNAL_RESISTANCE,
     N_BATTERY_PARAMS
 )
 from .data import MotorData, PropellerData
 from .dynamics import (
-    rhs_body, rhs_motor, rhs_motor_battery, rhs_motor_blade_element,
-    rhs_motor_only, N_BODY_STATES
+    rhs_body, rhs_body_with_motors, rhs_body_with_motors_and_battery,
+    rhs_body_with_motors_blade_element, rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
 
@@ -220,7 +220,7 @@ class Propeller:
 
     def _thrust_physics(self, speed, airstream_velocity: np.ndarray=np.zeros(3)) -> float:
         p = self.params
-        return thrust(
+        return thrust_blade_element_model(
             speed, airstream_velocity,
             p.R, p.A, self.simulation.rho, p.a, p.b, p.c, p.eta, p.theta0, p.theta1
         )
@@ -551,7 +551,7 @@ class Battery:
 
 
     def _kernel_params(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The battery's arguments for `dynamics.rhs_motor_battery`."""
+        """The battery's arguments for `dynamics.rhs_body_with_motors_and_battery`."""
         return self._params_vector, self._ocv_soc, self._ocv_voltage
 
 
@@ -664,11 +664,11 @@ class Multirotor:
         if self._data.motors is None:
             self._rhs = None
         elif self.battery.has_model:
-            self._rhs = rhs_motor_battery
+            self._rhs = rhs_body_with_motors_and_battery
         elif self._data.use_thrust_constant:
-            self._rhs = rhs_motor
+            self._rhs = rhs_body_with_motors
         else:
-            self._rhs = rhs_motor_blade_element
+            self._rhs = rhs_body_with_motors_blade_element
         # Copied before reset() casts the parameters to the vehicle's dtype
         self._kernel_params = KernelParams(
             g=float(self.simulation.g),
@@ -878,7 +878,7 @@ class Multirotor:
         """
         if self._data.use_thrust_constant:
             return self._data.params[PROP_K_THRUST] * speeds**2
-        return thrusts_physics(
+        return thrusts_blade_element_model(
             speeds, airstream_velocities, self._data.params, self.simulation.rho)
 
 

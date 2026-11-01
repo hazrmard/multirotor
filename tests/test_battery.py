@@ -9,7 +9,7 @@ import pytest
 from scipy.optimize import brentq
 
 from multirotor.data import MotorData
-from multirotor.dynamics import rhs_motor, rhs_motor_battery
+from multirotor.dynamics import rhs_body_with_motors, rhs_body_with_motors_and_battery
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import battery_operating_point, battery_terminal, motor_power
 from multirotor.simulation import Battery, Multirotor
@@ -119,7 +119,7 @@ def test_standalone_battery():
 def test_defaults_keep_the_voltage_limit_model():
     vehicle = make_vehicle(BatteryParams(max_voltage=22.2))
     assert not vehicle.battery.has_model
-    assert vehicle._rhs is rhs_motor
+    assert vehicle._rhs is rhs_body_with_motors
     for _ in range(5):
         vehicle.step_speeds(hover(vehicle))
     assert vehicle.battery.voltage == 22.2
@@ -133,7 +133,7 @@ def test_ideal_battery_matches_voltage_limit_model():
     # No resistance and a flat OCV: the motors see the same voltage limit.
     limit = make_vehicle(BatteryParams(max_voltage=22.2))
     ideal = make_vehicle(BatteryParams(max_voltage=22.2, capacity=5.))
-    assert ideal._rhs is rhs_motor_battery
+    assert ideal._rhs is rhs_body_with_motors_and_battery
     us = schedule(hover(limit), 0.05, N_SCHEDULE)
     for u in us:
         limit.step_speeds(u)
@@ -296,7 +296,7 @@ def test_empty_battery_draws_no_charge_within_a_step():
     x = np.concatenate((vehicle.state, vehicle._data.motors.speed, [0.]))
     battery_args = vehicle.battery._kernel_params()
     for charge_drawn, drawing in ((capacity - 0.1, True), (capacity, False), (capacity + 0.1, False)):
-        dxdt = rhs_motor_battery(
+        dxdt = rhs_body_with_motors_and_battery(
             0., x, u, False, np.zeros(6), *vehicle._kernel_params, *battery_args, charge_drawn)
         assert (dxdt[-1] > 0.) == drawing
         assert (dxdt[12:12 + n] > -1e-9).all() == drawing, 'motors spin down when empty'

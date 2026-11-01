@@ -68,7 +68,7 @@ def thrustEqn(vi, *prop_params):
 
 
 
-def thrust(
+def thrust_blade_element_model(
     prop_speed, airstream_velocity, R, A, rho, a, b, c, eta, theta0, theta1
 ) -> float:
     u, v, w = airstream_velocity
@@ -92,13 +92,13 @@ def thrust(
 
 
 
-def thrusts_physics(
+def thrusts_blade_element_model(
     speeds: np.ndarray, airstream_velocities: np.ndarray, prop_params: np.ndarray,
     rho: float
 ) -> np.ndarray:
     """
-    Thrust of each propeller from the blade-element model, by solving `thrust`
-    for each propeller in turn.
+    Thrust of each propeller from the blade-element model, by solving
+    `thrust_blade_element_model` for each propeller in turn.
 
     Parameters
     ----------
@@ -119,7 +119,7 @@ def thrusts_physics(
     p = prop_params
     thrusts = np.zeros(len(speeds))
     for i in range(len(speeds)):
-        thrusts[i] = thrust(
+        thrusts[i] = thrust_blade_element_model(
             speeds[i], airstream_velocities[:, i],
             p[PROP_RADIUS, i], p[PROP_AREA, i], rho, p[PROP_LIFT_SLOPE, i],
             p[PROP_BLADES, i], p[PROP_CHORD, i], p[PROP_EFFICIENCY, i],

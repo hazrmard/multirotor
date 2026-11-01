@@ -14,7 +14,7 @@ from numba import njit
 from .coords import rotating_frame_derivative
 from .physics import (
     battery_ocv, battery_operating_point, body_derivative, body_torques,
-    forces_torques, motor_acc, thrusts_physics,
+    forces_torques, motor_acc, thrusts_blade_element_model,
     BATTERY_CAPACITY, BATTERY_INTERNAL_RESISTANCE, PROP_K_DRAG
 )
 
@@ -97,7 +97,7 @@ def rhs_motor_only(
 
 
 @njit
-def rhs_motor(
+def rhs_body_with_motors(
     t: float, x: np.ndarray, u: np.ndarray, max_voltage: float,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
@@ -206,7 +206,7 @@ def battery_state(
 
 
 @njit
-def rhs_motor_battery(
+def rhs_body_with_motors_and_battery(
     t: float, x: np.ndarray, u: np.ndarray, cutoff: bool,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
@@ -215,9 +215,9 @@ def rhs_motor_battery(
     charge_drawn: float
 ) -> np.ndarray:
     """
-    Like `rhs_motor`, with a battery model. The battery's terminal voltage
-    limits the motors' voltage, and sags with the current they draw and as the
-    battery discharges.
+    Like `rhs_body_with_motors`, with a battery model. The battery's terminal
+    voltage limits the motors' voltage, and sags with the current they draw and
+    as the battery discharges.
 
     The integrated state ``x`` is the 12 body states, the ``n`` motor speeds,
     and the charge (C) drawn from the battery during the current time step.
@@ -225,8 +225,8 @@ def rhs_motor_battery(
     Parameters
     ----------
     t, x, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `rhs_motor`. ``x`` has one more element: the charge drawn during
-        the step.
+        As in `rhs_body_with_motors`. ``x`` has one more element: the charge
+        drawn during the step.
     cutoff : bool
         Whether the battery has cut off the motors (their voltage is zero).
     battery_params, ocv_soc, ocv_voltage
@@ -258,7 +258,7 @@ def rhs_motor_battery(
 
 
 
-def rhs_motor_blade_element(
+def rhs_body_with_motors_blade_element(
     t: float, x: np.ndarray, u: np.ndarray, max_voltage: float,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
@@ -266,15 +266,15 @@ def rhs_motor_blade_element(
     rho: float
 ) -> np.ndarray:
     """
-    Like `rhs_motor`, for vehicles whose thrust comes from the blade-element
-    model. Thrust depends on the airstream at each propeller, so it is solved
-    numerically at each evaluation. Plain Python, and much slower than
-    `rhs_motor`.
+    Like `rhs_body_with_motors`, for vehicles whose thrust comes from the
+    blade-element model. Thrust depends on the airstream at each propeller, so
+    it is solved numerically at each evaluation. Plain Python, and much slower
+    than `rhs_body_with_motors`.
 
     Parameters
     ----------
     t, x, u, max_voltage, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `rhs_motor`.
+        As in `rhs_body_with_motors`.
     rho : float
         Air density (kg/m^3).
 
@@ -288,7 +288,8 @@ def rhs_motor_blade_element(
     # Same airstream inputs as `Multirotor.get_forces_torques`.
     airstream_velocities = rotating_frame_derivative(
         positions, body_state[:3], body_state[3:6])
-    thrusts = thrusts_physics(speeds, airstream_velocities, prop_params, rho)
+    thrusts = thrusts_blade_element_model(
+        speeds, airstream_velocities, prop_params, rho)
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
     torques = body_torques(thrusts, drag_torques, clockwise, positions)
     forces = np.asarray([0., 0., thrusts.sum()])

@@ -158,8 +158,9 @@ Common settings:
 * `thrust_model='quadratic'`: thrust = `k_thrust * speed**2`
   (`PropellerParams.use_thrust_constant=True`).
 * `thrust_model='fsolve'`: blade-element model (`use_thrust_constant=False`). For each
-  propeller and model evaluation, `physics.thrust` solves for the induced velocity
-  with `scipy.optimize.fsolve`. The propeller has an 18 in diameter and 6 in pitch.
+  propeller and model evaluation, `physics.thrust_blade_element_model` solves for
+  the induced velocity with `scipy.optimize.fsolve`. The propeller has an 18 in
+  diameter and 6 in pitch.
 * `battery=True`: `models.tarott18` battery voltage (22.2 V) with a 10 Ah capacity
   and 0.02 ohm internal resistance. The battery resets with the vehicle every
   64 steps.

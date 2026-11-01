@@ -49,9 +49,10 @@ def make_vehicle(
           (``PropellerParams.use_thrust_constant=True``). Constants come from
           ``models.tarott18``.
         * ``'fsolve'``: blade-element model (``use_thrust_constant=False``). For
-          every propeller and every model evaluation, ``physics.thrust`` solves
-          for the induced velocity with ``scipy.optimize.fsolve``. Uses an 18 in
-          diameter, 6 in pitch propeller.
+          every propeller and every model evaluation,
+          ``physics.thrust_blade_element_model`` solves for the induced velocity
+          with ``scipy.optimize.fsolve``. Uses an 18 in diameter, 6 in pitch
+          propeller.
     motor : bool
         Attach the ``tarott18`` motor model to each propeller.
     battery : bool
