@@ -56,3 +56,7 @@ The following main classes are available in the code. For simulating the vehicle
 
 And for simulating control:
 ![](./_static/controller_classdiagram.png)
+
+These diagrams show the classes a user works with. For developers, the module
+docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
+functions call which, and how the integrated state is laid out.

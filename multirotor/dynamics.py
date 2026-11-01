@@ -5,6 +5,50 @@ returns ``dx/dt`` for the whole integrated state ``x``.
 
 This module is the only code that knows the layout of ``x``. It slices ``x``,
 calls the subsystem equations in `multirotor.physics`, and stacks their results.
+
+The state ``x`` and the functions each right-hand side calls, for following the
+order of execution. An arrow goes from a caller to the function it calls. Every
+right-hand side is compiled with numba, except
+``rhs_body_with_motors_blade_element``, which is plain Python because it calls
+``fsolve``::
+
+    rhs_body                              x = body (12)
+        -> body_derivative
+
+    rhs_motor_only                        x = motor speeds (n)
+        -> motor_acc -> motor_electrical
+
+    rhs_body_with_motors                  x = body (12), motor speeds (n)
+        -> forces_torques -> body_torques
+        -> body_derivative
+        -> motor_acc -> motor_electrical
+
+    rhs_body_with_motors_and_battery      x = body (12), motor speeds (n),
+                                              charge drawn in this step (1)
+        -> battery_state -> battery_ocv
+                         -> battery_operating_point -> motor_power -> motor_electrical
+                                                    -> battery_terminal
+        -> forces_torques, body_derivative, motor_acc  (as in rhs_body_with_motors)
+
+    rhs_body_with_motors_blade_element    x = body (12), motor speeds (n)
+        -> rotating_frame_derivative (in `multirotor.coords`), for the airstream
+        -> thrusts_blade_element_model -> thrust_blade_element_model
+        -> body_torques
+        -> body_derivative
+        -> motor_acc -> motor_electrical
+
+Which one `Multirotor` integrates:
+
+* Without motors, and with ``k_thrust * speed**2`` thrust, forces are fixed over
+  a step, so `Multirotor.step_speeds` and `Multirotor.step_dynamics` integrate
+  ``rhs_body`` with forces and torques calculated once.
+* Without motors, and with blade-element thrust, forces change during the step:
+  `Multirotor.step_speeds` integrates `Multirotor.dxdt_speeds`, which calls
+  ``rhs_body``.
+* With motors, `Multirotor.__init__` picks one of the three ``rhs_body_with_*``
+  functions from the thrust model and from whether there is a battery model.
+* ``rhs_motor_only`` steps a standalone `Motor`, and the motors of a
+  `Multirotor` when their speeds are needed without stepping the body.
 """
 from typing import Tuple
 

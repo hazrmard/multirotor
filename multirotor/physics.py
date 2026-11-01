@@ -4,6 +4,38 @@ electrical and mechanical behavior, battery voltage, and the rigid body's
 response to forces and torques. Each function computes one quantity from its
 inputs. `multirotor.dynamics` combines them into the right-hand sides that the
 integrator advances.
+
+Which function calls which, for following the order of execution. An arrow goes
+from a caller to the function it calls. Everything is compiled with numba except
+the blade-element thrust functions, which solve an equation with scipy's
+``fsolve``::
+
+    Motors
+        motor_acc ----------------> motor_electrical
+        motor_power --------------> motor_electrical
+
+    Battery
+        battery_operating_point --> motor_power --> motor_electrical
+                                +-> battery_terminal
+        battery_ocv
+
+    Body
+        forces_torques -----------> body_torques
+        body_derivative
+
+    Blade-element thrust (not compiled)
+        thrusts_blade_element_model --> thrust_blade_element_model
+                                        --> thrustEqn (passed to fsolve)
+
+Functions with no arrow after them, such as ``battery_ocv`` and
+``body_derivative``, call no other function in this module.
+
+`multirotor.simulation` also calls some of these directly, between solver steps:
+``motor_electrical`` for each motor's voltage and current,
+``battery_operating_point`` and ``battery_ocv`` for the battery's state,
+``body_torques`` and ``thrusts_blade_element_model`` in
+`Multirotor.get_forces_torques`, and ``thrust_blade_element_model`` in
+`Propeller.thrust`.
 """
 from typing import Iterable, Tuple
 

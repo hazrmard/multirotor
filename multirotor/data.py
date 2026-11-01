@@ -4,6 +4,22 @@ and motors as arrays, one column or element per propeller. They compute nothing
 and advance nothing: the classes in `multirotor.simulation` read and write them,
 and the kernels in `multirotor.physics` and `multirotor.dynamics` take their
 arrays as inputs.
+
+How the two classes relate:
+
+* In a `Multirotor`, `PropellerData` owns the motors' data as
+  `PropellerData.motors`. The two share one ``speed`` array, so each speed is
+  stored once.
+* A standalone `Propeller` or `Motor` owns a data object of size 1. A standalone
+  `Motor` builds its own `MotorData`, without a `PropellerData`.
+
+Parameter matrices have shape ``(n_parameters, n)``: one row per parameter, one
+column per component. Rows are named by the ``PROP_*`` and ``MOTOR_*`` constants
+in `multirotor.physics`. A row such as ``params[PROP_K_THRUST]`` is a contiguous
+array with one value per propeller, which lines up element by element with
+``speed``, so kernels can write ``params[PROP_K_THRUST] * speed**2``. The
+transposed layout, one row per component, is just as fast in the kernels; this
+one reads better.
 """
 from typing import List
 
@@ -45,6 +61,7 @@ class MotorData:
             The parameters of each motor.
         """
         n = len(params)
+        # One row per parameter, one column per motor (see module docstring)
         self.params = np.zeros((physics.N_MOTOR_PARAMS, n))
         for i, p in enumerate(params):
             if p.k_drag is None:
@@ -120,6 +137,7 @@ class PropellerData:
         self.use_thrust_constant = use_thrust_constant.pop()
 
         n = len(params)
+        # One row per parameter, one column per propeller (see module docstring)
         self.params = np.zeros((physics.N_PROP_PARAMS, n))
         for i, p in enumerate(params):
             self.params[physics.PROP_K_THRUST, i] = _value(p.k_thrust)
