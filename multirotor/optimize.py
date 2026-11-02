@@ -124,7 +124,8 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
     -------
     Controller
     """
-    assert m.simulation.dt <= 0.1, 'Simulation time step too large.'
+    # The rate loop is stable while |1 - k_p * dt| < 1, i.e. dt < 2 / 32 = 0.0625 s.
+    assert m.simulation.dt <= 0.05, 'Simulation time step too large for the default gains.'
     pos = PosController( # PD
         0.8, 0., 3.75,
         max_err_i=args.max_velocity, vehicle=m,

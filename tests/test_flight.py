@@ -73,3 +73,12 @@ def test_controller_periods_are_whole_steps_of_at_least_one(dt):
     assert ctrl.steps_p == ctrl.steps_z == max(1, round(0.1 / dt))
     for _ in range(20):
         ctrl.step(reference=np.asarray([1., 0., 1., 0.]))
+
+
+
+def test_default_controller_rejects_time_steps_its_gains_cannot_handle():
+    vp, sp = make_params(8, 'quadratic', False, np.float64, dt=0.1)
+    with pytest.raises(AssertionError, match='too large'):
+        get_controller(Multirotor(vp, sp))
+    vp, sp = make_params(8, 'quadratic', False, np.float64, dt=0.05)
+    get_controller(Multirotor(vp, sp))
