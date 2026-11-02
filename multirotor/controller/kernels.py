@@ -65,7 +65,9 @@ PID_ERR_I = 2
 PID_ERR_D = 3
 PID_REFERENCE = 4
 PID_ACTION = 5
-N_PID_STATES = 6
+PID_INTEGRAL = 6
+"Accumulated error, before it is scaled by the integral gain"
+N_PID_STATES = 7
 
 
 
@@ -127,15 +129,16 @@ def pid_channel(
     """
     previous = S[PID_ERR, j]
     err_p = K[PID_K_P, j] * err
-    integral = S[PID_ERR_I, j] + dt * (previous + err) / 2.
+    integral = S[PID_INTEGRAL, j] + dt * (previous + err) / 2.
     limit = K[PID_MAX_ERR_I, j]
-    # bug: the stored integral already includes k_i, so k_i compounds each step
-    err_i = K[PID_K_I, j] * min(max(integral, -limit), limit)
+    integral = min(max(integral, -limit), limit)
+    err_i = K[PID_K_I, j] * integral
     err_d = K[PID_K_D, j] * (err - previous) / dt
     action = err_p + err_i + err_d
     if persist:
         S[PID_ERR_P, j] = err_p
         S[PID_ERR_I, j] = err_i
+        S[PID_INTEGRAL, j] = integral
         S[PID_ERR_D, j] = err_d
         S[PID_ACTION, j] = action
         S[PID_ERR, j] = err

@@ -181,19 +181,23 @@ def test_attitude_square_root_matches_oracle():
 
 
 def test_set_params_matches_oracle():
-    "Integral and derivative terms, and array-valued limits as the optimizer sets them."
+    """
+    Integral and derivative terms, and array-valued limits as the optimizer sets
+    them. The oracle accumulated the integral wrongly unless k_i was 1 (or 0), so
+    the integral gains are 1 here.
+    """
     vehicle = make_vehicle()
     new, old = make_controller(pid, vehicle), make_controller(legacy_pid, vehicle)
     params = dict(
-        ctrl_p=dict(k_i=0.1, k_d=2.),
-        ctrl_v=dict(k_p=2., k_i=0.5, k_d=0.1),
-        ctrl_a=dict(k_p=np.asarray([3., 3., 1.]), k_i=np.asarray([.2, .2, .1]),
+        ctrl_p=dict(k_i=1., k_d=2.),
+        ctrl_v=dict(k_p=2., k_i=1., k_d=0.1),
+        ctrl_a=dict(k_p=np.asarray([3., 3., 1.]), k_i=np.asarray([1., 1., 1.]),
                     k_d=np.asarray([.5, .5, .1])),
-        ctrl_r=dict(k_p=np.asarray([5., 5., 2.]), k_i=np.asarray([1., 1., .5]),
+        ctrl_r=dict(k_p=np.asarray([5., 5., 2.]), k_i=np.asarray([1., 1., 1.]),
                     k_d=np.asarray([30., 30., 5.]),
                     max_acceleration=np.asarray([2., 2., 1.]),
                     max_err_i=np.asarray([2., 2., 1.])),
-        ctrl_vz=dict(k_p=12., k_i=0.5, k_d=0.2),
+        ctrl_vz=dict(k_p=12., k_i=1., k_d=0.2),
     )
     for ctrl in (new, old):
         ctrl.set_params(**params)
@@ -289,7 +293,7 @@ def test_vehicle_swap_matches_oracle():
 def test_standalone_pid_matches_oracle():
     "A `PIDController` without a vehicle."
     rng = np.random.default_rng(0)
-    kwargs = dict(k_p=np.asarray([2., 1., 3.]), k_i=np.asarray([.5, .2, 0.]),
+    kwargs = dict(k_p=np.asarray([2., 1., 3.]), k_i=np.asarray([1., 1., 0.]),
                   k_d=np.asarray([.1, 0., .3]), max_err_i=np.asarray([.5, 1., 1.]))
     new, old = pid.PIDController(**kwargs), legacy_pid.PIDController(**kwargs)
     for i in range(50):
@@ -343,3 +347,31 @@ def test_standalone_stage_owns_its_data():
 def test_sqrt_control_without_p_gain_follows_the_acceleration_limit(err, expected):
     "With k_p=0 the correction is sqrt(2 * limit * |err|), signed. It was 0 for err > 0."
     assert kernels.sqrt_control(err, 0., 2., 0.) == pytest.approx(expected)
+
+
+
+def test_integral_term_is_the_scaled_trapezoid_of_the_error():
+    "Three steps of error 1 at dt=1 accumulate 0.5 + 1 + 1. It used to compound k_i."
+    stage = pid.PIDController(np.zeros(1), 2 * np.ones(1), np.zeros(1), np.asarray([1e9]))
+    for _ in range(3):
+        action = stage.step(np.ones(1), np.zeros(1), dt=1.)
+    np.testing.assert_allclose(stage.integral, 2.5)
+    np.testing.assert_allclose(action, 2 * 2.5)
+
+
+
+def test_accumulated_error_is_limited_before_it_is_scaled():
+    stage = pid.PIDController(np.zeros(1), 3 * np.ones(1), np.zeros(1), np.asarray([1.]))
+    for _ in range(5):
+        action = stage.step(np.ones(1), np.zeros(1), dt=1.)
+    np.testing.assert_allclose(stage.integral, 1.)
+    np.testing.assert_allclose(action, 3.)
+
+
+
+def test_accumulated_error_is_not_limited_without_a_maximum():
+    stage = pid.PIDController(np.zeros(1), np.ones(1), np.zeros(1), None)
+    for _ in range(3):
+        stage.step(np.full(1, 1e6), np.zeros(1), dt=1.)
+    assert np.isinf(stage.max_err_i).all()
+    np.testing.assert_allclose(stage.integral, 2.5e6)

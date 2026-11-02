@@ -32,7 +32,7 @@ from ..simulation import Multirotor
 from .data import ControllerData
 from .kernels import (
     PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT, PID_MAX_ACCELERATION,
-    PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION,
+    PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION, PID_INTEGRAL,
     pid_stage, leash_distance, position_step, velocity_step, attitude_step, rate_step,
     altitude_step, climb_step,
     sqrt_control # noqa: F401, kept importable from here
@@ -108,6 +108,7 @@ class PIDController:
     err_d = _state(PID_ERR_D, "Derivative term at the last step")
     reference = _state(PID_REFERENCE, "Reference at the last step")
     action = _state(PID_ACTION, "Action at the last step")
+    integral = _state(PID_INTEGRAL, "Accumulated error, before it is scaled by k_i")
 
     def __init__(
         self, k_p: np.ndarray, k_i: np.ndarray, k_d: np.ndarray,
