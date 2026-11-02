@@ -129,6 +129,7 @@ class PIDController:
             n = max(np.size(k_p), np.size(k_i), np.size(k_d), 1)
         self.dtype = np.dtype(np.float64)
         self._bind(ControllerData(n), 0, n)
+        self._adopted: bool = False
         self.k_p, self.k_i, self.k_d = k_p, k_i, k_d
         self.max_err_i = np.inf if max_err_i is None else max_err_i
         self._params = ('k_p', 'k_i', 'k_d', 'max_err_i')
@@ -142,8 +143,9 @@ class PIDController:
         self.n: int = n
 
 
-    def _attach(self, data: ControllerData, start: int) -> None:
+    def _adopt(self, data: ControllerData, start: int) -> None:
         "Move this controller, with its values, to columns of ``data`` from ``start``."
+        self._adopted = True
         stop = start + self.n
         data.params[:, start:stop] = self._data.params[:, self._start:self._stop]
         data.state[:, start:stop] = self._data.state[:, self._start:self._stop]
@@ -566,10 +568,17 @@ class Controller:
         # The stages become views of the columns of one data object
         stages = (self.ctrl_p, self.ctrl_v, self.ctrl_a, self.ctrl_r, self.ctrl_z,
                   self.ctrl_vz)
+        # A stage moves into this controller's data, so it can belong to only one
+        # controller. Check all stages before moving any.
+        if len({id(stage) for stage in stages}) < len(stages):
+            raise ValueError('Each stage must be a different object.')
+        if any(stage._adopted for stage in stages):
+            raise ValueError(
+                'A stage already belongs to a Controller. Build new stages.')
         self._data = ControllerData(sum(stage.n for stage in stages))
         start = 0
         for stage in stages:
-            stage._attach(self._data, start)
+            stage._adopt(self._data, start)
             start += stage.n
         self.reset()
 

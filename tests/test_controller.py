@@ -38,10 +38,10 @@ def make_vehicle(dtype=np.float64) -> Multirotor:
 
 
 
-def make_controller(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwargs):
+def make_stages(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwargs):
     """
-    The controller of ``optimize.get_controller``, built from the classes of
-    ``module`` (the current implementation or the oracle).
+    The six stages of the controller of ``optimize.get_controller``, built from
+    the classes of ``module`` (the current implementation or the oracle).
 
     Parameters
     ----------
@@ -71,8 +71,15 @@ def make_controller(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwa
         max_velocity=args.max_velocity)
     alt_rate = module.AltRateController(
         10, 0, 0, max_err_i=args.max_acceleration, vehicle=vehicle)
+    return pos, vel, att, rat, alt, alt_rate
+
+
+
+def make_controller(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwargs):
+    "A `Controller` of the stages of `make_stages`, with the same arguments."
     return module.Controller(
-        pos, vel, att, rat, alt, alt_rate, period_p=0.1, period_a=0.01, period_z=0.1)
+        *make_stages(module, vehicle, args, **kwargs),
+        period_p=0.1, period_a=0.01, period_z=0.1)
 
 
 
@@ -335,14 +342,32 @@ def test_stages_are_views_of_one_data_object():
 
 def test_controller_keeps_the_parameters_of_the_stages_it_takes_over():
     vehicle = make_vehicle()
-    first = make_controller(pid, vehicle)
-    first.ctrl_r.set_params(k_p=9., max_acceleration=np.asarray([1., 2., 3.]))
-    stages = [getattr(first, name) for name in CONTROLLERS]
-    second = pid.Controller(*stages)
-    assert all(stage._data is second._data for stage in stages)
-    assert second._data is not first._data
-    np.testing.assert_array_equal(second.ctrl_r.k_p, 9.)
-    np.testing.assert_array_equal(second.ctrl_r.max_acceleration, [1., 2., 3.])
+    stages = make_stages(pid, vehicle)
+    stages[3].set_params(k_p=9., max_acceleration=np.asarray([1., 2., 3.]))
+    controller = pid.Controller(*stages)
+    assert all(stage._data is controller._data for stage in stages)
+    np.testing.assert_array_equal(controller.ctrl_r.k_p, 9.)
+    np.testing.assert_array_equal(controller.ctrl_r.max_acceleration, [1., 2., 3.])
+
+
+
+def test_a_stage_belongs_to_one_controller():
+    vehicle = make_vehicle()
+    stages = make_stages(pid, vehicle)
+    first = pid.Controller(*stages)
+    with pytest.raises(ValueError, match='already belongs'):
+        pid.Controller(*stages)
+    assert all(stage._data is first._data for stage in stages), 'the first keeps its stages'
+
+
+
+def test_a_controller_rejects_one_stage_in_two_roles():
+    vehicle = make_vehicle()
+    stages = list(make_stages(pid, vehicle))
+    stages[1] = stages[0]
+    with pytest.raises(ValueError, match='different object'):
+        pid.Controller(*stages)
+    assert not any(stage._adopted for stage in stages), 'no stage moved'
 
 
 
