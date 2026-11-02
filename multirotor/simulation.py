@@ -804,7 +804,8 @@ class Multirotor:
 
     @property
     def speeds(self) -> np.ndarray:
-        return np.asarray(self._data.speed, self.dtype)
+        """Propeller speeds (rad/s). A copy, not a view of the internal array."""
+        return np.array(self._data.speed, self.dtype)
     @speeds.setter
     def speeds(self, speeds: np.ndarray):
         self._step_propellers(speeds)
@@ -907,8 +908,8 @@ class Multirotor:
         Tuple[np.ndarray, np.ndarray]
             The forces and torques acting on the body.
         """
-        linear_vel_body = state[:3]
-        angular_vel_body = state[3:6]
+        linear_vel_body = state[3:6]
+        angular_vel_body = state[9:12]
         airstream_velocity_inertial = rotating_frame_derivative(
             self.params.propeller_vectors,
             linear_vel_body,

@@ -447,8 +447,10 @@ class Multirotor:
         Tuple[np.ndarray, np.ndarray]
             The forces and torques acting on the body.
         """
-        linear_vel_body = state[:3]
-        angular_vel_body = state[3:6]
+        # Deliberate divergence from the original, which passed state[:3] (the
+        # position) and state[3:6] (the velocity) here.
+        linear_vel_body = state[3:6]
+        angular_vel_body = state[9:12]
         airstream_velocity_inertial = rotating_frame_derivative(
             self.params.propeller_vectors,
             linear_vel_body,

@@ -137,3 +137,30 @@ def test_multirotor_reset(motor):
         assert p.speed == 0.
         if motor:
             assert (p.motor.speed, p.motor.voltage, p.motor.current) == (0., 0., 0.)
+
+
+
+@pytest.mark.parametrize('dtype', (np.float32, np.float64), ids=lambda d: d.__name__)
+def test_speeds_is_a_copy(dtype):
+    vp, sp = make_params(8, 'quadratic', True, dtype)
+    vehicle = Multirotor(vp, sp)
+    u = hover_signals(vp, sp)
+    vehicle.step_speeds(u)
+    before = vehicle.speeds
+    kept = before.copy()
+    vehicle.step_speeds(u * 1.1)
+    assert np.array_equal(before, kept), 'speeds must not alias the internal array'
+
+
+
+def test_blade_element_airstream_depends_on_velocity_not_position():
+    vp, sp = make_params(8, 'fsolve', False, np.float64)
+    vehicle = Multirotor(vp, sp)
+    speeds = np.full(8, nominal_speed(vp, sp))
+    state = np.zeros(12)
+    f0 = vehicle.get_forces_torques(speeds, state)[0]
+    state[:3] = 100.
+    assert np.allclose(vehicle.get_forces_torques(speeds, state)[0], f0)
+    state[:3] = 0.
+    state[5] = -5.
+    assert not np.allclose(vehicle.get_forces_torques(speeds, state)[0], f0)

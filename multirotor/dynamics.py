@@ -329,9 +329,10 @@ def rhs_body_with_motors_blade_element(
     """
     body_state = x[:N_BODY_STATES]
     speeds = x[N_BODY_STATES:]
-    # Same airstream inputs as `Multirotor.get_forces_torques`.
+    # Same airstream inputs as `Multirotor.get_forces_torques`: the body-frame
+    # velocity and angular rate.
     airstream_velocities = rotating_frame_derivative(
-        positions, body_state[:3], body_state[3:6])
+        positions, body_state[3:6], body_state[9:12])
     thrusts = thrusts_blade_element_model(
         speeds, airstream_velocities, prop_params, rho)
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
