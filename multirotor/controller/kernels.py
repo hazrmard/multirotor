@@ -79,7 +79,7 @@ def sqrt_control(err: float, k_p: float, derr_dt2_lim: float, dt: float):
     elif k_p == 0:
         if err > 0:
             correction_rate = np.sqrt(2. * derr_dt2_lim * err)
-        if err < 0:
+        elif err < 0:
             correction_rate = -np.sqrt(2. * derr_dt2_lim * (-err))
         else:
             correction_rate = 0.

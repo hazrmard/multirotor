@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import legacy.controller as legacy_pid
+import multirotor.controller.kernels as kernels
 import multirotor.controller.pid as pid
 from multirotor.optimize import DEFAULTS
 from multirotor.simulation import Multirotor
@@ -335,3 +336,10 @@ def test_standalone_stage_owns_its_data():
     stage = pid.AttController(1., 0., 0., 0.1, vehicle=vehicle)
     assert stage._data.params.shape[1] == stage.n == 3
     assert stage.k_p.shape == (3,)
+
+
+
+@pytest.mark.parametrize('err, expected', ((1., 2.), (-1., -2.), (0., 0.)))
+def test_sqrt_control_without_p_gain_follows_the_acceleration_limit(err, expected):
+    "With k_p=0 the correction is sqrt(2 * limit * |err|), signed. It was 0 for err > 0."
+    assert kernels.sqrt_control(err, 0., 2., 0.) == pytest.approx(expected)
