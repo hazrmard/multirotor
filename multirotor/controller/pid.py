@@ -669,7 +669,8 @@ class Controller:
             dt = self.steps_a * self.vehicle.simulation.dt
             self._pitch_roll = self.ctrl_v.step(self._ref_vel, self.vehicle.velocity[:2], dt=dt, persist=persist)
             ref_orientation = np.asarray([self._pitch_roll[1], self._pitch_roll[0], ref_yaw])
-            ref_rate = self.ctrl_a.step(ref_orientation, self.vehicle.orientation, dt=dt)
+            ref_rate = self.ctrl_a.step(
+                ref_orientation, self.vehicle.orientation, dt=dt, persist=persist)
             self.torques = self.ctrl_r.step(ref_rate, self.vehicle.euler_rate, dt=dt, persist=persist)
 
         action = np.asarray([*self.thrust, *self.torques], self.dtype)

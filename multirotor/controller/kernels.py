@@ -31,10 +31,7 @@ Call chain::
 
 Stages run in order, because the output of one is the reference of the next.
 
-A call with ``persist=False`` is meant to leave the controller unchanged. A few
-kernels change some of its state anyway; those lines are marked "bug". They keep
-the behavior of the controller before it was compiled, so that the change could
-be checked against the old implementation.
+A call with ``persist=False`` computes the action without changing the state.
 """
 import numpy as np
 from numba import njit
@@ -244,8 +241,7 @@ def position_step(
             velocity[i] = K[PID_K_P, lo + i] * err[i]
             if persist:
                 S[PID_ERR, lo + i] = err[i]
-            # bug: stored even if not persist
-            S[PID_ERR_P, lo + i] = velocity[i]
+                S[PID_ERR_P, lo + i] = velocity[i]
     if err_len > 0. and square_root_scaling:
         for i in range(2):
             velocity[i] = sqrt_control(
@@ -347,8 +343,6 @@ def rate_step(
     for i in range(3):
         limit = K[PID_LIMIT, lo + i]
         acc[i] = min(max(acc[i], -limit), limit)
-        # bug: stored even if not persist, as the angular acceleration
-        S[PID_ACTION, lo + i] = acc[i]
     torque = inertia @ acc
     for i in range(3):
         out[i] = torque[i]
@@ -364,8 +358,6 @@ def altitude_step(
 ) -> None:
     "Altitude stage (1 channel): z-position error to climb rate, written to ``out``."
     pid_stage(K, S, lo, lo + 1, reference, measurement, dt, False, persist, out)
-    # bug: stored even if not persist, before the limit
-    S[PID_ACTION, lo] = out[0]
     limit = K[PID_LIMIT, lo]
     out[0] = min(max(out[0], -limit), limit)
     if persist:

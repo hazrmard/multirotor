@@ -248,16 +248,27 @@ def test_feed_forward_matches_oracle():
 
 
 
-def test_persist_false_matches_oracle():
+def test_persist_false_leaves_the_controller_unchanged():
     """
-    A step with ``persist=False`` must leave exactly the state that the oracle
-    leaves, bugs included: it still changes the state of the position and
-    attitude controllers. The steps after it show whether the state is the same.
+    A step with ``persist=False`` returns what the step would return, and changes
+    nothing: the controller then stays in step with an oracle that never saw it.
     """
     vehicle = make_vehicle()
     new, old = make_controller(pid, vehicle), make_controller(legacy_pid, vehicle)
-    run(new, old, vehicle, TOLERANCE[np.float64],
-        step_kwargs=lambda i: dict(persist=i % 7 != 3))
+    tol = TOLERANCE[np.float64]
+    for i in range(STEPS):
+        ref = waypoints(i).astype(vehicle.dtype)
+        if i % 7 == 3:
+            data, n, action = new._data.state.copy(), new.n, new.action.copy()
+            probe = new.step(reference=ref, persist=False)
+            np.testing.assert_array_equal(new._data.state, data, err_msg=f'step {i}')
+            assert new.n == n
+            np.testing.assert_array_equal(new.action, action)
+        a_old, a_new = old.step(reference=ref), new.step(reference=ref)
+        if i % 7 == 3:
+            np.testing.assert_allclose(probe, a_new, **tol, err_msg=f'step {i} probe')
+        np.testing.assert_allclose(a_new, a_old, **tol, err_msg=f'step {i}')
+        vehicle.step_speeds(vehicle.allocate_control(a_old[0], a_old[1:4]))
 
 
 
