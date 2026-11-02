@@ -147,7 +147,7 @@ class Propeller:
         if self.params.use_thrust_constant:
             self.thrust: Callable = self._thrust_constant
         else:
-            self.thrust: Callable = self._thrust_physics
+            self.thrust: Callable = self._thrust_blade_element_model
         # If not motor is provided, then speed signals take effect instantaneously
         if data.motors is not None:
             self.motor: Motor = Motor._view(
@@ -218,7 +218,9 @@ class Propeller:
         return self.params.k_thrust * speed**2
 
 
-    def _thrust_physics(self, speed, airstream_velocity: np.ndarray=np.zeros(3)) -> float:
+    def _thrust_blade_element_model(
+        self, speed, airstream_velocity: np.ndarray=np.zeros(3)
+    ) -> float:
         p = self.params
         return thrust_blade_element_model(
             speed, airstream_velocity,
