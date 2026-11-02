@@ -60,3 +60,16 @@ def test_sampled_rate_derivative_gains_are_stable():
     for _ in range(50):
         params = make_controller_from_trial(study.ask())
         assert np.all(params['ctrl_r']['k_d'] < 1.)
+
+
+
+@pytest.mark.parametrize('dt', (0.001, 0.01, 0.02, 0.05))
+def test_controller_periods_are_whole_steps_of_at_least_one(dt):
+    "A period shorter than the simulation step used to give 0 steps and a ZeroDivisionError."
+    vp, sp = make_params(8, 'quadratic', False, np.float64, dt=dt)
+    vehicle = Multirotor(vp, sp)
+    ctrl = get_controller(vehicle)
+    assert ctrl.steps_a == max(1, round(0.01 / dt))
+    assert ctrl.steps_p == ctrl.steps_z == max(1, round(0.1 / dt))
+    for _ in range(20):
+        ctrl.step(reference=np.asarray([1., 0., 1., 0.]))

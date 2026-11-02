@@ -529,7 +529,8 @@ class Controller:
             The time resolution of the [position | attitude | altitude] controller.
             The controller will only renew an action after this interval has passed.
             Otherwise it will apply the last action. For e.g. if interval=1, and vehicle dt=0.1, a
-            new action will only be applied every interval/dt=10 steps. by default 1
+            new action will only be applied every interval/dt=10 steps. by default 1. The interval is
+            rounded to a whole number of steps, and is at least one step.
         feedforward_weight: float, optional
             The weight to assign to a separately specified velocity reference,
             which overrides the velocity signal given by the position controller.
@@ -550,9 +551,12 @@ class Controller:
         self.period_p = period_p
         self.period_a = period_a
         self.period_z = period_z
-        self.steps_p = int(self.period_p // self.vehicle.simulation.dt)
-        self.steps_a = int(self.period_a // self.vehicle.simulation.dt)
-        self.steps_z = int(self.period_z // self.vehicle.simulation.dt)
+        dt = self.vehicle.simulation.dt
+        # Whole simulation steps per period, and at least one: a stage with a
+        # period shorter than the simulation step runs at every step.
+        self.steps_p = max(1, round(self.period_p / dt))
+        self.steps_a = max(1, round(self.period_a / dt))
+        self.steps_z = max(1, round(self.period_z / dt))
         self.feedforward_weight = feedforward_weight
         assert self.ctrl_a.vehicle is self.ctrl_p.vehicle, "Vehicle instances different."
         assert self.ctrl_a.vehicle is self.ctrl_v.vehicle, "Vehicle instances different."
