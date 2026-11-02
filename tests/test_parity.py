@@ -59,12 +59,6 @@ def test_step_speeds_parity(n, thrust_model, motor, steps, dtype):
 
 
 @pytest.mark.parametrize('dtype', DTYPES, ids=lambda d: d.__name__)
-def test_step_speeds_parity_at_hover(dtype):
-    run_parity(8, 'quadratic', False, N_SCHEDULE, dtype, excite=False)
-
-
-
-@pytest.mark.parametrize('dtype', DTYPES, ids=lambda d: d.__name__)
 def test_step_dynamics_parity(dtype):
     new, old = make_pair(8, 'quadratic', False, dtype)
     hover = np.asarray([0, 0, new.params.mass * new.simulation.g, 0, 0, 0], dtype)

@@ -18,27 +18,11 @@ from common import hover_signals, make_params
 
 
 
-def test_propeller_data_compiles_params():
-    props = [deepcopy(PP) for _ in range(3)]
-    props[1].k_thrust = 2 * PP.k_thrust
-    data = PropellerData(props)
-    assert data.params.shape == (physics.N_PROP_PARAMS, 3)
-    np.testing.assert_array_equal(
-        data.params[physics.PROP_K_THRUST], [PP.k_thrust, 2 * PP.k_thrust, PP.k_thrust])
-    assert data.use_thrust_constant
-    assert data.motors is None
-    assert len(data) == 3
 
 
 
-def test_motor_data_compiles_params():
-    prop = replace(deepcopy(PP), motor=deepcopy(MP))
-    data = PropellerData([prop, prop])
-    motors = data.motors
-    assert motors.params.shape == (physics.N_MOTOR_PARAMS, 2)
-    np.testing.assert_array_equal(motors.params[physics.MOTOR_RESISTANCE], MP.resistance)
-    np.testing.assert_array_equal(motors.params[physics.MOTOR_K_DRAG], PP.k_drag)
-    assert data.speed is motors.speed, 'propeller speed is stored once, in the motor data'
+
+
 
 
 

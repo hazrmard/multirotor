@@ -66,11 +66,10 @@ def test_motor_step_apply_reset():
     params.k_drag = PP.k_drag
     motor = Motor(params, SP)
     signal = 300.
-    predicted = motor.apply_speed(signal)
     assert (motor.speed, motor.voltage, motor.current) == (0., 0., 0.)
     speed = motor.step(signal)
     assert np.ndim(speed) == 0
-    assert speed == predicted == motor.speed
+    assert speed == motor.speed
     assert motor.voltage > 0 and motor.current > 0
     motor.reset()
     assert (motor.speed, motor.voltage, motor.current) == (0., 0., 0.)

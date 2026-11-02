@@ -80,12 +80,15 @@ def errors(trajectory: np.ndarray, reference: np.ndarray) -> dict:
 
 
 
-def test_body_equations_match_oracle():
+@pytest.mark.parametrize('thrust_model', ('quadratic', 'fsolve'))
+def test_body_equations_match_oracle(thrust_model):
     # The body part of the combined right-hand side, for given motor speeds,
     # equals the oracle's derivative for propellers spinning at those speeds.
-    vp, sp = make_params(8, 'quadratic', True, dtype=np.float64)
+    # The blade-element model reads the body velocity and angular rate, so the
+    # random states have both.
+    vp, sp = make_params(8, thrust_model, True, dtype=np.float64)
     vehicle = Multirotor(vp, sp)
-    vp_no_motor, _ = make_params(8, 'quadratic', False, dtype=np.float64)
+    vp_no_motor, _ = make_params(8, thrust_model, False, dtype=np.float64)
     oracle = LegacyMultirotor(vp_no_motor, sp)
     oracle.dxdt_decimals = 12
     rng = np.random.default_rng(0)
@@ -94,6 +97,8 @@ def test_body_equations_match_oracle():
         speeds = nominal_speed(vp, sp) * rng.uniform(0.8, 1.2, 8)
         x = np.concatenate((body_state, speeds))
         args = (speeds, np.inf, np.zeros(6)) + vehicle._kernel_params
+        if thrust_model == 'fsolve':
+            args += (float(sp.rho),)
         dxdt = vehicle._rhs(0., x, *args)
         np.testing.assert_allclose(
             dxdt[:N_BODY_STATES], oracle.dxdt_speeds(0., body_state, speeds), rtol=0, atol=1e-12)
