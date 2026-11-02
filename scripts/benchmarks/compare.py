@@ -65,6 +65,11 @@ def main(argv=None) -> int:
             ta, tb = ra['first_step_s']['median'], rb['first_step_s']['median']
             print(f'{"cold_start first step (s)":<60} {ta:>10.2f} {tb:>10.2f}'
                   f' {pct(tb, ta):>+8.1f}')
+            if 'controller_first_step_s' in ra and 'controller_first_step_s' in rb:
+                ta = ra['controller_first_step_s']['median']
+                tb = rb['controller_first_step_s']['median']
+                print(f'{"cold_start controller first step (s)":<60} {ta:>10.2f} {tb:>10.2f}'
+                      f' {pct(tb, ta):>+8.1f}')
             continue
         row = f'{cid:<60}'
         if 'stats' in ra and 'stats' in rb:

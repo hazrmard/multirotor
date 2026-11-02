@@ -157,6 +157,14 @@ def vehicle_points(v: Multirotor) -> List[ScopePoint]:
     return pts
 
 
+def controller_points(controller) -> List[ScopePoint]:
+    """The controller as one coarse scope, and each of its stages as a fine scope."""
+    pts = [ScopePoint(Level.COARSE, controller, 'step', 'controller')]
+    for name in ('ctrl_p', 'ctrl_v', 'ctrl_a', 'ctrl_r', 'ctrl_z', 'ctrl_vz'):
+        pts.append(ScopePoint(Level.FINE, getattr(controller, name), 'step', name))
+    return pts
+
+
 def log_points() -> List[ScopePoint]:
     # DataLog is created inside reset()/run_sim, so patch the class.
     return [ScopePoint(Level.COARSE, DataLog, 'log', 'log'),
@@ -261,16 +269,37 @@ class StepDynamics(Runner):
 
 
 class ControllerStep(Runner):
-    """``Controller.step`` alone; the vehicle state is held fixed."""
-    def __init__(self, n=8):
+    """
+    ``Controller.step`` alone; the vehicle state is held fixed.
+
+    ``scenario='hover'`` holds the vehicle at the origin with a reference straight
+    above it, so the horizontal error is zero and the position controller takes its
+    plain PID branch. ``scenario='flight'`` holds a moving, tilted vehicle 6 m and
+    4 m away from a reference, which runs the square-root controller and the leash.
+    """
+    FLIGHT_REF = (6., -4., ALTITUDE, 0.5)
+    "Reference of the flight scenario: x, y, z, yaw"
+    FLIGHT_STATE = (0., 0., ALTITUDE - 1, 2., -1., .5, .05, -.05, .2, .1, -.1, .05)
+    "Vehicle state of the flight scenario: position, velocity, orientation, angular rate"
+    FLIGHT_ACCELERATION = (.5, -.3, .1)
+    "Body acceleration of the flight scenario"
+
+    def __init__(self, n=8, scenario='hover'):
+        if scenario not in ('hover', 'flight'):
+            raise ValueError(scenario)
         self.v = make_vehicle(n)
         self.c = get_controller(self.v)
-        self.ref = np.asarray([0, 0, ALTITUDE, 0], self.v.dtype)
+        self.scenario = scenario
+        ref = self.FLIGHT_REF if scenario == 'flight' else (0, 0, ALTITUDE, 0)
+        self.ref = np.asarray(ref, self.v.dtype)
         self.dt = self.v.simulation.dt
 
     def reset(self):
         self.v.reset()
         self.c.reset()
+        if self.scenario == 'flight':
+            self.v.state[:] = self.FLIGHT_STATE
+            self.v._dxdt[3:6] = self.FLIGHT_ACCELERATION
 
     def run(self, n):
         step, ref = self.c.step, self.ref
@@ -278,7 +307,7 @@ class ControllerStep(Runner):
             step(reference=ref)
 
     def scope_points(self):
-        return [ScopePoint(Level.COARSE, self.c, 'step', 'controller')]
+        return controller_points(self.c)
 
 
 class ClosedLoop(Runner):
@@ -307,8 +336,8 @@ class ClosedLoop(Runner):
             dl.done_logging()
 
     def scope_points(self):
-        return ([ScopePoint(Level.COARSE, self.c, 'step', 'controller'),
-                 ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
+        return (controller_points(self.c)
+                + [ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
                 + vehicle_points(self.v) + log_points())
 
 
@@ -334,10 +363,10 @@ class RunSim(Runner):
             raise RuntimeError(f'run_sim ended after {len(log)} of {n} steps')
 
     def scope_points(self):
-        return ([ScopePoint(Level.COARSE, self.c, 'step', 'controller'),
-                 ScopePoint(Level.COARSE, self.env, 'step', 'env.step'),
-                 ScopePoint(Level.COARSE, self.env, 'reward', 'reward'),
-                 ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
+        return (controller_points(self.c)
+                + [ScopePoint(Level.COARSE, self.env, 'step', 'env.step'),
+                   ScopePoint(Level.COARSE, self.env, 'reward', 'reward'),
+                   ScopePoint(Level.COARSE, self.v, 'allocate_control', 'allocation')]
                 + vehicle_points(self.v) + log_points())
 
 
@@ -388,7 +417,9 @@ CASES: Dict[str, Case] = {
         dict(n=8, excite=True, steps=1000), dict(n=8, excite=False, steps=1000),
     ]),
     'controller_step': Case(ControllerStep, quick_steps=500, params=[
-        dict(n=8, steps=5000)]),
+        dict(n=8, scenario='hover', steps=5000),
+        dict(n=8, scenario='flight', steps=5000),
+    ]),
     'closed_loop': Case(ClosedLoop, quick_steps=200, params=[
         dict(n=8, thrust_model='quadratic', motor=False, log=False, steps=2000),
         dict(n=8, thrust_model='quadratic', motor=False, log=True, steps=2000),

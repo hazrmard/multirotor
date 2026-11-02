@@ -144,11 +144,11 @@ parameter (`log_scaling`).
 |---|---|---|---|
 | `step_speeds` | 4, 6, 8 rotors, `thrust_model='quadratic'`, excited; 8 rotors with motor model, excited; 8 rotors with motor and battery models, excited; 8 rotors, `thrust_model='fsolve'`, excited with `excite_frac=0.002`; 8 rotors, `thrust_model='quadratic'`, hover | 1000 (`fsolve`: 128) | `Multirotor.step_speeds` |
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
-| `controller_step` | 8 rotors | 5000 | `Controller.step` with a fixed vehicle state |
+| `controller_step` | 8 rotors; `scenario=hover` or `flight` | 5000 | `Controller.step` with a fixed vehicle state. `hover` has no horizontal error (plain PID branch). `flight` is 6 m and 4 m from the reference, moving and tilted, and runs the square-root controller and the leash |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
 | `run_sim` | 8 rotors | 1000 | `optimize.run_sim` through `DynamicsMultirotorEnv(allocate=True)`, which calls `step_dynamics` |
 | `log_scaling` | 8 rotors, `DataLog` | 1000, 5000, 20000 | memory pass only |
-| `cold_start` | none | none | fresh process: import, build vehicle, first and second `step_speeds` |
+| `cold_start` | none | none | fresh process: import, build vehicle, first and second `step_speeds`; build controller, first and second `Controller.step` |
 
 Common settings:
 
@@ -276,7 +276,7 @@ tree. Each item in the tree records its `level` (`'coarse'` or `'fine'`).
 | level | scopes |
 |---|---|
 | `coarse` | `loop`, `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
-| `fine` | `integrator`, `model`, `forces_torques`, `propeller` |
+| `fine` | `integrator`, `model`, `forces_torques`, `propeller`, `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` |
 
 `scopes.view(tree, Level.COARSE)` returns the coarse tree. It removes fine scopes from
 paths and adds their time to the exclusive time of the nearest coarse ancestor:
@@ -316,6 +316,7 @@ misspelled attribute names.
 |---|---|---|
 | `loop` | `Runner.run` | the whole timed loop |
 | `controller` | `Controller.step` | |
+| `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` | `step` of each stage: position, velocity, attitude, rate, altitude, climb rate | its stage, on the steps where the stage runs |
 | `allocation` | `Multirotor.allocate_control` | |
 | `env.step` | `DynamicsMultirotorEnv.step` | |
 | `reward` | `DynamicsMultirotorEnv.reward` | |
