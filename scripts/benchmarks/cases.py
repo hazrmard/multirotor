@@ -350,7 +350,12 @@ class RunSim(Runner):
         self.dt = self.v.simulation.dt
 
     def reset(self):
-        self.env.reset()
+        # A fixed start at the hold point. The env's random start, or a long
+        # move, can end the episode early (it is done within 0.5 m of the origin
+        # or at a tilt of 15 degrees), and the run length must not vary.
+        start = np.zeros(12, self.v.dtype)
+        start[:3] = (0., 0., ALTITUDE)
+        self.env.reset(start)
         self.c.reset()
 
     def run(self, n):
