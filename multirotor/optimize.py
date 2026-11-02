@@ -26,6 +26,7 @@ DEFAULTS = Namespace(
     max_velocity = 5,
     max_acceleration = 2.5,
     max_tilt = np.pi/12,
+    max_angular_acceleration = 20.,
     leashing = True,
     sqrt_scaling = True,
     use_yaw = True,
@@ -123,7 +124,8 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
     -------
     Controller
     """
-    assert m.simulation.dt <= 0.1, 'Simulation time step too large.'
+    # The rate loop is stable while |1 - k_p * dt| < 1, i.e. dt < 2 / 32 = 0.0625 s.
+    assert m.simulation.dt <= 0.05, 'Simulation time step too large for the default gains.'
     pos = PosController( # PD
         0.8, 0., 3.75,
         max_err_i=args.max_velocity, vehicle=m,
@@ -132,18 +134,24 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
         square_root_scaling=args.sqrt_scaling,
         leashing=args.leashing
     )
+    # Each loop must be slower than the loop inside it. Approximate bandwidths:
+    # velocity g * k_p = 5 rad/s, attitude 8 rad/s, rate 32 rad/s.
     vel = VelController( # P
-        1, 0., 0,
+        0.5, 0., 0,
         max_err_i=args.max_acceleration,
         vehicle=m,
         max_tilt=args.max_tilt)
     att = AttController( # P
-        [1., 1., 0.], 0, 0., # yaw param is set to 0, in case use_yaw=False
+        [8., 8., 0.], 0, 0., # yaw param is set to 0, in case use_yaw=False
         max_err_i=args.max_err_i_attitude, vehicle=m)
-    rat = RateController( # PD
-        [4, 4, 0], 0, [40, 40, 0], # yaw param is set to 0, in case use_yaw=False
+    # The rate controller outputs angular acceleration, and k_d acts on the change
+    # of the rate error, which that acceleration causes. A k_d of 1 or more makes
+    # the torque flip sign at every step, so there is no D term.
+    rat = RateController( # P
+        [32, 32, 0], 0, 0, # yaw param is set to 0, in case use_yaw=False
         max_err_i=args.max_err_i_rate,
-        vehicle=m)
+        vehicle=m,
+        max_acceleration=args.max_angular_acceleration)
 
     alt = AltController(
         1, 0, 0,
@@ -183,12 +191,13 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     """
     r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 0.1, 50)
     r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0.1, 10)
-    r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 1, 250)
+    # The rate controller outputs acceleration, so a k_d of 1 or more is unstable
+    r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 0, 0.5)
     r_pitch_roll_max_acc = trial.suggest_float(prefix + 'r_pitch_roll.max_acceleration', 0.1, 25)
     if args.use_yaw:
         r_yaw_p = trial.suggest_float(prefix + 'r_yaw.k_p', 0.1, 5)
         r_yaw_i = trial.suggest_float(prefix + 'r_yaw.k_i', 0.1, 1)
-        r_yaw_d = trial.suggest_float(prefix + 'r_yaw.k_d', 1, 25)
+        r_yaw_d = trial.suggest_float(prefix + 'r_yaw.k_d', 0, 0.5)
         r_yaw_max_acc = trial.suggest_float(prefix + 'r_yaw.max_acceleration', 0.1, 5)
     else:
         r_yaw_p, r_yaw_i, r_yaw_d, r_yaw_max_acc = 0, 0, 0, 0
@@ -363,7 +372,7 @@ def apply_params(ctrl: Controller, params: dict) -> Dict[str, Dict[str, np.ndarr
     Parameters
     ----------
     ctrl : Controller
-        The controller to which to apply the parameters. If None, just return the
+        The controller to which to apply the parameters. If None, return the
         dictionary of parameters which `Controller.set_params()` can use.
     params : dict[str, np.ndarray]
         The dictionary of parameters returned by `optuna.Study`

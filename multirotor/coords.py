@@ -20,7 +20,7 @@ def body_to_inertial(vector: np.ndarray, dcm: np.ndarray) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        The transformed coordinates in the intertial frame
+        The transformed coordinates in the inertial frame
     """
     return dcm.T @ vector
 

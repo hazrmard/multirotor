@@ -132,8 +132,22 @@ def worker_cold() -> dict:
     t0 = time.perf_counter()
     v.step_speeds(u)
     t_second = time.perf_counter() - t0
+    # The controller compiles its own kernels on its first step
+    ref = np.asarray([0, 0, cases.ALTITUDE, 0], v.dtype)
+    t0 = time.perf_counter()
+    c = cases.get_controller(v)
+    t_ctrl_construct = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    c.step(reference=ref)
+    t_ctrl_first = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    c.step(reference=ref)
+    t_ctrl_second = time.perf_counter() - t0
     return dict(import_s=t_import, construct_s=t_construct,
                 first_step_s=t_first, second_step_s=t_second,
+                controller_construct_s=t_ctrl_construct,
+                controller_first_step_s=t_ctrl_first,
+                controller_second_step_s=t_ctrl_second,
                 peak_rss_mb=_peak_rss_mb())
 
 
@@ -259,9 +273,13 @@ def main(argv=None) -> None:
             import_s=summarize([c['import_s'] for c in cold]),
             construct_s=summarize([c['construct_s'] for c in cold]),
             second_step_s=summarize([c['second_step_s'] for c in cold]),
+            controller_construct_s=summarize([c['controller_construct_s'] for c in cold]),
+            controller_first_step_s=summarize([c['controller_first_step_s'] for c in cold]),
+            controller_second_step_s=summarize([c['controller_second_step_s'] for c in cold]),
             peak_rss_mb=summarize([c['peak_rss_mb'] for c in cold])['median'],
         )
-        print(f'first step {cold_rec["first_step_s"]["median"]:.2f} s')
+        print(f'first step {cold_rec["first_step_s"]["median"]:.2f} s, '
+              f'controller {cold_rec["controller_first_step_s"]["median"]:.2f} s')
 
     label = args.label or time.strftime('%Y%m%d-%H%M%S')
     payload = dict(schema=SCHEMA_VERSION, label=label, quick=args.quick,
