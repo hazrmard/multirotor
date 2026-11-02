@@ -595,7 +595,7 @@ class Controller:
         self.ctrl_v.set_params(**params.get('ctrl_v', {}))
         self.ctrl_a.set_params(**params.get('ctrl_a', {}))
         self.ctrl_r.set_params(**params.get('ctrl_r', {}))
-        self.ctrl_a.set_params(**params.get('ctrl_a', {}))
+        self.ctrl_z.set_params(**params.get('ctrl_z', {}))
         self.ctrl_vz.set_params(**params.get('ctrl_vz', {}))
         local_params = {k:v for k,v in params.items() if not isinstance(v, dict)}
         for name, param in local_params.items():

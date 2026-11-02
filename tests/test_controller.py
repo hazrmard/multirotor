@@ -375,3 +375,14 @@ def test_accumulated_error_is_not_limited_without_a_maximum():
         stage.step(np.full(1, 1e6), np.zeros(1), dt=1.)
     assert np.isinf(stage.max_err_i).all()
     np.testing.assert_allclose(stage.integral, 2.5e6)
+
+
+
+def test_set_params_reaches_every_stage():
+    "The altitude controller was skipped, and the attitude controller set twice."
+    ctrl = make_controller(pid, make_vehicle())
+    values = {name: 3. + i for i, name in enumerate(CONTROLLERS)}
+    ctrl.set_params(**{name: dict(k_p=value) for name, value in values.items()})
+    for name, value in values.items():
+        np.testing.assert_array_equal(getattr(ctrl, name).k_p, value, err_msg=name)
+    np.testing.assert_array_equal(ctrl.get_params()['ctrl_z']['k_p'], values['ctrl_z'])
