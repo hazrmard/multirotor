@@ -7,7 +7,7 @@ with rows named by the ``PID_*`` constants below. ``lo`` is the first column of
 the stage that a kernel advances.
 
 Every stage is the same PID law, `pid_channel`, plus a stage-specific step before
-or after it:
+or after it::
 
     Stage     Kernel          Before the PID law       After the PID law
     --------  --------------  -----------------------  ------------------------

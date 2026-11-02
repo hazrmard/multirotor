@@ -1,6 +1,6 @@
 """
 The cascaded PID controller. `Controller` tracks a position and yaw and outputs
-thrust and moments, through six stages that each wrap the same PID law:
+thrust and moments, through six stages that each wrap the same PID law::
 
     (x,y) --> PosController --> VelController --> AttController --> RateController --> (moments)
     (z)   --> AltController --> AltRateController --> (thrust)
