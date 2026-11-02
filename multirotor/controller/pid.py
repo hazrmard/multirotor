@@ -59,27 +59,27 @@ def _state64(vehicle: Multirotor) -> np.ndarray:
 def _param(row: int, doc: str) -> property:
     "A property that views one row of the parameter matrix, over a stage's columns."
     def get(self):
-        return self._data.params[row, self._lo:self._hi]
+        return self._data.params[row, self._start:self._stop]
     def set(self, value):
-        self._data.params[row, self._lo:self._hi] = value
+        self._data.params[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
 def _state(row: int, doc: str) -> property:
     "A property that views one row of the state matrix, over a stage's columns."
     def get(self):
-        return self._data.state[row, self._lo:self._hi]
+        return self._data.state[row, self._start:self._stop]
     def set(self, value):
-        self._data.state[row, self._lo:self._hi] = value
+        self._data.state[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
 def _scalar_param(row: int, doc: str) -> property:
     "A property for a parameter of a stage that has one value for all its channels."
     def get(self):
-        return float(self._data.params[row, self._lo])
+        return float(self._data.params[row, self._start])
     def set(self, value):
-        self._data.params[row, self._lo:self._hi] = value
+        self._data.params[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
@@ -134,24 +134,24 @@ class PIDController:
         self._params = ('k_p', 'k_i', 'k_d', 'max_err_i')
 
 
-    def _bind(self, data: ControllerData, lo: int, n: int) -> None:
-        "Make this controller a view of ``n`` columns of ``data``, from ``lo``."
+    def _bind(self, data: ControllerData, start: int, n: int) -> None:
+        "Make this controller a view of ``n`` columns of ``data``, from ``start``."
         self._data: ControllerData = data
-        self._lo: int = lo
-        self._hi: int = lo + n
+        self._start: int = start
+        self._stop: int = start + n
         self.n: int = n
 
 
-    def _attach(self, data: ControllerData, lo: int) -> None:
-        "Move this controller, with its values, to columns of ``data`` from ``lo``."
-        hi = lo + self.n
-        data.params[:, lo:hi] = self._data.params[:, self._lo:self._hi]
-        data.state[:, lo:hi] = self._data.state[:, self._lo:self._hi]
-        self._bind(data, lo, self.n)
+    def _attach(self, data: ControllerData, start: int) -> None:
+        "Move this controller, with its values, to columns of ``data`` from ``start``."
+        stop = start + self.n
+        data.params[:, start:stop] = self._data.params[:, self._start:self._stop]
+        data.state[:, start:stop] = self._data.state[:, self._start:self._stop]
+        self._bind(data, start, self.n)
 
 
     def reset(self):
-        self._data.state[:, self._lo:self._hi] = 0.
+        self._data.state[:, self._start:self._stop] = 0.
 
 
     def set_params(self, **params: Dict[str, Union[np.ndarray, bool, float, int]]):
@@ -211,7 +211,7 @@ class PIDController:
         mea = np.zeros(shape) if ref_is_error \
             else np.array(np.broadcast_to(_vector(measurement), shape))
         out = np.empty(shape)
-        pid_stage(self._data.params, self._data.state, self._lo, self._hi,
+        pid_stage(self._data.params, self._data.state, self._start, self._stop,
                   ref, mea, float(dt), ref_is_error, persist, out)
         return out
 
@@ -273,7 +273,7 @@ class PosController(PIDController):
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(2)
         position_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _state64(self.vehicle),
             _vector(self.vehicle.acceleration), self.vehicle.simulation.dt,
             float(dt), self.leashing, self.square_root_scaling, persist, out)
@@ -319,7 +319,7 @@ class VelController(PIDController):
         # ctrl[1] -> y dir -> roll -> lateral
         out = np.empty(2)
         velocity_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt), persist, out)
         return out # desired pitch, roll
 
@@ -365,7 +365,7 @@ class AttController(PIDController):
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(3)
         attitude_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt),
             self.square_root_scaling, persist, out)
         return out # Euler rate
@@ -405,17 +405,17 @@ class RateController(PIDController):
     @property
     def max_acceleration(self) -> Union[float, np.ndarray]:
         "Maximum acceleration in rad/s/s. A number if it is the same for all axes."
-        limit = self._data.params[PID_LIMIT, self._lo:self._hi]
+        limit = self._data.params[PID_LIMIT, self._start:self._stop]
         return float(limit[0]) if np.all(limit == limit[0]) else limit.copy()
     @max_acceleration.setter
     def max_acceleration(self, value):
-        self._data.params[PID_LIMIT, self._lo:self._hi] = value
+        self._data.params[PID_LIMIT, self._start:self._stop] = value
 
 
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(3)
         rate_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
             np.asarray(self.vehicle.params.inertia_matrix, dtype=np.float64),
             float(dt), persist, out)
@@ -457,7 +457,7 @@ class AltController(PIDController):
     ) -> np.ndarray:
         out = np.empty(1)
         altitude_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt), persist, out)
         return out
 
@@ -483,7 +483,7 @@ class AltRateController(PIDController):
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(1)
         climb_step(
-            self._data.params, self._data.state, self._lo,
+            self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
             float(self.vehicle.params.mass), float(self.vehicle.weight), float(dt),
             persist, out)
@@ -563,10 +563,10 @@ class Controller:
         stages = (self.ctrl_p, self.ctrl_v, self.ctrl_a, self.ctrl_r, self.ctrl_z,
                   self.ctrl_vz)
         self._data = ControllerData(sum(stage.n for stage in stages))
-        lo = 0
+        start = 0
         for stage in stages:
-            stage._attach(self._data, lo)
-            lo += stage.n
+            stage._attach(self._data, start)
+            start += stage.n
         self.reset()
 
 

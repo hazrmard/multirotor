@@ -14,7 +14,7 @@ vehicle's propellers and motors.
 Matrices have shape ``(n_rows, n)``: one row per parameter or state variable, one
 column per control channel, as in `multirotor.data`. Rows are named by the
 ``PID_*`` constants in `multirotor.controller.kernels`. A stage with 3 channels
-(attitude) owns 3 adjacent columns, so a row such as ``params[PID_K_P, lo:hi]`` is
+(attitude) owns 3 adjacent columns, so a row such as ``params[PID_K_P, start:stop]`` is
 a contiguous array with one value per channel.
 """
 import numpy as np

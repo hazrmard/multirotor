@@ -1,10 +1,29 @@
 """
 Compiled kernels of the cascaded controller. The classes in
-`multirotor.controller.pid` call them; they hold no state of their own. The
-arrays they take are the matrices of `multirotor.controller.data.ControllerData`:
-a parameter matrix ``K`` and a state matrix ``S``, one column per control channel,
-with rows named by the ``PID_*`` constants below. ``lo`` is the first column of
-the stage that a kernel advances.
+`multirotor.controller.pid` call them; they hold no state of their own.
+
+Terms used here:
+
+* A *channel* is one scalar control loop: one error in, one action out. It owns
+  one column of the two matrices below.
+* A *stage* is one controller of the cascade. It has one or more channels, in
+  adjacent columns: position has 2 (x, y), attitude has 3 (roll, pitch, yaw),
+  altitude has 1.
+* ``start`` and ``stop`` give the columns of a stage in the matrices, like the
+  bounds of a slice: the stage owns columns ``start`` up to, but not including,
+  ``stop``. In a `Controller`, the matrices have one column for each channel of
+  all six stages, so a stage needs to know where its columns are.
+
+The arrays that the kernels take are the matrices of
+`multirotor.controller.data.ControllerData`:
+
+* ``pid_params``, shape ``(N_PID_PARAMS, n_channels)``. One column per channel.
+  Rows are the parameters, named by the ``PID_K_P``, ... constants below.
+* ``x``, shape ``(N_PID_STATES, n_channels)``. The state of the controller: the
+  error terms, the reference and the action of each channel, named by the
+  ``PID_ERR``, ... constants below. ``x`` is the controller's state; the vehicle's
+  12 body state variables (position, velocity, orientation, angular rate) are
+  called ``x_body``.
 
 Every stage is the same PID law, `pid_channel`, plus a stage-specific step before
 or after it::
@@ -100,7 +119,8 @@ def sqrt_control(err: float, k_p: float, derr_dt2_lim: float, dt: float):
 
 @njit
 def pid_channel(
-    K: np.ndarray, S: np.ndarray, j: int, err: float, dt: float, persist: bool
+    pid_params: np.ndarray, x: np.ndarray, j: int, err: float, dt: float,
+    persist: bool
 ) -> float:
     """
     The PID law for channel ``j``, given its error. The integral is the
@@ -108,8 +128,10 @@ def pid_channel(
 
     Parameters
     ----------
-    K, S : np.ndarray
-        Parameter and state matrices.
+    pid_params : np.ndarray
+        Parameters, shape (N_PID_PARAMS, n_channels).
+    x : np.ndarray
+        Controller state, shape (N_PID_STATES, n_channels). Updated if ``persist``.
     j : int
         The channel (column).
     err : float
@@ -117,54 +139,63 @@ def pid_channel(
     dt : float
         The time since the last step.
     persist : bool
-        Whether to store the error terms and the action in ``S``.
+        Whether to store the error terms and the action in ``x``.
 
     Returns
     -------
     float
         The action.
     """
-    previous = S[PID_ERR, j]
-    err_p = K[PID_K_P, j] * err
-    integral = S[PID_INTEGRAL, j] + dt * (previous + err) / 2.
-    limit = K[PID_MAX_ERR_I, j]
+    previous = x[PID_ERR, j]
+    err_p = pid_params[PID_K_P, j] * err
+    integral = x[PID_INTEGRAL, j] + dt * (previous + err) / 2.
+    limit = pid_params[PID_MAX_ERR_I, j]
     integral = min(max(integral, -limit), limit)
-    err_i = K[PID_K_I, j] * integral
-    err_d = K[PID_K_D, j] * (err - previous) / dt
+    err_i = pid_params[PID_K_I, j] * integral
+    err_d = pid_params[PID_K_D, j] * (err - previous) / dt
     action = err_p + err_i + err_d
     if persist:
-        S[PID_ERR_P, j] = err_p
-        S[PID_ERR_I, j] = err_i
-        S[PID_INTEGRAL, j] = integral
-        S[PID_ERR_D, j] = err_d
-        S[PID_ACTION, j] = action
-        S[PID_ERR, j] = err
+        x[PID_ERR_P, j] = err_p
+        x[PID_ERR_I, j] = err_i
+        x[PID_INTEGRAL, j] = integral
+        x[PID_ERR_D, j] = err_d
+        x[PID_ACTION, j] = action
+        x[PID_ERR, j] = err
     return action
 
 
 
 @njit
 def pid_stage(
-    K: np.ndarray, S: np.ndarray, lo: int, hi: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, stop: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, ref_is_error: bool, persist: bool,
     out: np.ndarray
 ) -> None:
     """
-    Advance channels ``lo`` to ``hi`` by the plain PID law, writing the actions
+    Advance every channel of a stage by the plain PID law, writing the actions
     to ``out``. If ``ref_is_error`` the reference is the error.
+
+    Parameters
+    ----------
+    pid_params, x : np.ndarray
+        Parameters and controller state, as in `pid_channel`.
+    start, stop : int
+        The columns of the stage: ``start`` up to, not including, ``stop``.
+    reference, measurement, out : np.ndarray
+        One value per channel of the stage, shape (stop - start,).
     """
-    for j in range(lo, hi):
-        i = j - lo
+    for j in range(start, stop):
+        i = j - start
         err = reference[i] if ref_is_error else reference[i] - measurement[i]
-        out[i] = pid_channel(K, S, j, err, dt, persist)
+        out[i] = pid_channel(pid_params, x, j, err, dt, persist)
         if persist:
-            S[PID_REFERENCE, j] = reference[i]
+            x[PID_REFERENCE, j] = reference[i]
 
 
 
 @njit
 def leash_distance(
-    k_p: float, state: np.ndarray, acceleration: np.ndarray, sim_dt: float
+    k_p: float, x_body: np.ndarray, acceleration: np.ndarray, sim_dt: float
 ) -> float:
     """
     The largest horizontal position error that the position controller acts on,
@@ -175,17 +206,17 @@ def leash_distance(
     ----------
     k_p : float
         The position controller's proportional gain.
-    state : np.ndarray
-        The vehicle's state, shape (12,).
+    x_body : np.ndarray
+        The vehicle's 12 body state variables.
     acceleration : np.ndarray
         The vehicle's body-frame acceleration, shape (3,).
     sim_dt : float
         The simulation time step.
     """
     # https://nrotella.github.io/journal/arducopter-flight-controllers.html
-    dcm = direction_cosine_matrix(state[6], state[7], state[8])
+    dcm = direction_cosine_matrix(x_body[6], x_body[7], x_body[8])
     acc = body_to_inertial(acceleration, dcm)
-    vel = body_to_inertial(state[3:6], dcm)
+    vel = body_to_inertial(x_body[3:6], dcm)
     acc_mag = np.sqrt(acc[0]**2 + acc[1]**2)
     vel_mag = np.sqrt(vel[0]**2 + vel[1]**2)
     leash = np.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
@@ -198,8 +229,8 @@ def leash_distance(
 
 @njit
 def position_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
-    measurement: np.ndarray, state: np.ndarray, acceleration: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
+    measurement: np.ndarray, x_body: np.ndarray, acceleration: np.ndarray,
     sim_dt: float, dt: float, leashing: bool, square_root_scaling: bool,
     persist: bool, out: np.ndarray
 ) -> None:
@@ -211,8 +242,8 @@ def position_step(
     ----------
     reference, measurement : np.ndarray
         Reference and measured xy-position, shape (2,).
-    state : np.ndarray
-        The vehicle's state, shape (12,).
+    x_body : np.ndarray
+        The vehicle's 12 body state variables.
     acceleration : np.ndarray
         The vehicle's body-frame acceleration, shape (3,).
     sim_dt : float
@@ -227,70 +258,72 @@ def position_step(
         Whether to store the state.
     """
     if persist:
-        S[PID_REFERENCE, lo] = reference[0]
-        S[PID_REFERENCE, lo + 1] = reference[1]
+        x[PID_REFERENCE, start] = reference[0]
+        x[PID_REFERENCE, start + 1] = reference[1]
     err = reference - measurement
     err_len = np.sqrt(err[0]**2 + err[1]**2)
     velocity = np.zeros(2)
     if leashing:
-        leash = leash_distance(K[PID_K_P, lo], state, acceleration, sim_dt)
+        leash = leash_distance(pid_params[PID_K_P, start], x_body, acceleration, sim_dt)
         err_unit = err / (err_len + 1e-6)
         err_len = min(err_len, leash)
         err = err_unit * err_len
         for i in range(2):
-            velocity[i] = K[PID_K_P, lo + i] * err[i]
+            velocity[i] = pid_params[PID_K_P, start + i] * err[i]
             if persist:
-                S[PID_ERR, lo + i] = err[i]
-                S[PID_ERR_P, lo + i] = velocity[i]
+                x[PID_ERR, start + i] = err[i]
+                x[PID_ERR_P, start + i] = velocity[i]
     if err_len > 0. and square_root_scaling:
         for i in range(2):
             velocity[i] = sqrt_control(
-                err[i], K[PID_K_P, lo + i], K[PID_MAX_ACCELERATION, lo], dt)
+                err[i], pid_params[PID_K_P, start + i],
+                pid_params[PID_MAX_ACCELERATION, start], dt)
             if persist:
-                S[PID_ERR, lo + i] = err[i]
-                S[PID_ERR_P, lo + i] = velocity[i]
+                x[PID_ERR, start + i] = err[i]
+                x[PID_ERR_P, start + i] = velocity[i]
     else:
         # The plain PID law acts on the error without the leash
-        pid_stage(K, S, lo, lo + 2, reference, measurement, dt, False, persist,
-                  velocity)
+        pid_stage(pid_params, x, start, start + 2, reference, measurement, dt, False,
+                  persist, velocity)
     # convert to body-frame velocity
-    cos, sin = np.cos(state[8]), np.sin(state[8])
+    cos, sin = np.cos(x_body[8]), np.sin(x_body[8])
     body_x = cos * velocity[0] + sin * velocity[1]
     body_y = -sin * velocity[0] + cos * velocity[1]
     magnitude = np.sqrt(body_x**2 + body_y**2)
-    speed = min(magnitude, K[PID_LIMIT, lo])
+    speed = min(magnitude, pid_params[PID_LIMIT, start])
     out[0] = body_x / (magnitude + 1e-6) * speed
     out[1] = body_y / (magnitude + 1e-6) * speed
     if persist:
-        S[PID_ACTION, lo] = out[0]
-        S[PID_ACTION, lo + 1] = out[1]
+        x[PID_ACTION, start] = out[0]
+        x[PID_ACTION, start + 1] = out[1]
 
 
 
 @njit
 def velocity_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, persist: bool, out: np.ndarray
 ) -> None:
     """
     Velocity stage (2 channels): body-frame xy-velocity error to pitch and roll,
     written to ``out``. Tilt is limited to the stage's limit.
     """
-    pid_stage(K, S, lo, lo + 2, reference, measurement, dt, False, persist, out)
+    pid_stage(pid_params, x, start, start + 2, reference, measurement, dt, False,
+              persist, out)
     for i in range(2):
-        limit = K[PID_LIMIT, lo + i]
+        limit = pid_params[PID_LIMIT, start + i]
         out[i] = min(max(out[i], -limit), limit)
     # +y motion requires negative roll
     out[1] = -out[1]
     if persist:
-        S[PID_ACTION, lo] = out[0]
-        S[PID_ACTION, lo + 1] = out[1]
+        x[PID_ACTION, start] = out[0]
+        x[PID_ACTION, start + 1] = out[1]
 
 
 
 @njit
 def attitude_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, square_root_scaling: bool, persist: bool,
     out: np.ndarray
 ) -> None:
@@ -301,26 +334,28 @@ def attitude_step(
     err = reference - measurement
     if persist:
         for i in range(3):
-            S[PID_REFERENCE, lo + i] = reference[i]
+            x[PID_REFERENCE, start + i] = reference[i]
     err_len = np.sqrt(err[0]**2 + err[1]**2 + err[2]**2)
     if square_root_scaling and err_len > 0:
         for i in range(3):
             out[i] = sqrt_control(
-                err[i], K[PID_K_P, lo + i], K[PID_MAX_ACCELERATION, lo], dt)
+                err[i], pid_params[PID_K_P, start + i],
+                pid_params[PID_MAX_ACCELERATION, start], dt)
             if persist:
-                S[PID_ERR, lo + i] = err[i]
-                S[PID_ERR_P, lo + i] = out[i]
+                x[PID_ERR, start + i] = err[i]
+                x[PID_ERR_P, start + i] = out[i]
     else:
-        pid_stage(K, S, lo, lo + 3, reference, measurement, dt, False, persist, out)
+        pid_stage(pid_params, x, start, start + 3, reference, measurement, dt, False,
+                  persist, out)
     if persist:
         for i in range(3):
-            S[PID_ACTION, lo + i] = out[i]
+            x[PID_ACTION, start + i] = out[i]
 
 
 
 @njit
 def rate_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, orientation: np.ndarray, inertia: np.ndarray,
     dt: float, persist: bool, out: np.ndarray
 ) -> None:
@@ -339,35 +374,36 @@ def rate_step(
     ref = euler_to_angular_rate(reference, orientation)
     mea = euler_to_angular_rate(measurement, orientation)
     acc = np.empty(3)
-    pid_stage(K, S, lo, lo + 3, ref, mea, dt, False, persist, acc)
+    pid_stage(pid_params, x, start, start + 3, ref, mea, dt, False, persist, acc)
     for i in range(3):
-        limit = K[PID_LIMIT, lo + i]
+        limit = pid_params[PID_LIMIT, start + i]
         acc[i] = min(max(acc[i], -limit), limit)
     torque = inertia @ acc
     for i in range(3):
         out[i] = torque[i]
         if persist:
-            S[PID_ACTION, lo + i] = torque[i]
+            x[PID_ACTION, start + i] = torque[i]
 
 
 
 @njit
 def altitude_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, persist: bool, out: np.ndarray
 ) -> None:
     "Altitude stage (1 channel): z-position error to climb rate, written to ``out``."
-    pid_stage(K, S, lo, lo + 1, reference, measurement, dt, False, persist, out)
-    limit = K[PID_LIMIT, lo]
+    pid_stage(pid_params, x, start, start + 1, reference, measurement, dt, False,
+              persist, out)
+    limit = pid_params[PID_LIMIT, start]
     out[0] = min(max(out[0], -limit), limit)
     if persist:
-        S[PID_ACTION, lo] = out[0]
+        x[PID_ACTION, start] = out[0]
 
 
 
 @njit
 def climb_step(
-    K: np.ndarray, S: np.ndarray, lo: int, reference: np.ndarray,
+    pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, orientation: np.ndarray, mass: float, weight: float,
     dt: float, persist: bool, out: np.ndarray
 ) -> None:
@@ -375,8 +411,9 @@ def climb_step(
     Climb rate stage (1 channel): vertical velocity error to thrust force,
     written to ``out``. The thrust is tilted to compensate for roll and pitch.
     """
-    pid_stage(K, S, lo, lo + 1, reference, measurement, dt, False, persist, out)
+    pid_stage(pid_params, x, start, start + 1, reference, measurement, dt, False,
+              persist, out)
     out[0] = mass * (out[0] / (np.cos(orientation[0]) * np.cos(orientation[1]))) \
         + weight
     if persist:
-        S[PID_ACTION, lo] = out[0]
+        x[PID_ACTION, start] = out[0]
