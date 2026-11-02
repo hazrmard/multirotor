@@ -48,3 +48,15 @@ def test_default_controller_torque_does_not_chatter():
     _, torque = fly(8, WAYPOINTS[0], steps=500)
     flips = np.mean(np.diff(np.sign(np.diff(torque))) != 0)
     assert flips < 0.2
+
+
+
+def test_sampled_rate_derivative_gains_are_stable():
+    "The rate controller outputs acceleration, so k_d of 1 or more makes it chatter."
+    import optuna
+    from multirotor.optimize import make_controller_from_trial
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    for _ in range(50):
+        params = make_controller_from_trial(study.ask())
+        assert np.all(params['ctrl_r']['k_d'] < 1.)

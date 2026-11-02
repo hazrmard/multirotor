@@ -190,12 +190,13 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     """
     r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 0.1, 50)
     r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0.1, 10)
-    r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 1, 250)
+    # The rate controller outputs acceleration, so a k_d of 1 or more is unstable
+    r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 0, 0.5)
     r_pitch_roll_max_acc = trial.suggest_float(prefix + 'r_pitch_roll.max_acceleration', 0.1, 25)
     if args.use_yaw:
         r_yaw_p = trial.suggest_float(prefix + 'r_yaw.k_p', 0.1, 5)
         r_yaw_i = trial.suggest_float(prefix + 'r_yaw.k_i', 0.1, 1)
-        r_yaw_d = trial.suggest_float(prefix + 'r_yaw.k_d', 1, 25)
+        r_yaw_d = trial.suggest_float(prefix + 'r_yaw.k_d', 0, 0.5)
         r_yaw_max_acc = trial.suggest_float(prefix + 'r_yaw.max_acceleration', 0.1, 5)
     else:
         r_yaw_p, r_yaw_i, r_yaw_d, r_yaw_max_acc = 0, 0, 0, 0
