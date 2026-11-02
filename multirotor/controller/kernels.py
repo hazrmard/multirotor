@@ -23,7 +23,7 @@ The arrays that the kernels take are the matrices of
   error terms, the reference and the action of each channel, named by the
   ``PID_ERR``, ... constants below. ``x`` is the controller's state; the vehicle's
   12 body state variables (position, velocity, orientation, angular rate) are
-  called ``x_body``.
+  called ``body_state``.
 
 Every stage is the same PID law, `pid_channel`, plus a stage-specific step before
 or after it::
@@ -195,7 +195,7 @@ def pid_stage(
 
 @njit
 def leash_distance(
-    k_p: float, x_body: np.ndarray, acceleration: np.ndarray, sim_dt: float
+    k_p: float, body_state: np.ndarray, acceleration: np.ndarray, sim_dt: float
 ) -> float:
     """
     The largest horizontal position error that the position controller acts on,
@@ -206,7 +206,7 @@ def leash_distance(
     ----------
     k_p : float
         The position controller's proportional gain.
-    x_body : np.ndarray
+    body_state : np.ndarray
         The vehicle's 12 body state variables.
     acceleration : np.ndarray
         The vehicle's body-frame acceleration, shape (3,).
@@ -214,9 +214,9 @@ def leash_distance(
         The simulation time step.
     """
     # https://nrotella.github.io/journal/arducopter-flight-controllers.html
-    dcm = direction_cosine_matrix(x_body[6], x_body[7], x_body[8])
+    dcm = direction_cosine_matrix(body_state[6], body_state[7], body_state[8])
     acc = body_to_inertial(acceleration, dcm)
-    vel = body_to_inertial(x_body[3:6], dcm)
+    vel = body_to_inertial(body_state[3:6], dcm)
     acc_mag = np.sqrt(acc[0]**2 + acc[1]**2)
     vel_mag = np.sqrt(vel[0]**2 + vel[1]**2)
     leash = np.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
@@ -230,7 +230,7 @@ def leash_distance(
 @njit
 def position_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
-    measurement: np.ndarray, x_body: np.ndarray, acceleration: np.ndarray,
+    measurement: np.ndarray, body_state: np.ndarray, acceleration: np.ndarray,
     sim_dt: float, dt: float, leashing: bool, square_root_scaling: bool,
     persist: bool, out: np.ndarray
 ) -> None:
@@ -242,7 +242,7 @@ def position_step(
     ----------
     reference, measurement : np.ndarray
         Reference and measured xy-position, shape (2,).
-    x_body : np.ndarray
+    body_state : np.ndarray
         The vehicle's 12 body state variables.
     acceleration : np.ndarray
         The vehicle's body-frame acceleration, shape (3,).
@@ -264,7 +264,8 @@ def position_step(
     err_len = np.sqrt(err[0]**2 + err[1]**2)
     velocity = np.zeros(2)
     if leashing:
-        leash = leash_distance(pid_params[PID_K_P, start], x_body, acceleration, sim_dt)
+        leash = leash_distance(
+            pid_params[PID_K_P, start], body_state, acceleration, sim_dt)
         err_unit = err / (err_len + 1e-6)
         err_len = min(err_len, leash)
         err = err_unit * err_len
@@ -286,7 +287,7 @@ def position_step(
         pid_stage(pid_params, x, start, start + 2, reference, measurement, dt, False,
                   persist, velocity)
     # convert to body-frame velocity
-    cos, sin = np.cos(x_body[8]), np.sin(x_body[8])
+    cos, sin = np.cos(body_state[8]), np.sin(body_state[8])
     body_x = cos * velocity[0] + sin * velocity[1]
     body_y = -sin * velocity[0] + cos * velocity[1]
     magnitude = np.sqrt(body_x**2 + body_y**2)
