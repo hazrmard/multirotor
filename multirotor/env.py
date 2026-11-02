@@ -6,6 +6,7 @@ from typing import Tuple, List, Union
 import numpy as np
 import gym
 
+from .env_kernels import reward_and_flags
 from .simulation import Multirotor
 from .helpers import find_nominal_speed
 
@@ -89,23 +90,29 @@ class BaseMultirotorEnv(gym.Env):
 
 
     def reward(self, state: np.ndarray, action: np.ndarray, nstate: np.ndarray) -> float:
-        dist = np.linalg.norm(nstate[:3])
-        self._reached = dist <= self.proximity
-        self._outofbounds = np.any(np.abs(state[:3]) > self.bounding_box / 2)
-        self._outoftime = self.vehicle.t >= self.period
-        self._tipped = np.any(np.abs(state[6:9]) > self.max_angle)
+        """
+        The reward of a step. Also sets the flags that end the episode:
+        ``_reached``, ``_outofbounds``, ``_outoftime``, ``_tipped`` and ``_done``.
+
+        Parameters
+        ----------
+        state : np.ndarray
+            The vehicle's state before the step.
+        action : np.ndarray
+            The action of the step. It does not affect the reward.
+        nstate : np.ndarray
+            The vehicle's state after the step.
+
+        Returns
+        -------
+        float
+        """
+        reward, self._reached, self._outofbounds, self._outoftime, self._tipped = \
+            reward_and_flags(
+                state, nstate, self._des_unit_vec, self.vehicle.t,
+                self.vehicle.simulation.dt, self.bounding_box, self.proximity,
+                self.max_angle, self.period, self.motion_reward_scaling, self.bonus)
         self._done = self._outoftime or self._outofbounds or self._reached or self._tipped
-        delta_pos = (nstate[:3] - state[:3])
-        advance = np.linalg.norm(delta_pos)
-        cross = np.linalg.norm(np.cross(delta_pos, self._des_unit_vec))
-        delta_turn = np.abs(nstate[8]) - np.abs(state[8])
-        reward = ((advance - cross - delta_turn) * self.motion_reward_scaling) - self.vehicle.simulation.dt
-        if self._reached:
-            reward += self.bonus
-        elif self._tipped or self._outofbounds:
-            reward -= self.bonus
-        elif self._outoftime:
-            reward -= (dist / self.bounding_box) * self.bonus
         return reward
 
 
