@@ -212,10 +212,15 @@ def test_get_params_matches_oracle():
             continue
         assert p_new[name].keys() == p_old[name].keys(), name
         for param in p_old[name]:
+            if (name, param) == ('ctrl_vz', 'max_err_i'):
+                # The oracle truncated it to an integer, because the controller
+                # was built with integer gains. Deliberately not reproduced.
+                assert p_old[name][param] == 2 and p_new[name][param] == 2.5
+                continue
+            # Values are compared after broadcasting: shapes differ, for example
+            # a limit that was a number is now an array with one value per channel
             np.testing.assert_allclose(
-                np.broadcast_to(p_new[name][param], np.shape(p_old[name][param]) or (1,)),
-                np.broadcast_to(p_old[name][param], np.shape(p_old[name][param]) or (1,)),
-                err_msg=f'{name}.{param}')
+                p_new[name][param], p_old[name][param], err_msg=f'{name}.{param}')
 
 
 
@@ -294,3 +299,39 @@ def test_standalone_pid_matches_oracle():
             old.step(ref, mea, dt=0.02, persist=persist), rtol=1e-9, atol=1e-12)
         np.testing.assert_allclose(new.state, old.state, rtol=1e-9, atol=1e-12)
 
+
+
+
+def test_stages_are_views_of_one_data_object():
+    vehicle = make_vehicle()
+    ctrl = make_controller(pid, vehicle)
+    stages = [getattr(ctrl, name) for name in CONTROLLERS]
+    assert all(stage._data is ctrl._data for stage in stages)
+    assert ctrl._data.params.shape[1] == sum(stage.n for stage in stages) == 12
+    # Writing through a stage changes the shared matrix, and the reverse
+    ctrl.ctrl_a.k_p[:] = 7.
+    assert np.all(ctrl._data.params[pid.PID_K_P, 4:7] == 7.)
+    ctrl._data.params[pid.PID_K_D, 7:10] = 3.
+    assert np.all(ctrl.ctrl_r.k_d == 3.)
+    assert np.shares_memory(ctrl.ctrl_r.k_d, ctrl._data.params)
+
+
+
+def test_controller_keeps_the_parameters_of_the_stages_it_takes_over():
+    vehicle = make_vehicle()
+    first = make_controller(pid, vehicle)
+    first.ctrl_r.set_params(k_p=9., max_acceleration=np.asarray([1., 2., 3.]))
+    stages = [getattr(first, name) for name in CONTROLLERS]
+    second = pid.Controller(*stages)
+    assert all(stage._data is second._data for stage in stages)
+    assert second._data is not first._data
+    np.testing.assert_array_equal(second.ctrl_r.k_p, 9.)
+    np.testing.assert_array_equal(second.ctrl_r.max_acceleration, [1., 2., 3.])
+
+
+
+def test_standalone_stage_owns_its_data():
+    vehicle = make_vehicle()
+    stage = pid.AttController(1., 0., 0., 0.1, vehicle=vehicle)
+    assert stage._data.params.shape[1] == stage.n == 3
+    assert stage.k_p.shape == (3,)
