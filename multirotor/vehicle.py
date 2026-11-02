@@ -83,7 +83,7 @@ class PropellerParams:
             raise ValueError('"k_thrust" is None, even though "use_thrust_constant=True"')
         if self.motor is not None:
             self.motor.k_drag = self.k_drag
-        # Pitch angel is reduced to allow for even lift as blade velocity increases
+        # Pitch angle is reduced to allow for even lift as blade velocity increases
         # with increasing radius. Assuming linear reduction from root to tip.
 
 

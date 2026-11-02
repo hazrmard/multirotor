@@ -372,7 +372,7 @@ def apply_params(ctrl: Controller, params: dict) -> Dict[str, Dict[str, np.ndarr
     Parameters
     ----------
     ctrl : Controller
-        The controller to which to apply the parameters. If None, just return the
+        The controller to which to apply the parameters. If None, return the
         dictionary of parameters which `Controller.set_params()` can use.
     params : dict[str, np.ndarray]
         The dictionary of parameters returned by `optuna.Study`

@@ -14,12 +14,10 @@ How the two classes relate:
   `Motor` builds its own `MotorData`, without a `PropellerData`.
 
 Parameter matrices have shape ``(n_parameters, n)``: one row per parameter, one
-column per component. Rows are named by the ``PROP_*`` and ``MOTOR_*`` constants
-in `multirotor.physics`. A row such as ``params[PROP_K_THRUST]`` is a contiguous
+column per component. The ``PROP_*`` and ``MOTOR_*`` constants in `multirotor.physics`
+name the rows. A row such as ``params[PROP_K_THRUST]`` is a contiguous
 array with one value per propeller, which lines up element by element with
-``speed``, so kernels can write ``params[PROP_K_THRUST] * speed**2``. The
-transposed layout, one row per component, is just as fast in the kernels; this
-one reads better.
+``speed``, so kernels can write ``params[PROP_K_THRUST] * speed**2``.
 """
 from typing import List
 
@@ -43,8 +41,8 @@ class MotorData:
     Attributes
     ----------
     params : np.ndarray
-        Parameter matrix, shape (N_MOTOR_PARAMS, n). Rows are named by the
-        ``MOTOR_*`` constants in `multirotor.physics`.
+        Parameter matrix, shape (N_MOTOR_PARAMS, n). The ``MOTOR_*``
+        constants in `multirotor.physics` name the rows.
     speed : np.ndarray
         Motor speeds (rad/s), shape (n,).
     voltage : np.ndarray
@@ -104,8 +102,8 @@ class PropellerData:
     Attributes
     ----------
     params : np.ndarray
-        Parameter matrix, shape (N_PROP_PARAMS, n). Rows are named by the
-        ``PROP_*`` constants in `multirotor.physics`.
+        Parameter matrix, shape (N_PROP_PARAMS, n). The ``PROP_*``
+        constants in `multirotor.physics` name the rows.
     use_thrust_constant : bool
         Whether thrust is ``k_thrust * speed**2`` (True) or from the
         blade-element model (False).

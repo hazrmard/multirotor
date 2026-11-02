@@ -9,19 +9,18 @@ Terms used here:
 * A *stage* is one controller of the cascade. It has one or more channels, in
   adjacent columns: position has 2 (x, y), attitude has 3 (roll, pitch, yaw),
   altitude has 1.
-* ``start`` and ``stop`` give the columns of a stage in the matrices, like the
-  bounds of a slice: the stage owns columns ``start`` up to, but not including,
-  ``stop``. In a `Controller`, the matrices have one column for each channel of
-  all six stages, so a stage needs to know where its columns are.
+* ``start`` and ``stop`` are slice bounds: a stage owns columns ``start`` up to,
+  but excluding, ``stop``. In a `Controller`, the matrices have one column per
+  channel of all six stages, so each stage needs its own bounds.
 
 The arrays that the kernels take are the matrices of
 `multirotor.controller.data.ControllerData`:
 
 * ``pid_params``, shape ``(N_PID_PARAMS, n_channels)``. One column per channel.
-  Rows are the parameters, named by the ``PID_K_P``, ... constants below.
+  The ``PID_K_P``, ... constants below name the rows, one per parameter.
 * ``x``, shape ``(N_PID_STATES, n_channels)``. The state of the controller: the
-  error terms, the reference and the action of each channel, named by the
-  ``PID_ERR``, ... constants below. ``x`` is the controller's state; the vehicle's
+  error terms, the reference and the action of each channel. The
+  ``PID_ERR``, ... constants below name the rows. ``x`` is the controller's state; the vehicle's
   12 body state variables (position, velocity, orientation, angular rate) are
   called ``body_state``.
 
@@ -220,9 +219,8 @@ def leash_distance(
     acc_mag = np.sqrt(acc[0]**2 + acc[1]**2)
     vel_mag = np.sqrt(vel[0]**2 + vel[1]**2)
     leash = np.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
-    # if leash is very small such that vehicle will cover that distance under
-    # current velocity, then a leash is not needed. It is more useful for
-    # larger errors and bigger speeds.
+    # Skip the leash when the vehicle covers it within one time step at its
+    # current speed. The leash matters for large errors and high speeds.
     return np.inf if leash <= (vel_mag * sim_dt) else leash
 
 

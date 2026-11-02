@@ -332,8 +332,8 @@ def battery_operating_point(
     terminal voltage limits the motors' voltage, and the power the motors draw
     sets the terminal voltage.
 
-    If no motor's voltage reaches the terminal voltage, the power doesn't
-    depend on it, and `battery_terminal` gives the answer directly. Otherwise
+    If no motor's voltage reaches the terminal voltage, the power does
+    not depend on it, and `battery_terminal` gives the answer directly. Otherwise
     the terminal voltage is found by bisection on ``[0, V_oc]``. The bisection
     always converges: a higher terminal voltage lets the motors draw more power,
     which lowers the terminal voltage, so there is exactly one solution.
@@ -517,7 +517,7 @@ def body_derivative(
     xdot = np.zeros_like(x)
 
     # velocity = dPosition (inertial) / dt (convert body velocity to inertial)
-    # Essentially = Rotation matrix (body to inertial) x body velocity
+    # Rotation matrix (body to inertial) x body velocity
     # dcm = direction_cosine_matrix(roll=phi, pitch=theta, yaw=psi)
     # xdot[0:3] = body_to_inertial(x[3:6], dcm)
     xdot[0] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \

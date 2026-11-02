@@ -76,7 +76,7 @@ def rhs_body(
     Rate of change of the vehicle's 12 body states under forces and torques that
     are fixed over the time step.
 
-    Used when the forces don't depend on the state during a step: for
+    Used when the forces stay fixed during a step: for
     `Multirotor.step_dynamics`, and for `Multirotor.step_speeds` on vehicles
     without motors whose thrust is ``k_thrust * speed**2``.
 

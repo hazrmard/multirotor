@@ -173,9 +173,9 @@ class Propeller:
 
     def apply_speed(self, u: float, **kwargs) -> float:
         """
-        Calculate the actual speed of the propeller after the speed signal is
-        given. This method is *pure* and does not change the state of the propeller.
-        It is used by the multirotor's dxdt_* methods to calculate derivatives.
+        Calculate the speed of the propeller after the speed signal takes effect.
+        This method is *pure*: it leaves the state of the propeller unchanged.
+        The multirotor's dxdt_* methods use it to calculate derivatives.
 
         Parameters
         ----------
@@ -361,8 +361,8 @@ class Motor:
 
     def apply_speed(self, u: float, max_voltage: float=np.inf) -> float:
         """
-        Apply a voltage speed signal to the motor. This method is pure and doesn't
-        change the state of the motor.
+        Apply a voltage speed signal to the motor. This method is pure: it leaves
+        the state of the motor unchanged.
 
         Parameters
         ----------
@@ -381,7 +381,7 @@ class Motor:
 
     def step(self, u: float, max_voltage: float=np.inf) -> float:
         """
-        Apply a voltage speed signal to the motor. This method changes the state
+        Apply a voltage speed signal to the motor. This method updates the state
         of the motor.
 
         Parameters
@@ -619,8 +619,9 @@ class Multirotor:
         ----------
         params : VehicleParams
             The vehicle parameters. These completely describe the vehicle's properties.
-            The parameters are copied by this class, so any changes made to the params
-            object is isolated from this instance.
+            `Multirotor` copies the parameters at construction. Changing ``params``
+            afterwards does not affect this instance; build a new `Multirotor`
+            to apply the change.
         simulation : SimulationParams
             The simulation parameters.
         integrator : Integrator, optional
@@ -727,7 +728,7 @@ class Multirotor:
 
     @property
     def inertial_velocity(self) -> np.ndarray:
-        """Velocity in the intertial frame."""
+        """Velocity in the inertial frame."""
         dcm = direction_cosine_matrix(*self.orientation)
         v_inertial = body_to_inertial(self.velocity, dcm)
         return v_inertial
@@ -741,7 +742,7 @@ class Multirotor:
 
     @property
     def inertial_acceleration(self) -> np.ndarray:
-        """Acceleration in the intertial frame."""
+        """Acceleration in the inertial frame."""
         dcm = direction_cosine_matrix(*self.orientation)
         a_inertial = body_to_inertial(self.acceleration, dcm)
         return a_inertial
@@ -894,14 +895,15 @@ class Multirotor:
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate the forces and torques acting on the vehicle's center of gravity
-        given its current state and speed of propellers.
+        given its state and the propeller speeds.
 
         Parameters
         ----------
         speeds : np.ndarray
             Propeller speeds (rad/s)
         state : np.ndarray
-            State of the vehicle (position, velocity, orientation, angular rate)
+            State of the vehicle, shape (12,): position ``[0:3]``, body velocity
+            ``[3:6]``, orientation ``[6:9]``, body angular rate ``[9:12]``
 
         Returns
         -------
@@ -979,7 +981,7 @@ class Multirotor:
         u : np.ndarray
             A p-vector of propeller speeds (rad/s), where p=number of propellers.
         disturb_forces : np.ndarray, optional
-            Disturbinng x,y,z forces in the vehicle's local frame, by default 0.
+            Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 
@@ -1032,8 +1034,8 @@ class Multirotor:
         disturb_torques: np.ndarray=0.
     ) -> np.ndarray:
         """
-        Given the n-vector of propeller speed signals, calculate
-        the next state of the vehicle. Where n is number of propellers.
+        Calculate the next state of the vehicle from the speed signals of its
+        ``n`` propellers.
 
         With motors, the body and the motors are integrated together, so the
         forces during the step follow the motor speeds as they change.
@@ -1041,11 +1043,11 @@ class Multirotor:
         Parameters
         ----------
         u : np.ndarray
-            The speed signals to be sent to each propeller's step() method. Can
-            be the actual speed (rad/s) or the voltage signal (V) if a motor
-            is used and MotorParams.speed_voltage_scaling constant is set.
+            The speed signals, shape (n,). Each goes to a propeller's ``step()``.
+            A signal is a speed (rad/s), or a voltage (V) when the propeller has a
+            motor and ``MotorParams.speed_voltage_scaling`` is set.
         disturb_forces : np.ndarray, optional
-            Disturbinng x,y,z forces in the vehicle's local frame, by default 0.
+            Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 

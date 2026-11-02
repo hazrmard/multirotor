@@ -12,8 +12,8 @@ vehicle's propellers and motors.
   own, as a standalone `Propeller` owns a `PropellerData` of size 1.
 
 Matrices have shape ``(n_rows, n)``: one row per parameter or state variable, one
-column per control channel, as in `multirotor.data`. Rows are named by the
-``PID_*`` constants in `multirotor.controller.kernels`. A stage with 3 channels
+column per control channel, as in `multirotor.data`. The
+``PID_*`` constants in `multirotor.controller.kernels` name the rows. A stage with 3 channels
 (attitude) owns 3 adjacent columns, so a row such as ``params[PID_K_P, start:stop]`` is
 a contiguous array with one value per channel.
 """
@@ -30,12 +30,12 @@ class ControllerData:
     Attributes
     ----------
     params : np.ndarray
-        Parameter matrix, shape (N_PID_PARAMS, n). Rows are named by the
-        ``PID_*`` constants in `multirotor.controller.kernels`. The accumulated
+        Parameter matrix, shape (N_PID_PARAMS, n). The
+        ``PID_*`` constants in `multirotor.controller.kernels` name the rows. The accumulated
         error is not limited by default.
     state : np.ndarray
-        State matrix, shape (N_PID_STATES, n). Rows are named by the ``PID_*``
-        constants for the error terms, the reference and the action.
+        State matrix, shape (N_PID_STATES, n). The ``PID_*``
+        constants name the rows: the error terms, the reference and the action.
     """
 
     def __init__(self, n: int) -> None:

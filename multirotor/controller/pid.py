@@ -283,13 +283,13 @@ class PosController(PIDController):
 
 class VelController(PIDController):
     """
-    Velocity controller. Takes reference x/y body-frame velocity and outputs reference 
-    pitch and roll angles for x and y motion, respectively.
+    Velocity controller. Takes a reference x/y body-frame velocity (m/s) and
+    outputs reference pitch and roll angles (rad) for x and y motion.
 
-    Compares against measured velocity. The deficit is used
-    to change pitch and roll angles to increase and decrease velocity.
+    The error between reference and measured velocity sets the pitch and roll
+    angles that speed the vehicle up or slow it down.
 
-    Able to limit tilt angles when tracking reference waypoints.
+    Limits the tilt angles with ``max_tilt``.
     """
 
     max_tilt = _scalar_param(PID_LIMIT, "Maximum tilt angle in radians")
@@ -526,11 +526,11 @@ class Controller:
         ctrl_vz : AltRateController
             The altitude rate controller
         period_[p | a | z] : float, optional
-            The time resolution of the [position | attitude | altitude] controller.
-            The controller will only renew an action after this interval has passed.
-            Otherwise it will apply the last action. For e.g. if interval=1, and vehicle dt=0.1, a
-            new action will only be applied every interval/dt=10 steps. by default 1. The interval is
-            rounded to a whole number of steps, and is at least one step.
+            The period (s) of the [position | attitude | altitude] controller, by
+            default 1. The controller computes a new action once per period and
+            repeats it in between. The period is rounded to a whole number of
+            steps, at least one. For example, a period of 1 s and ``dt=0.1`` give a
+            new action every 10 steps.
         feedforward_weight: float, optional
             The weight to assign to a separately specified velocity reference,
             which overrides the velocity signal given by the position controller.

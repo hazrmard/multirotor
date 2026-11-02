@@ -157,7 +157,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
         action : np.ndarray
             An array of x,y,z forces and x,y,z torques in local frame.
         disturb_forces : np.ndarray, optional
-            Disturbinng x,y,z forces in the vehicle's local frame, by default 0.
+            Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 
@@ -231,7 +231,7 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
         action : np.ndarray
             An array of speed signals.
         disturb_forces : np.ndarray, optional
-            Disturbinng x,y,z forces in the velicle's local frame, by default 0.
+            Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
 
