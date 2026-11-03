@@ -95,9 +95,9 @@ def run_sim(
         action = ctrl.step(reference=ref, feed_forward_velocity=feed_forward_vel)
         # Send speeds to environment
         dynamics = np.asarray([0,0,*action], env.vehicle.dtype) # (Fx, Fy, Fz, Tx, Ty, Tz)
-        state, r, done, *_ = env.step(dynamics)
+        state, r, terminated, truncated, _ = env.step(dynamics)
         log.log(reward=r)
-        if done:
+        if terminated or truncated:
             break
 
     log.done_logging()

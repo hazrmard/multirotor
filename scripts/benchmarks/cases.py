@@ -342,7 +342,7 @@ class ClosedLoop(Runner):
 
 
 class RunSim(Runner):
-    """``optimize.run_sim`` through the gym-style env, over a bounded trajectory."""
+    """``optimize.run_sim`` through the gymnasium env, over a bounded trajectory."""
     def __init__(self, n=8):
         self.v = make_vehicle(n)
         self.env = DynamicsMultirotorEnv(self.v, allocate=True)
@@ -355,14 +355,14 @@ class RunSim(Runner):
         # or at a tilt of 15 degrees), and the run length must not vary.
         start = np.zeros(12, self.v.dtype)
         start[:3] = (0., 0., ALTITUDE)
-        self.env.reset(start)
+        self.env.reset(options={'state': start})
         self.c.reset()
 
     def run(self, n):
         point = np.asarray([0, 0, ALTITUDE], self.v.dtype)
         traj = ((point, None) for _ in range(n))
         log = run_sim(self.env, traj, self.c)
-        # run_sim stops early when the env reports done; us/step would then be
+        # run_sim stops early when the env ends the episode; us/step would then be
         # divided by steps that never ran.
         if len(log) != n:
             raise RuntimeError(f'run_sim ended after {len(log)} of {n} steps')

@@ -5,7 +5,9 @@ the compiled kernel replaced.
 import numpy as np
 import pytest
 
-from multirotor.env import DynamicsMultirotorEnv
+from gymnasium.utils.env_checker import check_env
+
+from multirotor.env import DynamicsMultirotorEnv, SpeedsMultirotorEnv
 from multirotor.simulation import Multirotor
 
 from common import make_params
@@ -57,9 +59,66 @@ def test_reward_matches_numpy_reference(dtype):
         reward = env.reward(state, None, nstate)
         assert reward == pytest.approx(expected, rel=1e-5, abs=1e-4)
         assert (env._reached, env._outofbounds, env._outoftime, env._tipped) == flags
-        assert env._done == any(flags)
         seen.add(flags)
     # Each way that an episode ends, and none, must occur in the samples
     assert {(True, False, False, False), (False, True, False, False),
             (False, False, True, False), (False, False, False, True),
             (False, False, False, False)} <= seen
+
+
+
+def make_env(kind: str, dtype: type=np.float32):
+    vp, sp = make_params(4, 'quadratic', False, dtype)
+    vehicle = Multirotor(vp, sp)
+    if kind == 'dynamics':
+        return DynamicsMultirotorEnv(vehicle, allocate=True)
+    return SpeedsMultirotorEnv(vehicle)
+
+
+@pytest.mark.parametrize('kind', ('dynamics', 'speeds'))
+def test_env_follows_the_gymnasium_api(kind):
+    check_env(make_env(kind), skip_render_check=True)
+
+
+@pytest.mark.parametrize('kind', ('dynamics', 'speeds'))
+def test_reset_seed_gives_the_same_start(kind):
+    env = make_env(kind)
+    first, _ = env.reset(seed=3)
+    first = first.copy()
+    env.reset(seed=4)
+    again, info = env.reset(seed=3)
+    np.testing.assert_array_equal(first, again)
+    assert info == {}
+
+
+def test_reset_takes_a_start_state_from_options():
+    env = make_env('dynamics')
+    start = np.zeros(12, env.vehicle.dtype)
+    start[:3] = (1., 2., 3.)
+    state, _ = env.reset(options={'state': start})
+    np.testing.assert_array_equal(state, start)
+
+
+def test_step_reports_terminated_and_truncated_separately():
+    env = make_env('dynamics')
+    hold = np.asarray([0, 0, env.vehicle.weight, 0, 0, 0], env.vehicle.dtype)
+    start = np.zeros(12, env.vehicle.dtype)
+    start[:3] = (0., 0., 5.)
+
+    env.reset(options={'state': start})
+    env.vehicle.t = env.period                  # past the time limit
+    *_, terminated, truncated, info = env.step(hold.copy())
+    assert (terminated, truncated) == (False, True)
+    assert info['out_of_time'] and not info['reached']
+
+    start[:3] = (0., 0., 0.1)                   # within `proximity` of the origin
+    env.reset(options={'state': start})
+    *_, terminated, truncated, info = env.step(hold.copy())
+    assert (terminated, truncated) == (True, False)
+    assert info['reached']
+
+    start[:3] = (0., 0., 5.)
+    env.reset(options={'state': start})
+    *_, terminated, truncated, info = env.step(hold.copy())
+    assert (terminated, truncated) == (False, False)
+    assert not any(info.values())

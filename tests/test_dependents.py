@@ -24,14 +24,13 @@ def test_speeds_env_matches_oracle():
     new, old = make_pair(8, 'quadratic', False, np.float64)
     envs = [SpeedsMultirotorEnv(new), SpeedsMultirotorEnv(old)]
     for env in envs:
-        env.seed(0)
-        env.reset()
+        env.reset(seed=0)
     u = hover_signals(vp, sp) * 1.01
     for i in range(STEPS):
-        (s_new, r_new, d_new, _), (s_old, r_old, d_old, _) = [env.step(u) for env in envs]
+        (s_new, r_new, *end_new), (s_old, r_old, *end_old) = [env.step(u) for env in envs]
         np.testing.assert_allclose(s_new, s_old, rtol=0, atol=atol_for(sp.dtype), err_msg=f'step {i}')
         assert r_new == pytest.approx(r_old, abs=1e-6)
-        assert d_new == d_old
+        assert end_new == end_old
 
 
 
@@ -39,8 +38,7 @@ def test_dynamics_env_with_allocation_matches_oracle():
     new, old = make_pair(8, 'quadratic', False, np.float64)
     envs = [DynamicsMultirotorEnv(new, allocate=True), DynamicsMultirotorEnv(old, allocate=True)]
     for env in envs:
-        env.seed(0)
-        env.reset()
+        env.reset(seed=0)
     action = np.asarray([0, 0, new.weight * 1.05, 0.01, -0.01, 0.], new.dtype)
     for i in range(STEPS):
         (s_new, *_), (s_old, *_) = [env.step(action.copy()) for env in envs]

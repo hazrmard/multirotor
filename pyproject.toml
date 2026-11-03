@@ -8,13 +8,13 @@ version = "0.6.0"
 description = "Simulation testbed for multirotor vehicles."
 readme = "README.md"
 requires-python = ">=3.13"
-keywords = ["multirotor", "simulation", "gym", "uav"]
+keywords = ["multirotor", "simulation", "gymnasium", "reinforcement-learning", "uav"]
 dependencies = [
     "numpy",
     "scipy",
     "numba",
     "matplotlib",
-    "gym",
+    "gymnasium",
     "optuna",
     # pyscurve cannot be a git dependency when uploading to PyPI:
     # "pyscurve @ git+https://github.com/hazrmard/py-scurve.git@v1.0.2"

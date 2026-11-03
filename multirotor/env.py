@@ -1,10 +1,11 @@
 """
-This module defines OpenAI Gym compatible classes based on the Multirotor class.
+This module defines `gymnasium <https://gymnasium.farama.org>`_ environments
+based on the Multirotor class.
 """
 
-from typing import Tuple, List, Union
+from typing import Tuple
 import numpy as np
-import gym
+import gymnasium as gym
 
 from .env_kernels import reward_and_flags
 from .simulation import Multirotor
@@ -28,7 +29,13 @@ class BaseMultirotorEnv(gym.Env):
     bonus = bounding_box * 20
 
 
-    def __init__(self, vehicle: Multirotor=None, seed: int=None) -> None:
+    def __init__(self, vehicle: Multirotor=None) -> None:
+        """
+        Parameters
+        ----------
+        vehicle : Multirotor, optional
+            The `Multirotor` vehicle to use as the environment.
+        """
         # pos, vel, att, ang vel
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
@@ -37,21 +44,6 @@ class BaseMultirotorEnv(gym.Env):
             shape=(12,)
         )
         self.vehicle = vehicle
-        self.seed(seed=seed, _seed_with_none=True)
-
-
-    def seed(self, seed: int=None, _seed_with_none: bool=False) -> List[Union[int,tuple]]:
-        if isinstance(seed, (int, float)):
-            self.random = np.random.RandomState(seed)
-            self._seeds = (seed,)
-        elif seed is None and _seed_with_none:
-            self.random = np.random.RandomState()
-            self._seeds = (self.random.get_state())
-        elif isinstance(seed, tuple):
-            self.random = np.random.RandomState()
-            self.random.set_state(seed)
-            self._seeds = (self.random.get_state(),)
-        return list(self._seeds)
 
 
     @property
@@ -62,37 +54,44 @@ class BaseMultirotorEnv(gym.Env):
         self.vehicle.state = np.asarray(x, self.vehicle.dtype)
 
 
-    def reset(self, x: np.ndarray=None) -> np.ndarray:
+    def reset(
+        self, *, seed: int=None, options: dict=None
+    ) -> Tuple[np.ndarray, dict]:
         """
         Reset the vehicle to a random initial position.
 
         Parameters
         ----------
-        x : np.ndarray, optional
-            A state to set the vehicle to, by default None
+        seed : int, optional
+            The seed of the random number generator `self.np_random`. The
+            generator keeps its state across resets if no seed is given.
+        options : dict, optional
+            ``options['state']`` is a state to set the vehicle to, instead of
+            the random one.
 
         Returns
         -------
-        np.ndarray
-            The state vector of the vehicle.
+        Tuple[np.ndarray, dict]
+            The state vector of the vehicle, and an empty info dictionary.
         """
+        super().reset(seed=seed)
         if self.vehicle is not None:
             self.vehicle.reset()
-            position = (self.random.rand(3) - 0.5) * self.bounding_box * 0.75
+            position = (self.np_random.random(3) - 0.5) * self.bounding_box * 0.75
             position[(0<position) & (position<self.proximity)] = self.proximity
             position[(-self.proximity<position) & (position<0)] = -self.proximity
             self.vehicle.state[:3] = position
-            if x is not None:
-                self.vehicle.state = np.asarray(x, self.vehicle.dtype)
+            if options is not None and options.get('state') is not None:
+                self.vehicle.state = np.asarray(options['state'], self.vehicle.dtype)
         # needed by reward() to calculate deviation from straight line
         self._des_unit_vec = - self.state[:3] / np.linalg.norm(self.state[:3])
-        return self.state
+        return self.state, {}
 
 
     def reward(self, state: np.ndarray, action: np.ndarray, nstate: np.ndarray) -> float:
         """
         The reward of a step. Also sets the flags that end the episode:
-        ``_reached``, ``_outofbounds``, ``_outoftime``, ``_tipped`` and ``_done``.
+        ``_reached``, ``_outofbounds``, ``_outoftime`` and ``_tipped``.
 
         Parameters
         ----------
@@ -112,11 +111,24 @@ class BaseMultirotorEnv(gym.Env):
                 state, nstate, self._des_unit_vec, self.vehicle.t,
                 self.vehicle.simulation.dt, self.bounding_box, self.proximity,
                 self.max_angle, self.period, self.motion_reward_scaling, self.bonus)
-        self._done = self._outoftime or self._outofbounds or self._reached or self._tipped
         return reward
 
 
-    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
+    def _end_of_step(self, nstate: np.ndarray, reward: float) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        """
+        The return value of `step()`, from the flags that `reward()` has set. The
+        episode terminates when the vehicle reaches the origin, leaves the
+        bounding box or tips over. It is truncated when it runs out of time.
+        """
+        terminated = self._reached or self._outofbounds or self._tipped
+        info = dict(
+            reached=self._reached, out_of_bounds=self._outofbounds,
+            tipped=self._tipped, out_of_time=self._outoftime
+        )
+        return nstate, reward, terminated, self._outoftime, info
+
+
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
         raise NotImplementedError
 
 
@@ -155,7 +167,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
     def step(
         self, action: np.ndarray, disturb_forces: np.ndarray=0.,
         disturb_torques: np.ndarray=0.
-    ) -> Tuple[np.ndarray, float, bool, dict]:
+    ) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """
         Step environment by providing dynamics acting in local frame.
 
@@ -170,8 +182,10 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
 
         Returns
         -------
-        Tuple[np.ndarray, float, bool, dict]
-            The state and other environment variables.
+        Tuple[np.ndarray, float, bool, bool, dict]
+            The state, reward, ``terminated``, ``truncated`` and ``info``. The
+            ``info`` dictionary has a boolean for each way the episode can end:
+            ``reached``, ``out_of_bounds``, ``tipped`` and ``out_of_time``.
         """
         if self.allocate:
             speeds = self.vehicle.allocate_control(action[2], action[3:6])
@@ -183,7 +197,7 @@ class DynamicsMultirotorEnv(BaseMultirotorEnv):
         state = self.state
         nstate = self.vehicle.step_dynamics(u=action)
         reward = self.reward(state, action, nstate)
-        return nstate, reward, self._done, {}
+        return self._end_of_step(nstate, reward)
 
 
 
@@ -229,7 +243,7 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
     def step(
         self, action: np.ndarray, disturb_forces: np.ndarray=0.,
         disturb_torques: np.ndarray=0.
-    ) -> Tuple[np.ndarray, float, bool, dict]:
+    ) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """
         Step environment by providing speed signal.
 
@@ -244,8 +258,10 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
 
         Returns
         -------
-        Tuple[np.ndarray, float, bool, dict]
-            The state and other environment variables.
+        Tuple[np.ndarray, float, bool, bool, dict]
+            The state, reward, ``terminated``, ``truncated`` and ``info``. The
+            ``info`` dictionary has a boolean for each way the episode can end:
+            ``reached``, ``out_of_bounds``, ``tipped`` and ``out_of_time``.
         """
         state = self.state
         nstate = self.vehicle.step_speeds(
@@ -254,4 +270,4 @@ class SpeedsMultirotorEnv(BaseMultirotorEnv):
             disturb_torques=disturb_torques
         )
         reward = self.reward(state, action, nstate)
-        return nstate, reward, self._done, {}
+        return self._end_of_step(nstate, reward)
