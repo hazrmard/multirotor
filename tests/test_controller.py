@@ -279,13 +279,6 @@ def test_persist_false_leaves_the_controller_unchanged():
 
 
 
-def test_make_for_matches_oracle():
-    vehicle = make_vehicle()
-    new, old = pid.Controller.make_for(vehicle), legacy_pid.Controller.make_for(vehicle)
-    run(new, old, vehicle, TOLERANCE[np.float64])
-
-
-
 def test_reset_matches_oracle():
     vehicle = make_vehicle()
     new, old = make_controller(pid, vehicle), make_controller(legacy_pid, vehicle)

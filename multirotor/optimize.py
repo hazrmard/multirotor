@@ -1,9 +1,6 @@
-import os
-import multiprocessing as mp
-from argparse import ArgumentParser, Namespace
-from typing import Callable, Dict, Union
-from pprint import pprint as print
-import pickle
+import copy
+from argparse import Namespace
+from typing import Callable, Dict, Tuple
 
 import numpy as np
 import optuna
@@ -25,12 +22,15 @@ DEFAULTS = Namespace(
     bounding_box = 20,
     max_velocity = 5,
     max_acceleration = 2.5,
-    max_tilt = np.pi/12,
+    # Below `BaseMultirotorEnv.max_angle`, the tilt at which the environments end
+    # an episode, so a controller that saturates does not tip the vehicle.
+    max_tilt = np.pi/18,
     max_angular_acceleration = 20.,
     leashing = True,
     sqrt_scaling = True,
     use_yaw = True,
-    num_sims = 10,
+    num_sims = 60,          # scenarios flown by each trial
+    num_heldout_sims = 150, # scenarios that score the best parameters at the end
     scurve = False,
     max_err_i_attitude = 0.1,
     max_err_i_rate = 0.1,
@@ -88,15 +88,15 @@ def run_sim(
     log = DataLog(env.vehicle, ctrl,
                   other_vars=('reward',))
         
-    for i, (pos, feed_forward_vel) in enumerate(traj):
+    for pos, feed_forward_vel in traj:
         # Get prescribed normalized action for system as thrust and torques
         ref = np.asarray([*pos, 0], env.vehicle.dtype)
         action = ctrl.step(reference=ref, feed_forward_velocity=feed_forward_vel)
         # Send speeds to environment
         dynamics = np.asarray([0,0,*action], env.vehicle.dtype) # (Fx, Fy, Fz, Tx, Ty, Tz)
-        state, r, done, *_ = env.step(dynamics)
+        _, r, terminated, truncated, _ = env.step(dynamics)
         log.log(reward=r)
-        if done:
+        if terminated or truncated:
             break
 
     log.done_logging()
@@ -189,8 +189,11 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     Dict
         A dictionary of parameters to be used by `Controller.set_params(**dict)`
     """
-    r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 0.1, 50)
-    r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0.1, 10)
+    # The ranges surround the gains of `get_controller()`. Each loop must be slower
+    # than the loop inside it, and a D term acts on the change of the loop's output,
+    # so large gains make the vehicle unstable within a few steps.
+    r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 5, 64)
+    r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0, 1)
     # The rate controller outputs acceleration, so a k_d of 1 or more is unstable
     r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 0, 0.5)
     r_pitch_roll_max_acc = trial.suggest_float(prefix + 'r_pitch_roll.max_acceleration', 0.1, 25)
@@ -202,26 +205,26 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     else:
         r_yaw_p, r_yaw_i, r_yaw_d, r_yaw_max_acc = 0, 0, 0, 0
 
-    a_pitch_roll_p = trial.suggest_float(prefix + 'a_pitch_roll.k_p', 0.1, 50)
-    a_pitch_roll_i = trial.suggest_float(prefix + 'a_pitch_roll.k_i', 0.1, 10)
-    a_pitch_roll_d = trial.suggest_float(prefix + 'a_pitch_roll.k_d', 1, 250)
+    a_pitch_roll_p = trial.suggest_float(prefix + 'a_pitch_roll.k_p', 1, 16)
+    a_pitch_roll_i = trial.suggest_float(prefix + 'a_pitch_roll.k_i', 0, 1)
+    a_pitch_roll_d = trial.suggest_float(prefix + 'a_pitch_roll.k_d', 0, 3)
     if args.use_yaw:
         a_yaw_p = trial.suggest_float(prefix + 'a_yaw.k_p', 0.1, 5)
         a_yaw_i = trial.suggest_float(prefix + 'a_yaw.k_i', 0.1, 1)
-        a_yaw_d = trial.suggest_float(prefix + 'a_yaw.k_d', 1, 25)
+        a_yaw_d = trial.suggest_float(prefix + 'a_yaw.k_d', 0, 3)
     else:
         a_yaw_p, a_yaw_i, a_yaw_d = 0, 0, 0
 
     params = dict(
         ctrl_p = dict(
-            k_p = trial.suggest_float(prefix + 'p.k_p', 0.1, 50),
-            k_i = trial.suggest_float(prefix + 'p.k_i', 0.1, 10),
-            k_d = trial.suggest_float(prefix + 'p.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'p.k_p', 1, 50),
+            k_i = trial.suggest_float(prefix + 'p.k_i', 0, 1),
+            k_d = trial.suggest_float(prefix + 'p.k_d', 0, 10),
         ),
         ctrl_v = dict(
-            k_p = trial.suggest_float(prefix + 'v.k_p', 0.1, 50),
-            k_i = trial.suggest_float(prefix + 'v.k_i', 0.1, 10),
-            k_d = trial.suggest_float(prefix + 'v.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'v.k_p', 0.05, 1),
+            k_i = trial.suggest_float(prefix + 'v.k_i', 0, 0.5),
+            k_d = trial.suggest_float(prefix + 'v.k_d', 0, 1),
         ),
         ctrl_a = dict(
             k_p = np.asarray((a_pitch_roll_p, a_pitch_roll_p, a_yaw_p)),
@@ -236,14 +239,14 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
             max_err_i = np.asarray((r_pitch_roll_max_acc, r_pitch_roll_max_acc, r_yaw_max_acc)),
         ),
         ctrl_z = dict(
-            k_p = trial.suggest_float('z.k_p', 0.1, 50),
-            k_i = trial.suggest_float('z.k_i', 0.1, 10),
-            k_d = trial.suggest_float('z.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'z.k_p', 0.2, 4),
+            k_i = trial.suggest_float(prefix + 'z.k_i', 0, 0.5),
+            k_d = trial.suggest_float(prefix + 'z.k_d', 0, 0.1),
         ),
         ctrl_vz = dict(
-            k_p = trial.suggest_float('vz.k_p', 0.1, 50),
-            k_i = trial.suggest_float('vz.k_i', 0.1, 10),
-            k_d = trial.suggest_float('vz.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'vz.k_p', 1, 20),
+            k_i = trial.suggest_float(prefix + 'vz.k_i', 0, 1),
+            k_d = trial.suggest_float(prefix + 'vz.k_d', 0, 1),
         ),
     )
     if args.scurve:
@@ -274,9 +277,133 @@ def make_env(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFAULTS) 
 
 
 
-def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None, args: Namespace=DEFAULTS) -> Callable:
+def make_scenarios(
+    num: int, bounding_box: float, proximity: float, rng: np.random.Generator,
+    dtype: type=np.float32
+) -> np.ndarray:
     """
-    Make the function that `optuna` will use to optimize.
+    Make start states for flights to the origin. The distances of the starts from
+    the origin are spread evenly from near to far, and their directions are random.
+
+    Parameters
+    ----------
+    num : int
+        The number of scenarios.
+    bounding_box : float
+        The side of the cube, centered at the origin, that the vehicle flies in.
+        Starts are inside 0.75 of it, as in `BaseMultirotorEnv.reset()`.
+    proximity : float
+        Distance from the origin at which the vehicle has reached it. Starts are
+        at least this far from the origin in every coordinate.
+    rng : np.random.Generator
+        The source of randomness.
+    dtype : type, optional
+        The data type of the states, by default np.float32
+
+    Returns
+    -------
+    np.ndarray
+        The vehicle states, shape (num, 12). The vehicle is at rest.
+    """
+    half = bounding_box * 0.75 / 2
+    # One distance in each of `num` equal ranges between near and the cube's corner
+    near, far = 2 * proximity, half * np.sqrt(3)
+    distances = near + (far - near) * (np.arange(num) + rng.random(num)) / num
+    directions = rng.normal(size=(num, 3))
+    positions = directions / np.linalg.norm(directions, axis=1, keepdims=True) * distances[:, None]
+    # Shrink the starts that fall outside the cube towards the origin
+    positions *= np.minimum(1., half / np.abs(positions).max(axis=1, keepdims=True))
+    positions = np.where(np.abs(positions) < proximity, np.sign(positions) * proximity, positions)
+    states = np.zeros((num, 12), dtype)
+    states[:, :3] = positions
+    return states
+
+
+
+def make_scenario_suites(
+    args: Namespace=DEFAULTS, seed: int=0, dtype: type=np.float32
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Make the scenarios that a study flies, and the scenarios that score its result.
+    The two are drawn from different random streams, and only `seed` decides them.
+
+    Parameters
+    ----------
+    args : Namespace, optional
+        Optimization params, by default DEFAULTS
+    seed : int, optional
+        The seed of the study, by default 0
+    dtype : type, optional
+        The data type of the states, by default np.float32
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        The training and held-out start states, each of shape (num, 12).
+    """
+    train_stream, heldout_stream = np.random.SeedSequence(seed).spawn(2)
+    proximity = DynamicsMultirotorEnv.proximity
+    return (
+        make_scenarios(args.num_sims, args.bounding_box, proximity,
+                       np.random.default_rng(train_stream), dtype),
+        make_scenarios(args.num_heldout_sims, args.bounding_box, proximity,
+                       np.random.default_rng(heldout_stream), dtype),
+    )
+
+
+
+def run_scenarios(env: DynamicsMultirotorEnv, ctrl: Controller, starts: np.ndarray) -> float:
+    """
+    Fly the controller from each start state to the origin.
+
+    Parameters
+    ----------
+    env : DynamicsMultirotorEnv
+        The environment to fly in.
+    ctrl : Controller
+        The controller, made for the vehicle of `env`.
+    starts : np.ndarray
+        The start states, shape (num, 12).
+
+    Returns
+    -------
+    float
+        The mean over the scenarios of the total reward of the flight.
+    """
+    rewards = []
+    for start in starts:
+        env.reset(options={'state': start})
+        ctrl.reset()
+        traj = Trajectory(env.vehicle, np.asarray([[0, 0, 0]]), proximity=0.1)
+        rewards.append(run_sim(env, traj, ctrl).reward.sum())
+    return float(np.mean(rewards))
+
+
+
+def make_trial_controller(
+    env: DynamicsMultirotorEnv, ctrl: Controller=None, args: Namespace=DEFAULTS
+) -> Controller:
+    """
+    Make the controller that a trial or the final scoring flies: a copy of `ctrl`,
+    or a `get_controller()` controller if `ctrl` is None, made for the vehicle of
+    `env`. The caller's `ctrl` keeps its vehicle and parameters.
+    """
+    if ctrl is None:
+        return get_controller(env.vehicle, args.scurve, args)
+    trial_ctrl = copy.deepcopy(ctrl)
+    trial_ctrl.vehicle = env.vehicle
+    return trial_ctrl
+
+
+
+def make_objective(
+    vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None,
+    args: Namespace=DEFAULTS, seed: int=0, starts: np.ndarray=None
+) -> Callable:
+    """
+    Make the function that `optuna` will use to optimize. Each trial flies the
+    same scenarios, so the scores of two trials differ only because their
+    parameters differ.
 
     Parameters
     ----------
@@ -287,25 +414,22 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=Non
         to make a controller instance.
     args : Namespace, optional
         Optimization params, by default DEFAULTS
+    seed : int, optional
+        The seed of the scenarios, by default 0. Not used if `starts` is given.
+    starts : np.ndarray, optional
+        The start states of the scenarios, shape (num, 12). By default, the
+        training suite of `make_scenario_suites(args, seed)`.
     """
+    if starts is None:
+        starts, _ = make_scenario_suites(args, seed, sp.dtype or np.float32)
+
     def objective(trial: optuna.Trial, ctrl=ctrl):
-        # objective is to navigate to origin from an intial position
+        # objective is to navigate to origin from the initial positions
         ctrl_params = make_controller_from_trial(trial=trial, args=args)
         env = make_env(vp, sp, args)
-        if ctrl is None:
-            ctrl = get_controller(env.vehicle, args.scurve, args)
-        else:
-            ctrl.vehicle = env.vehicle
-        ctrl.set_params(**ctrl_params)
-        errs = []
-        for i in range(args.num_sims):
-            env.reset()
-            ctrl.reset()
-            waypoints = np.asarray([[0,0,0]])
-            traj = Trajectory(env.vehicle, waypoints, proximity=0.1)
-            log = run_sim(env, traj, ctrl)
-            errs.append(log.reward.sum())
-        return np.mean(errs)
+        trial_ctrl = make_trial_controller(env, ctrl, args)
+        trial_ctrl.set_params(**ctrl_params)
+        return run_scenarios(env, trial_ctrl, starts)
     return objective
 
 
@@ -348,18 +472,35 @@ def optimize(
     -------
     optuna.Study
         The completed `Study` object with `study.best_params` which can be used
-        by `apply_params(Controller, **best_params)` to get the optimized
-        controller.
+        by `apply_params(controller, study.best_params)` to get the optimized
+        controller. `study.user_attrs['heldout_score']` is the mean total reward
+        of the best parameters over `args.num_heldout_sims` scenarios that the
+        study did not fly. `study.best_value` is the mean over the scenarios
+        that it did fly.
     """
     optuna.logging.set_verbosity(verbosity)
     study = get_study(study_name, seed=seed)
+    # A resumed study must use the scenarios that its earlier trials flew.
+    scenarios = dict(
+        seed=seed, num_sims=args.num_sims, num_heldout_sims=args.num_heldout_sims,
+        bounding_box=args.bounding_box)
+    if 'scenarios' in study.user_attrs and study.user_attrs['scenarios'] != scenarios:
+        raise ValueError(
+            'The study was made with scenarios %s, not %s.' % (study.user_attrs['scenarios'], scenarios))
+    study.set_user_attr('scenarios', scenarios)
+    train, heldout = make_scenario_suites(args, seed, sp.dtype or np.float32)
     study.optimize(
-        make_objective(vp, sp, ctrl=ctrl, args=args),
+        make_objective(vp, sp, ctrl=ctrl, args=args, starts=train),
         n_trials=ntrials,
         show_progress_bar=True,
         n_jobs=n_jobs,
         timeout=timeout
     )
+    if any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):
+        env = make_env(vp, sp, args)
+        best_ctrl = make_trial_controller(env, ctrl, args)
+        apply_params(best_ctrl, study.best_params)
+        study.set_user_attr('heldout_score', run_scenarios(env, best_ctrl, heldout))
     return study
 
 
@@ -401,51 +542,10 @@ def apply_params(ctrl: Controller, params: dict) -> Dict[str, Dict[str, np.ndarr
     p['ctrl_r']['max_acceleration'] = np.asarray([params['r_pitch_roll.max_acceleration'],
                                                   params['r_pitch_roll.max_acceleration'],
                                                   params.get('r_yaw.max_acceleration', 0)])
+    p['ctrl_r']['max_err_i'] = p['ctrl_r']['max_acceleration']
     p['ctrl_a']['k_p'] = np.asarray([params['a_pitch_roll.k_p'], params['a_pitch_roll.k_p'], params.get('a_yaw.k_p', 0)])
     p['ctrl_a']['k_i'] = np.asarray([params['a_pitch_roll.k_i'], params['a_pitch_roll.k_i'], params.get('a_yaw.k_i', 0)])
     p['ctrl_a']['k_d'] = np.asarray([params['a_pitch_roll.k_d'], params['a_pitch_roll.k_d'], params.get('a_yaw.k_d', 0)])
     if ctrl is not None:
         ctrl.set_params(**p)
     return p
-
-
-
-if __name__=='__main__':
-    raise NotImplementedError('Use the optimize() function directly.')
-    parser = ArgumentParser()
-    parser.add_argument('study_name', help='Name of study', default=DEFAULTS.study_name, type=str, nargs='?')
-    # parser.add_argument('--nprocs', help='Number of processes.', default=DEFAULTS.nprocs, type=int)
-    parser.add_argument('--ntrials', help='Number of trials.', default=DEFAULTS.ntrials, type=int)
-    parser.add_argument('--max_velocity', default=DEFAULTS.max_velocity, type=float)
-    parser.add_argument('--max_acceleration', default=DEFAULTS.max_acceleration, type=float)
-    parser.add_argument('--max_tilt', default=DEFAULTS.max_tilt, type=float)
-    parser.add_argument('--leashing', action='store_true', default=DEFAULTS.leashing)
-    parser.add_argument('--sqrt_scaling', action='store_true', default=DEFAULTS.sqrt_scaling)
-    parser.add_argument('--use_yaw', action='store_true', default=DEFAULTS.use_yaw)
-    parser.add_argument('--bounding_box', default=DEFAULTS.bounding_box, type=float)
-    parser.add_argument('--num_sims', default=DEFAULTS.num_sims, type=int)
-    parser.add_argument('--append', action='store_true', default=False)
-    parser.add_argument('--pid_params', help='File to save pid params to.', type=str, default='')
-    parser.add_argument('--comment', help='Comments to attach to studdy.', type=str, default='')
-    args = parser.parse_args()
-
-    if not args.append:
-        try:
-            os.remove(('studies/' + args.study_name + '.db'))
-        except OSError:
-            pass
-    
-    # create study if it doesn't exist. The study will be reused with a new seed
-    # by each process
-    study = get_study(args.study_name)
-
-    for key in vars(args):
-        study.set_user_attr(key, getattr(args, key))
-
-    with mp.Pool(args.nprocs) as pool:
-        pool.starmap(optimize, [(args, i) for i in range(args.nprocs)])
-    print(study.best_trial.number)
-    print(study.best_params)
-    if len(args.pid_params) > 0:
-        with open(args.pid_params + ('.pickle' if not args.pid_params.endswith('pickle') else ''), 'wb') as f:
-            pickle.dump(apply_params(None, **study.best_params), f)

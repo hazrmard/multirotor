@@ -696,35 +696,3 @@ class Controller:
 
     def predict(self, ref, deterministic=True):
         return self.step(reference=ref)
-
-
-    @classmethod
-    def make_for(cls, vehicle: Multirotor) -> Controller:
-        """
-        Make a `Controller` with p-only parameters for a vehicle. The parameters
-        can be learned using the `optimize` function.
-
-        Parameters
-        ----------
-        vehicle : Multirotor
-            The vehicle to control.
-
-        Returns
-        -------
-        Controller
-            The controller with p-only parameters.
-        """
-        pid = dict(k_p=1., k_i=0, k_d=0, max_err_i=1., vehicle=vehicle)
-        ctrl = cls(
-            ctrl_p=PosController(**pid, square_root_scaling=True, leashing=True),
-            ctrl_v=VelController(**pid),
-            ctrl_a=AttController(**pid),
-            ctrl_r=RateController(**pid),
-            ctrl_z=AltController(**pid),
-            ctrl_vz=AltRateController(**pid),
-            period_p=1e-1,
-            period_a=1e-2,
-            period_z=1e-1,
-            feedforward_weight=0.
-        )
-        return ctrl
