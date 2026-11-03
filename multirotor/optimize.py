@@ -26,7 +26,9 @@ DEFAULTS = Namespace(
     bounding_box = 20,
     max_velocity = 5,
     max_acceleration = 2.5,
-    max_tilt = np.pi/12,
+    # Smaller than the tilt at which the environments end an episode (pi/12), so
+    # a controller that saturates does not tip the vehicle.
+    max_tilt = np.pi/18,
     max_angular_acceleration = 20.,
     leashing = True,
     sqrt_scaling = True,

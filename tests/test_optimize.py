@@ -76,3 +76,11 @@ def test_optimize_leaves_the_given_controller_unchanged():
     optimize(vp, sp, ctrl, ntrials=2, verbosity=optuna.logging.ERROR)
     assert ctrl.vehicle is vehicle
     np.testing.assert_array_equal(ctrl.ctrl_r.k_p, k_p)
+
+
+
+def test_default_tilt_limit_is_below_the_tipping_angle_of_the_environments():
+    # An equal limit lets a saturated controller end episodes as "tipped".
+    from multirotor.env import BaseMultirotorEnv
+    from multirotor.optimize import DEFAULTS
+    assert DEFAULTS.max_tilt < BaseMultirotorEnv.max_angle
