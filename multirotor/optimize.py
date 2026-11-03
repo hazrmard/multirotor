@@ -1,4 +1,5 @@
 import os
+import copy
 import multiprocessing as mp
 from argparse import ArgumentParser, Namespace
 from typing import Callable, Dict, Union
@@ -189,8 +190,11 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     Dict
         A dictionary of parameters to be used by `Controller.set_params(**dict)`
     """
-    r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 0.1, 50)
-    r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0.1, 10)
+    # The ranges surround the gains of `get_controller()`. Each loop must be slower
+    # than the loop inside it, and a D term acts on the change of the loop's output,
+    # so large gains make the vehicle unstable within a few steps.
+    r_pitch_roll_p = trial.suggest_float(prefix + 'r_pitch_roll.k_p', 5, 64)
+    r_pitch_roll_i = trial.suggest_float(prefix + 'r_pitch_roll.k_i', 0, 1)
     # The rate controller outputs acceleration, so a k_d of 1 or more is unstable
     r_pitch_roll_d = trial.suggest_float(prefix + 'r_pitch_roll.k_d', 0, 0.5)
     r_pitch_roll_max_acc = trial.suggest_float(prefix + 'r_pitch_roll.max_acceleration', 0.1, 25)
@@ -202,26 +206,26 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     else:
         r_yaw_p, r_yaw_i, r_yaw_d, r_yaw_max_acc = 0, 0, 0, 0
 
-    a_pitch_roll_p = trial.suggest_float(prefix + 'a_pitch_roll.k_p', 0.1, 50)
-    a_pitch_roll_i = trial.suggest_float(prefix + 'a_pitch_roll.k_i', 0.1, 10)
-    a_pitch_roll_d = trial.suggest_float(prefix + 'a_pitch_roll.k_d', 1, 250)
+    a_pitch_roll_p = trial.suggest_float(prefix + 'a_pitch_roll.k_p', 1, 16)
+    a_pitch_roll_i = trial.suggest_float(prefix + 'a_pitch_roll.k_i', 0, 1)
+    a_pitch_roll_d = trial.suggest_float(prefix + 'a_pitch_roll.k_d', 0, 3)
     if args.use_yaw:
         a_yaw_p = trial.suggest_float(prefix + 'a_yaw.k_p', 0.1, 5)
         a_yaw_i = trial.suggest_float(prefix + 'a_yaw.k_i', 0.1, 1)
-        a_yaw_d = trial.suggest_float(prefix + 'a_yaw.k_d', 1, 25)
+        a_yaw_d = trial.suggest_float(prefix + 'a_yaw.k_d', 0, 3)
     else:
         a_yaw_p, a_yaw_i, a_yaw_d = 0, 0, 0
 
     params = dict(
         ctrl_p = dict(
-            k_p = trial.suggest_float(prefix + 'p.k_p', 0.1, 50),
-            k_i = trial.suggest_float(prefix + 'p.k_i', 0.1, 10),
-            k_d = trial.suggest_float(prefix + 'p.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'p.k_p', 1, 50),
+            k_i = trial.suggest_float(prefix + 'p.k_i', 0, 1),
+            k_d = trial.suggest_float(prefix + 'p.k_d', 0, 10),
         ),
         ctrl_v = dict(
-            k_p = trial.suggest_float(prefix + 'v.k_p', 0.1, 50),
-            k_i = trial.suggest_float(prefix + 'v.k_i', 0.1, 10),
-            k_d = trial.suggest_float(prefix + 'v.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'v.k_p', 0.05, 1),
+            k_i = trial.suggest_float(prefix + 'v.k_i', 0, 0.5),
+            k_d = trial.suggest_float(prefix + 'v.k_d', 0, 1),
         ),
         ctrl_a = dict(
             k_p = np.asarray((a_pitch_roll_p, a_pitch_roll_p, a_yaw_p)),
@@ -236,14 +240,14 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
             max_err_i = np.asarray((r_pitch_roll_max_acc, r_pitch_roll_max_acc, r_yaw_max_acc)),
         ),
         ctrl_z = dict(
-            k_p = trial.suggest_float('z.k_p', 0.1, 50),
-            k_i = trial.suggest_float('z.k_i', 0.1, 10),
-            k_d = trial.suggest_float('z.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'z.k_p', 0.2, 4),
+            k_i = trial.suggest_float(prefix + 'z.k_i', 0, 0.5),
+            k_d = trial.suggest_float(prefix + 'z.k_d', 0, 0.1),
         ),
         ctrl_vz = dict(
-            k_p = trial.suggest_float('vz.k_p', 0.1, 50),
-            k_i = trial.suggest_float('vz.k_i', 0.1, 10),
-            k_d = trial.suggest_float('vz.k_d', 1, 250),
+            k_p = trial.suggest_float(prefix + 'vz.k_p', 1, 20),
+            k_i = trial.suggest_float(prefix + 'vz.k_i', 0, 1),
+            k_d = trial.suggest_float(prefix + 'vz.k_d', 0, 1),
         ),
     )
     if args.scurve:
@@ -292,18 +296,21 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=Non
         # objective is to navigate to origin from an intial position
         ctrl_params = make_controller_from_trial(trial=trial, args=args)
         env = make_env(vp, sp, args)
+        # Each trial gets its own controller, so the caller's controller keeps
+        # its vehicle and parameters.
         if ctrl is None:
-            ctrl = get_controller(env.vehicle, args.scurve, args)
+            trial_ctrl = get_controller(env.vehicle, args.scurve, args)
         else:
-            ctrl.vehicle = env.vehicle
-        ctrl.set_params(**ctrl_params)
+            trial_ctrl = copy.deepcopy(ctrl)
+            trial_ctrl.vehicle = env.vehicle
+        trial_ctrl.set_params(**ctrl_params)
         errs = []
         for i in range(args.num_sims):
             env.reset()
-            ctrl.reset()
+            trial_ctrl.reset()
             waypoints = np.asarray([[0,0,0]])
             traj = Trajectory(env.vehicle, waypoints, proximity=0.1)
-            log = run_sim(env, traj, ctrl)
+            log = run_sim(env, traj, trial_ctrl)
             errs.append(log.reward.sum())
         return np.mean(errs)
     return objective
@@ -401,6 +408,7 @@ def apply_params(ctrl: Controller, params: dict) -> Dict[str, Dict[str, np.ndarr
     p['ctrl_r']['max_acceleration'] = np.asarray([params['r_pitch_roll.max_acceleration'],
                                                   params['r_pitch_roll.max_acceleration'],
                                                   params.get('r_yaw.max_acceleration', 0)])
+    p['ctrl_r']['max_err_i'] = p['ctrl_r']['max_acceleration']
     p['ctrl_a']['k_p'] = np.asarray([params['a_pitch_roll.k_p'], params['a_pitch_roll.k_p'], params.get('a_yaw.k_p', 0)])
     p['ctrl_a']['k_i'] = np.asarray([params['a_pitch_roll.k_i'], params['a_pitch_roll.k_i'], params.get('a_yaw.k_i', 0)])
     p['ctrl_a']['k_d'] = np.asarray([params['a_pitch_roll.k_d'], params['a_pitch_roll.k_d'], params.get('a_yaw.k_d', 0)])
