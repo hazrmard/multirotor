@@ -122,3 +122,12 @@ def test_step_reports_terminated_and_truncated_separately():
     *_, terminated, truncated, info = env.step(hold.copy())
     assert (terminated, truncated) == (False, False)
     assert not any(info.values())
+
+
+def test_reset_at_the_origin_gives_no_nan():
+    env = make_env('dynamics')
+    state, _ = env.reset(options={'state': np.zeros(12, env.vehicle.dtype)})
+    hold = np.asarray([0, 0, env.vehicle.weight, 0, 0, 0], env.vehicle.dtype)
+    obs, reward, terminated, truncated, info = env.step(hold)
+    assert np.isfinite(reward) and np.all(np.isfinite(obs))
+    assert terminated and info['reached']

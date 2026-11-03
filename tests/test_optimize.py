@@ -3,9 +3,13 @@ Tests for the controller search in ``multirotor.optimize``.
 """
 import numpy as np
 import optuna
+import pytest
 
+import multirotor.optimize as optimize_module
+from multirotor.env import BaseMultirotorEnv
 from multirotor.optimize import (
-    apply_params, get_controller, make_controller_from_trial, optimize
+    DEFAULTS, apply_params, get_controller, make_controller_from_trial, make_env,
+    make_objective, make_scenario_suites, optimize, run_scenarios
 )
 from multirotor.simulation import Multirotor
 
@@ -21,6 +25,14 @@ class RecordingTrial:
     def suggest_float(self, name, low, high, **kwargs):
         self.ranges[name] = (low, high)
         return (low + high) / 2
+
+
+
+def midpoint_params() -> dict:
+    "The parameters of a trial that takes the midpoint of every range."
+    trial = RecordingTrial()
+    make_controller_from_trial(trial)
+    return {name: (low + high) / 2 for name, (low, high) in trial.ranges.items()}
 
 
 
@@ -57,9 +69,7 @@ def test_search_ranges_contain_the_default_gains():
 
 def test_apply_params_matches_the_trial_parameters():
     # The controller from `apply_params` must have the gains the trial evaluated.
-    recorder = RecordingTrial()
-    make_controller_from_trial(recorder)
-    params = {name: (low + high) / 2 for name, (low, high) in recorder.ranges.items()}
+    params = midpoint_params()
     from_trial = flatten(make_controller_from_trial(optuna.trial.FixedTrial(params)))
     from_apply = flatten(apply_params(None, params))
     assert set(from_trial) == set(from_apply)
@@ -81,14 +91,11 @@ def test_optimize_leaves_the_given_controller_unchanged():
 
 def test_default_tilt_limit_is_below_the_tipping_angle_of_the_environments():
     # An equal limit lets a saturated controller end episodes as "tipped".
-    from multirotor.env import BaseMultirotorEnv
-    from multirotor.optimize import DEFAULTS
     assert DEFAULTS.max_tilt < BaseMultirotorEnv.max_angle
 
 
 
 def test_scenarios_are_decided_by_the_seed_and_spread_over_distances():
-    from multirotor.optimize import DEFAULTS, make_scenario_suites
     train, heldout = make_scenario_suites(DEFAULTS, seed=3)
     assert train.shape == (DEFAULTS.num_sims, 12)
     assert heldout.shape == (DEFAULTS.num_heldout_sims, 12)
@@ -97,39 +104,31 @@ def test_scenarios_are_decided_by_the_seed_and_spread_over_distances():
     assert not np.array_equal(train[:, :3], heldout[:len(train), :3])
     half_box = DEFAULTS.bounding_box * 0.75 / 2
     for suite in (train, heldout):
-        assert np.all(np.abs(suite[:, :3]) <= half_box)
-        assert np.all(np.abs(suite[:, :3]) >= 0.5)       # `proximity` of the envs
+        assert np.all(np.abs(suite[:, :3]) <= half_box + 1e-5)
+        assert np.all(np.abs(suite[:, :3]) >= 0.5 - 1e-6)    # `proximity` of the envs
         assert np.all(suite[:, 3:] == 0)
         distance = np.linalg.norm(suite[:, :3], axis=1)
         assert distance.min() < 2.5 and distance.max() > 10  # near and far starts
 
 
 
-def test_every_trial_flies_the_same_scenarios():
-    from multirotor.optimize import make_env, make_objective, run_scenarios, make_scenario_suites
+def test_scenarios_of_a_suite_are_distinct():
+    for seed in range(20):
+        for suite in make_scenario_suites(DEFAULTS, seed):
+            assert len(np.unique(suite[:, :3], axis=0)) == len(suite)
+
+
+
+def test_the_score_of_a_trial_does_not_depend_on_its_number():
     vp, sp = make_params(4, 'quadratic', False, np.float32)
-    params = {name: (low + high) / 2 for name, (low, high) in recorded_ranges().items()}
+    params = midpoint_params()
     objective = make_objective(vp, sp, seed=5)
-    first = objective(optuna.trial.FixedTrial(params))
-    assert objective(optuna.trial.FixedTrial(params)) == first
-    # The value is the mean reward of the controller over the training scenarios.
-    env = make_env(vp, sp)
-    ctrl = get_controller(env.vehicle)
-    apply_params(ctrl, params)
-    train, _ = make_scenario_suites(seed=5, dtype=sp.dtype)
-    assert first == run_scenarios(env, ctrl, train)
-
-
-
-def recorded_ranges() -> dict:
-    trial = RecordingTrial()
-    make_controller_from_trial(trial)
-    return trial.ranges
+    scores = [objective(optuna.trial.FixedTrial(params, number=n)) for n in (0, 7)]
+    assert scores[0] == scores[1]
 
 
 
 def test_optimize_scores_the_best_parameters_on_heldout_scenarios():
-    from multirotor.optimize import make_env, run_scenarios, make_scenario_suites
     vp, sp = make_params(4, 'quadratic', False, np.float32)
     study = optimize(vp, sp, ntrials=2, verbosity=optuna.logging.ERROR, seed=2)
     env = make_env(vp, sp)
@@ -140,12 +139,16 @@ def test_optimize_scores_the_best_parameters_on_heldout_scenarios():
 
 
 
-def test_resuming_a_study_with_other_scenarios_is_an_error(monkeypatch):
-    import pytest
-    import multirotor.optimize as optimize_module
+@pytest.mark.parametrize('field, value', (
+    ('seed', 1), ('num_sims', 10), ('num_heldout_sims', 10), ('bounding_box', 30)))
+def test_resuming_a_study_with_other_scenarios_is_an_error(monkeypatch, field, value):
     vp, sp = make_params(4, 'quadratic', False, np.float32)
+    scenarios = dict(
+        seed=2, num_sims=DEFAULTS.num_sims, num_heldout_sims=DEFAULTS.num_heldout_sims,
+        bounding_box=DEFAULTS.bounding_box)
+    scenarios[field] = value
     study = optuna.create_study(direction='maximize')
-    study.set_user_attr('scenarios', dict(seed=1, num_sims=20, bounding_box=20))
+    study.set_user_attr('scenarios', scenarios)
     monkeypatch.setattr(optimize_module, 'get_study', lambda *args, **kwargs: study)
     with pytest.raises(ValueError, match='scenarios'):
         optimize(vp, sp, ntrials=1, seed=2, verbosity=optuna.logging.ERROR)

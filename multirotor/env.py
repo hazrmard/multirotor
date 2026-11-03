@@ -67,7 +67,8 @@ class BaseMultirotorEnv(gym.Env):
             generator keeps its state across resets if no seed is given.
         options : dict, optional
             ``options['state']`` is a state to set the vehicle to, instead of
-            the random one.
+            the random one. If it is at the origin, the reward has no advance
+            term and the first step reaches the origin.
 
         Returns
         -------
@@ -84,7 +85,8 @@ class BaseMultirotorEnv(gym.Env):
             if options is not None and options.get('state') is not None:
                 self.vehicle.state = np.asarray(options['state'], self.vehicle.dtype)
         # needed by reward() to calculate deviation from straight line
-        self._des_unit_vec = - self.state[:3] / np.linalg.norm(self.state[:3])
+        distance = np.linalg.norm(self.state[:3])
+        self._des_unit_vec = - self.state[:3] / distance if distance > 0 else np.zeros(3, self.state.dtype)
         return self.state, {}
 
 
