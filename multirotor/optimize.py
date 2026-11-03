@@ -306,7 +306,8 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=Non
         trial_ctrl.set_params(**ctrl_params)
         errs = []
         for i in range(args.num_sims):
-            env.reset()
+            # seeded once per trial, so a study is reproducible
+            env.reset(seed=trial.number if i == 0 else None)
             trial_ctrl.reset()
             waypoints = np.asarray([[0,0,0]])
             traj = Trajectory(env.vehicle, waypoints, proximity=0.1)
