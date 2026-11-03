@@ -2,7 +2,7 @@
 
 [![Documentation Status](https://readthedocs.org/projects/multirotor/badge/?version=latest)](https://multirotor.readthedocs.io/en/latest/?badge=latest)
 
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.6.0/_static/logo.jpg)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/logo.jpg)
 
 Simulation of multi-rotor unmanned aerial vehicles in python.
 
@@ -30,7 +30,7 @@ kernels, so a simulation step takes microseconds.
 - Apply disturbance forces and torques, such as wind.
 - Follow waypoints with `trajectories.Trajectory`, record with `helpers.DataLog`, and view with `visualize`.
 
-**Control and tune.** `controller.Controller` is a cascaded PID controller for position, velocity, attitude and rate. `optimize.optimize` searches its gains with [optuna](https://optuna.org).
+**Control and tune.** `controller.Controller` is a cascaded PID controller for position, velocity, attitude and rate. `optimize.optimize` searches its gains with [optuna](https://optuna.org). Each trial flies the same set of start positions, and the best gains are scored on positions that the search did not fly.
 
 **Train agents.** `env.DynamicsMultirotorEnv` takes forces and torques as actions, and `env.SpeedsMultirotorEnv` takes propeller speeds. Both follow the Gymnasium API. Subclass `env.BaseMultirotorEnv` to change the reward.
 
@@ -124,10 +124,10 @@ uv publish               # uploads dist/* to PyPI (set UV_PUBLISH_TOKEN)
 ## Code organization
 
 The following main classes are available in the code. For simulating the vehicle:
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.6.0/_static/vehicle_classdiagram.png)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/vehicle_classdiagram.png)
 
 And for simulating control:
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.6.0/_static/controller_classdiagram.png)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/controller_classdiagram.png)
 
 These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
