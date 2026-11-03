@@ -56,7 +56,7 @@ params = vehicle_params_factory(
     n=4, m_prop=0.01, d_prop=0.3, params=propeller, m_body=2)
 vehicle = Multirotor(params, sim)
 
-# 2. Search for controller gains that fly this vehicle to the origin (~15 s)
+# 2. Search for controller gains that fly this vehicle to the origin (~1 min)
 study = optimize(params, sim, ntrials=100)
 ctrl = get_controller(vehicle)
 apply_params(ctrl, study.best_params)

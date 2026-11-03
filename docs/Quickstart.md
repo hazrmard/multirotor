@@ -190,7 +190,7 @@ plot_datalog(log, figsize=(6,4));
 
 The PID controller has many tunable parameters. Searching for an adequate parametrization for a vehicle is a complex search problem. `multirotor.optimize` provides a convenience function called `optimize()` to search for the best parameters. Parameter search is done using the [optuna](https://optuna.org/) library, which is installed as a dependency.
 
-Each trial of the search sets the gains of the controller, then flies 10 episodes from random start positions to the origin. The score is the mean total reward of the episodes. The search takes about 15 seconds for 100 trials:
+Each trial of the search sets the gains of the controller, then flies 60 scenarios from different start positions to the origin. Every trial flies the same scenarios, so trials differ in score only because their gains differ. The start positions are spread over near and far distances. The score is the mean total reward of the scenarios. The search takes about a minute for 100 trials:
 
 ```{code-cell} ipython3
 from multirotor.optimize import optimize, apply_params
@@ -207,39 +207,27 @@ tuned = get_controller(vehicle)
 apply_params(tuned, study.best_params);
 ```
 
-To compare the tuned gains with the default gains, fly 20 seeded episodes to the origin with each controller. The seeds are not the ones the search used. An episode succeeds if the vehicle ends within `env.proximity` of the origin:
+A score on the scenarios that the search flew is optimistic, because the search chose the gains that scored best on them. At the end, `optimize` flies the best gains through 150 other scenarios. Compare that score with the default gains on the same scenarios:
 
 ```{code-cell} ipython3
-from multirotor.optimize import make_env, run_sim
-from multirotor.trajectories import Trajectory
+from multirotor.optimize import make_env, make_scenario_suites, run_scenarios
 
-def evaluate(params=None, episodes=20):
-    env = make_env(vp, sp)
-    controller = get_controller(env.vehicle)
-    if params is not None:
-        apply_params(controller, params)
-    successes, rewards, steps = 0, [], []
-    for seed in range(100, 100 + episodes):
-        env.reset(seed=seed)
-        controller.reset()
-        log = run_sim(env, Trajectory(env.vehicle, [[0, 0, 0]], proximity=0.1), controller)
-        successes += np.linalg.norm(env.vehicle.position) <= env.proximity
-        rewards.append(log.reward.sum())
-        steps.append(len(log.reward))
-    print(f'{successes} of {episodes} reached the origin, '
-          f'mean reward {np.mean(rewards):.0f}, mean length {np.mean(steps):.0f} steps')
-
-print('Default gains:'); evaluate()
-print('Tuned gains:  '); evaluate(study.best_params)
+_, heldout = make_scenario_suites(seed=0, dtype=vehicle.dtype)
+env = make_env(vp, sp)
+default = get_controller(env.vehicle)
+print('Default gains, held-out score:', round(run_scenarios(env, default, heldout), 1))
+print('Tuned gains, held-out score:  ', round(study.user_attrs['heldout_score'], 1))
 ```
 
-The default gains are a good starting point, and for this vehicle the tuned gains perform about the same. Use the search when the default gains fly your vehicle poorly.
+A reached origin scores about 450 and a crash about −400, so a difference of a few tens is a few more or fewer successful flights. The default gains are a good starting point. The search helps most when the default gains fly your vehicle poorly.
 
 ### Fly waypoints
 
 `multirotor.trajectories.Trajectory` takes a list of waypoints and breaks them into smaller segments for the controller. It moves to the next segment when the vehicle is within `proximity` of the current one. `resolution` is the length of a segment:
 
 ```{code-cell} ipython3
+from multirotor.trajectories import Trajectory
+
 vehicle.reset()
 tuned.reset()
 log = DataLog(vehicle, tuned)

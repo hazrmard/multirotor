@@ -2,7 +2,7 @@ import os
 import copy
 import multiprocessing as mp
 from argparse import ArgumentParser, Namespace
-from typing import Callable, Dict, Union
+from typing import Callable, Dict, Tuple, Union
 from pprint import pprint as print
 import pickle
 
@@ -33,7 +33,8 @@ DEFAULTS = Namespace(
     leashing = True,
     sqrt_scaling = True,
     use_yaw = True,
-    num_sims = 10,
+    num_sims = 60,          # scenarios flown by each trial
+    num_heldout_sims = 150, # scenarios that score the best parameters at the end
     scurve = False,
     max_err_i_attitude = 0.1,
     max_err_i_rate = 0.1,
@@ -280,9 +281,119 @@ def make_env(vp: VehicleParams, sp: SimulationParams, args: Namespace=DEFAULTS) 
 
 
 
-def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None, args: Namespace=DEFAULTS) -> Callable:
+def make_scenarios(
+    num: int, bounding_box: float, proximity: float, rng: np.random.Generator,
+    dtype: type=np.float32
+) -> np.ndarray:
     """
-    Make the function that `optuna` will use to optimize.
+    Make start states for flights to the origin. The start positions follow the
+    distribution of `BaseMultirotorEnv.reset()`, but they are spread evenly over
+    the range of distances, so that near and far starts are both present.
+
+    Parameters
+    ----------
+    num : int
+        The number of scenarios.
+    bounding_box : float
+        The side of the cube, centered at the origin, that the vehicle flies in.
+    proximity : float
+        Distance from the origin at which the vehicle has reached it. Starts are
+        at least this far from the origin in every coordinate.
+    rng : np.random.Generator
+        The source of randomness.
+    dtype : type, optional
+        The data type of the states, by default np.float32
+
+    Returns
+    -------
+    np.ndarray
+        The vehicle states, shape (num, 12). The vehicle is at rest.
+    """
+    # Candidate positions are drawn as in the environment. For each of `num`
+    # evenly spaced distances, the nearest candidate in distance is a start.
+    candidates = (rng.random((200 * num, 3)) - 0.5) * bounding_box * 0.75
+    candidates[(0 < candidates) & (candidates < proximity)] = proximity
+    candidates[(-proximity < candidates) & (candidates < 0)] = -proximity
+    distances = np.linalg.norm(candidates, axis=1)
+    order = np.argsort(distances)
+    sorted_distances = distances[order]
+    targets = sorted_distances[0] + (sorted_distances[-1] - sorted_distances[0]) \
+        * (np.arange(num) + rng.random(num)) / num
+    ranks = np.clip(np.searchsorted(sorted_distances, targets), 0, len(order) - 1)
+    states = np.zeros((num, 12), dtype)
+    states[:, :3] = candidates[order[ranks]]
+    return states
+
+
+
+def make_scenario_suites(
+    args: Namespace=DEFAULTS, seed: int=0, dtype: type=np.float32
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Make the scenarios that a study flies, and the scenarios that score its result.
+    The two are drawn from different random streams, and only `seed` decides them.
+
+    Parameters
+    ----------
+    args : Namespace, optional
+        Optimization params, by default DEFAULTS
+    seed : int, optional
+        The seed of the study, by default 0
+    dtype : type, optional
+        The data type of the states, by default np.float32
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        The training and held-out start states, each of shape (num, 12).
+    """
+    train_stream, heldout_stream = np.random.SeedSequence(seed).spawn(2)
+    proximity = DynamicsMultirotorEnv.proximity
+    return (
+        make_scenarios(args.num_sims, args.bounding_box, proximity,
+                       np.random.default_rng(train_stream), dtype),
+        make_scenarios(args.num_heldout_sims, args.bounding_box, proximity,
+                       np.random.default_rng(heldout_stream), dtype),
+    )
+
+
+
+def run_scenarios(env: DynamicsMultirotorEnv, ctrl: Controller, starts: np.ndarray) -> float:
+    """
+    Fly the controller from each start state to the origin.
+
+    Parameters
+    ----------
+    env : DynamicsMultirotorEnv
+        The environment to fly in.
+    ctrl : Controller
+        The controller, made for the vehicle of `env`.
+    starts : np.ndarray
+        The start states, shape (num, 12).
+
+    Returns
+    -------
+    float
+        The mean over the scenarios of the total reward of the flight.
+    """
+    rewards = []
+    for start in starts:
+        env.reset(options={'state': start})
+        ctrl.reset()
+        traj = Trajectory(env.vehicle, np.asarray([[0, 0, 0]]), proximity=0.1)
+        rewards.append(run_sim(env, traj, ctrl).reward.sum())
+    return float(np.mean(rewards))
+
+
+
+def make_objective(
+    vp: VehicleParams, sp: SimulationParams, ctrl: Controller=None,
+    args: Namespace=DEFAULTS, seed: int=0
+) -> Callable:
+    """
+    Make the function that `optuna` will use to optimize. Each trial flies the
+    same `args.num_sims` scenarios, so the scores of two trials differ only
+    because their parameters differ. The scenarios are decided by `seed`.
 
     Parameters
     ----------
@@ -293,9 +404,13 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=Non
         to make a controller instance.
     args : Namespace, optional
         Optimization params, by default DEFAULTS
+    seed : int, optional
+        The seed of the scenarios, by default 0
     """
+    starts, _ = make_scenario_suites(args, seed, sp.dtype or np.float32)
+
     def objective(trial: optuna.Trial, ctrl=ctrl):
-        # objective is to navigate to origin from an intial position
+        # objective is to navigate to origin from the initial positions
         ctrl_params = make_controller_from_trial(trial=trial, args=args)
         env = make_env(vp, sp, args)
         # Each trial gets its own controller, so the caller's controller keeps
@@ -306,16 +421,7 @@ def make_objective(vp: VehicleParams, sp: SimulationParams, ctrl: Controller=Non
             trial_ctrl = copy.deepcopy(ctrl)
             trial_ctrl.vehicle = env.vehicle
         trial_ctrl.set_params(**ctrl_params)
-        errs = []
-        for i in range(args.num_sims):
-            # seeded once per trial, so a study is reproducible
-            env.reset(seed=trial.number if i == 0 else None)
-            trial_ctrl.reset()
-            waypoints = np.asarray([[0,0,0]])
-            traj = Trajectory(env.vehicle, waypoints, proximity=0.1)
-            log = run_sim(env, traj, trial_ctrl)
-            errs.append(log.reward.sum())
-        return np.mean(errs)
+        return run_scenarios(env, trial_ctrl, starts)
     return objective
 
 
@@ -359,17 +465,36 @@ def optimize(
     optuna.Study
         The completed `Study` object with `study.best_params` which can be used
         by `apply_params(Controller, **best_params)` to get the optimized
-        controller.
+        controller. `study.user_attrs['heldout_score']` is the mean total reward
+        of the best parameters over `args.num_heldout_sims` scenarios that the
+        study did not fly. `study.best_value` is the mean over the scenarios
+        that it did fly.
     """
     optuna.logging.set_verbosity(verbosity)
     study = get_study(study_name, seed=seed)
+    # A resumed study must use the scenarios that its earlier trials flew.
+    scenarios = dict(seed=seed, num_sims=args.num_sims, bounding_box=args.bounding_box)
+    if 'scenarios' in study.user_attrs and study.user_attrs['scenarios'] != scenarios:
+        raise ValueError(
+            'The study was made with scenarios %s, not %s.' % (study.user_attrs['scenarios'], scenarios))
+    study.set_user_attr('scenarios', scenarios)
     study.optimize(
-        make_objective(vp, sp, ctrl=ctrl, args=args),
+        make_objective(vp, sp, ctrl=ctrl, args=args, seed=seed),
         n_trials=ntrials,
         show_progress_bar=True,
         n_jobs=n_jobs,
         timeout=timeout
     )
+    if any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):
+        env = make_env(vp, sp, args)
+        if ctrl is None:
+            best_ctrl = get_controller(env.vehicle, args.scurve, args)
+        else:
+            best_ctrl = copy.deepcopy(ctrl)
+            best_ctrl.vehicle = env.vehicle
+        apply_params(best_ctrl, study.best_params)
+        _, heldout = make_scenario_suites(args, seed, sp.dtype or np.float32)
+        study.set_user_attr('heldout_score', run_scenarios(env, best_ctrl, heldout))
     return study
 
 
