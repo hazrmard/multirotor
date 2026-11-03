@@ -120,7 +120,7 @@ def worker_cold() -> dict:
     import numpy as np  # noqa: F401
     from multirotor.controller import Controller  # noqa: F401
     from multirotor.simulation import Multirotor  # noqa: F401
-    import cases  # imports env, optimize, gym and optuna as well
+    import cases  # imports env, optimize, gymnasium and optuna as well
     t_import = time.perf_counter() - t0
     t0 = time.perf_counter()
     v = cases.make_vehicle(8)
