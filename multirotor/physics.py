@@ -17,6 +17,8 @@ the blade-element thrust functions, which solve an equation with scipy's
     Battery
         battery_operating_point --> motor_power --> motor_electrical
                                 +-> battery_terminal
+        battery_end_step ---------> battery_ocv
+                                +-> battery_operating_point
         battery_ocv
 
     Body
@@ -32,7 +34,7 @@ Functions with no arrow after them, such as ``battery_ocv`` and
 
 `multirotor.simulation` also calls some of these directly, between solver steps:
 ``motor_electrical`` for each motor's voltage and current,
-``battery_operating_point`` and ``battery_ocv`` for the battery's state,
+``battery_end_step`` and ``battery_ocv`` for the battery's state,
 ``body_torques`` and ``thrusts_blade_element_model`` in
 `Multirotor.get_forces_torques`, and ``thrust_blade_element_model`` in
 `Propeller.thrust`.
@@ -78,7 +80,8 @@ N_MOTOR_PARAMS = 8
 BATTERY_CAPACITY = 0
 "Capacity in coulombs."
 BATTERY_INTERNAL_RESISTANCE = 1
-N_BATTERY_PARAMS = 2
+BATTERY_MIN_VOLTAGE = 2
+N_BATTERY_PARAMS = 3
 
 
 
@@ -379,6 +382,66 @@ def battery_operating_point(
     power = motor_power(speed, u, terminal_voltage, motor_params)
     _, ok = battery_terminal(power, v_oc, internal_resistance)
     return terminal_voltage, power, ok
+
+
+
+@njit
+def battery_end_step(
+    charge: float, charge_drawn: float, cutoff: bool, overload: bool,
+    motor_speeds: np.ndarray, u: np.ndarray, motor_params: np.ndarray,
+    battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
+    dt: float
+) -> Tuple[float, float, float, bool, bool, float]:
+    """
+    The battery's state after one integrated time step. The charge drawn during
+    the step is limited to the charge left in the battery. A battery that is cut
+    off or empty supplies no current from then on. Otherwise the cutoff latches
+    if the terminal voltage falls below the minimum.
+
+    Parameters
+    ----------
+    charge : float
+        Charge (C) drawn during the step, as integrated.
+    charge_drawn : float
+        Charge (C) drawn before the step.
+    cutoff : bool
+        Whether the battery had cut off the motors before the step.
+    overload : bool
+        Whether the previous step demanded more power than the battery can deliver.
+    motor_speeds : np.ndarray
+        Motor speeds (rad/s) at the end of the step, shape (n,).
+    u : np.ndarray
+        Speed signals during the step, shape (n,).
+    motor_params : np.ndarray
+        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    battery_params, ocv_soc, ocv_voltage
+        As in `multirotor.dynamics.battery_state`.
+    dt : float
+        The time step (s).
+
+    Returns
+    -------
+    Tuple[float, float, float, bool, bool, float]
+        The charge drawn, the battery current (A, averaged over the step), the
+        terminal voltage (V), whether the battery has cut off, whether it was
+        overloaded, and the motors' voltage limit (V) for the next step.
+    """
+    capacity = battery_params[BATTERY_CAPACITY]
+    # The integrator can overshoot the capacity by its tolerance
+    charge = min(charge, capacity - charge_drawn)
+    charge_drawn += charge
+    current = charge / dt
+    soc = 1. - charge_drawn / capacity
+    open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
+    if cutoff or soc <= 0.:
+        return charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.
+    voltage, _, ok = battery_operating_point(
+        motor_speeds, u, open_circuit_voltage,
+        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
+    # The cutoff takes effect from the next step
+    if voltage < battery_params[BATTERY_MIN_VOLTAGE]:
+        cutoff = True
+    return charge_drawn, current, voltage, cutoff, not ok, voltage
 
 
 

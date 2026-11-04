@@ -8,9 +8,9 @@ from .vehicle import MotorParams, PropellerParams, SimulationParams, VehiclePara
 from .coords import body_to_inertial, direction_cosine_matrix, rotating_frame_derivative, angular_to_euler_rate
 from .physics import (
     thrust_blade_element_model, thrusts_blade_element_model, body_torques,
-    motor_electrical, battery_ocv, battery_operating_point,
+    motor_electrical, battery_ocv, battery_end_step,
     PROP_K_THRUST, PROP_K_DRAG, BATTERY_CAPACITY, BATTERY_INTERNAL_RESISTANCE,
-    N_BATTERY_PARAMS
+    BATTERY_MIN_VOLTAGE, N_BATTERY_PARAMS
 )
 from .data import MotorData, PropellerData
 from .dynamics import (
@@ -453,6 +453,7 @@ class Battery:
             self._params_vector = np.zeros(N_BATTERY_PARAMS)
             self._params_vector[BATTERY_CAPACITY] = 3600. * self.params.capacity
             self._params_vector[BATTERY_INTERNAL_RESISTANCE] = self.params.internal_resistance
+            self._params_vector[BATTERY_MIN_VOLTAGE] = self.params.min_voltage
             if self.params.ocv_soc is None:
                 # Constant open-circuit voltage
                 self._ocv_soc = np.asarray([0., 1.])
@@ -580,21 +581,11 @@ class Battery:
         float
             The motors' voltage limit at the end of the step.
         """
-        # The integrator can overshoot the capacity by its tolerance
-        charge = min(charge, self._charge_remaining())
-        self.charge_drawn += charge
-        self.current = charge / self.simulation.dt
-        open_circuit_voltage = self.open_circuit_voltage()
-        if self.cutoff or self.empty:
-            self.voltage = open_circuit_voltage
-            return 0.
-        self.voltage, _, ok = battery_operating_point(
-            motor_speeds, u, open_circuit_voltage,
-            self._params_vector[BATTERY_INTERNAL_RESISTANCE], motor_params)
-        self.overload = not ok
-        motor_voltage_limit = self.voltage
-        # The cutoff takes effect from the next step
-        self._check_cutoff()
+        (self.charge_drawn, self.current, self.voltage, self.cutoff, self.overload,
+         motor_voltage_limit) = battery_end_step(
+            charge, self.charge_drawn, self.cutoff, self.overload, motor_speeds, u,
+            motor_params, self._params_vector, self._ocv_soc, self._ocv_voltage,
+            self.simulation.dt)
         return motor_voltage_limit
 
 
