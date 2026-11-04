@@ -10,15 +10,18 @@ state as matrices, one column per control channel. Each stage's ``step`` passes
 the matrices and the vehicle's state to a compiled kernel in
 `multirotor.controller.kernels`, which does the arithmetic.
 
-Call chain of `Controller.step`, between the vehicle's steps::
+Call chain of `Controller.step`, between the vehicle's steps. The stages do not
+call each other: ``cascade_step`` calls the stage kernels in order::
 
-    Controller.step
-        AltController.step --------> kernels.altitude_step
-        AltRateController.step ----> kernels.climb_step
-        PosController.step --------> kernels.position_step
-        VelController.step --------> kernels.velocity_step
-        AttController.step --------> kernels.attitude_step
-        RateController.step -------> kernels.rate_step
+    Controller.step ---> kernels.cascade_step
+        --> kernels.altitude_step
+        --> kernels.climb_step
+        --> kernels.position_step
+        --> kernels.velocity_step
+        --> kernels.attitude_step
+        --> kernels.rate_step
+
+A stage's own ``step`` calls its kernel directly, for a stage used on its own.
 
 Altitude and position stages run every ``period_z`` and ``period_p`` seconds. The
 others run every ``period_a`` seconds.
@@ -34,7 +37,7 @@ from .kernels import (
     PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT, PID_MAX_ACCELERATION,
     PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION, PID_INTEGRAL,
     pid_stage, leash_distance, position_step, velocity_step, attitude_step, rate_step,
-    altitude_step, climb_step,
+    altitude_step, climb_step, cascade_step,
     sqrt_control # noqa: F401, kept importable from here
 )
 
@@ -586,12 +589,13 @@ class Controller:
     def reset(self):
         self.action = np.zeros(4, self.vehicle.dtype)
         self.reference = np.zeros_like(self.action)
-        self.thrust = None
-        self.torques = None
-        self._ref_vel = np.zeros(2, self.vehicle.dtype)
-        self._pid_vel = np.zeros_like(self._ref_vel)
-        self._scurve_vel = np.zeros_like(self._ref_vel)
-        self._pitch_roll = np.zeros(2, self.vehicle.dtype)
+        # Outputs of the stages that later stages, and the steps in between, reuse
+        self.thrust = np.zeros(1)
+        self.torques = np.zeros(3)
+        self._ref_vel = np.zeros(2)
+        self._pid_vel = np.zeros(2)
+        self._scurve_vel = np.zeros(2, self.vehicle.dtype)
+        self._pitch_roll = np.zeros(2)
         self.n = 0
         self.t = self.vehicle.t
         self.ctrl_p.reset()
@@ -655,41 +659,35 @@ class Controller:
         self, reference: np.ndarray, measurement=None, ref_is_error: bool=False,
         feed_forward_velocity: np.ndarray=None, persist: bool=True
     ):
+        vehicle = self.vehicle
         if ref_is_error:
-            error = reference
-            ref_xy = self.vehicle.position[:2] + error[:2]
-            ref_z = self.vehicle.position[2] + error[2]
-            ref_yaw = self.vehicle.orientation[2] + error[3]
+            error = _vector(reference)
+            target = np.empty(4)
+            target[:2] = vehicle.position[:2] + error[:2]
+            target[2] = vehicle.position[2] + error[2]
+            target[3] = vehicle.orientation[2] + error[3]
         else:
             self.reference = reference
-            ref_xy = reference[:2]
-            ref_z = reference[2]
-            ref_yaw = reference[3]
-
-        if self.n % self.steps_z == 0:
-            dt = self.steps_z * self.vehicle.simulation.dt
-            ref_vel_z = self.ctrl_z.step(ref_z, self.vehicle.position[2:], dt=dt, persist=persist)
-            self.thrust = self.ctrl_vz.step(ref_vel_z, self.vehicle.inertial_velocity[2:], dt=dt, persist=persist)
-
-        if self.n % self.steps_p == 0:
-            dt = self.steps_p * self.vehicle.simulation.dt
-            self._pid_vel = self._ref_vel = self.ctrl_p.step(ref_xy, self.vehicle.position[:2], dt=dt, persist=persist)
-            if feed_forward_velocity is not None:
-                self._ref_vel = (self.feedforward_weight * feed_forward_velocity[:2]) + (1 - self.feedforward_weight) * self._pid_vel
-            self._ref_vel = np.clip(self._ref_vel, -self.ctrl_p.max_velocity, self.ctrl_p.max_velocity)
-        
-        if self.n % self.steps_a == 0:
-            dt = self.steps_a * self.vehicle.simulation.dt
-            self._pitch_roll = self.ctrl_v.step(self._ref_vel, self.vehicle.velocity[:2], dt=dt, persist=persist)
-            ref_orientation = np.asarray([self._pitch_roll[1], self._pitch_roll[0], ref_yaw])
-            ref_rate = self.ctrl_a.step(
-                ref_orientation, self.vehicle.orientation, dt=dt, persist=persist)
-            self.torques = self.ctrl_r.step(ref_rate, self.vehicle.euler_rate, dt=dt, persist=persist)
-
-        action = np.asarray([*self.thrust, *self.torques], self.dtype)
+            target = _vector(reference)
+        use_feed_forward = feed_forward_velocity is not None
+        feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
+            else np.zeros(2)
+        action = np.empty(4)
+        cascade_step(
+            self._data.params, self._data.state, target, _state64(vehicle),
+            _vector(vehicle.acceleration),
+            np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
+            float(vehicle.params.mass), float(vehicle.weight),
+            float(vehicle.simulation.dt), self.n, self.steps_p, self.steps_a,
+            self.steps_z, feed_forward, use_feed_forward,
+            float(self.feedforward_weight), self.ctrl_p.leashing,
+            self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling,
+            persist, self._ref_vel, self._pid_vel, self._pitch_roll, self.thrust,
+            self.torques, action)
+        action = action.astype(self.dtype)
         if persist:
             self.n += 1
-            self.t = self.vehicle.t
+            self.t = vehicle.t
             self.action = action
         return action
 
