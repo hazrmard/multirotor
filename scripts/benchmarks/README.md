@@ -132,7 +132,7 @@ exempt from the memory check. The scope deltas are diagnostic and do not affect 
 exit status.
 
 `plot.py` writes `time_per_step.png`, `speedup.png` (two or more files),
-`breakdown.png`, `memory.png` and one `CASE.png` per sweep case (`log_scaling.png`).
+`breakdown.png`, `memory.png`, `fleet.png` (time per vehicle of `fleet_closed_loop`, if a file has it) and one `CASE.png` per sweep case (`log_scaling.png`).
 
 ## Cases
 
@@ -146,6 +146,7 @@ parameter (`log_scaling`).
 | `step_dynamics` | 8 rotors, excited and hover | 1000 | `Multirotor.step_dynamics` |
 | `controller_step` | 8 rotors; `scenario=hover` or `flight` | 5000 | `Controller.step` with a fixed vehicle state. `hover` has no horizontal error (plain PID branch). `flight` is 6 m and 4 m from the reference, moving and tilted, and runs the square-root controller and the leash |
 | `closed_loop` | 8 rotors, with and without `DataLog` | 2000 | `Controller.step`, `allocate_control`, `step_speeds` (and `DataLog.log`) |
+| `fleet_closed_loop` | 4 rotors; `k` = 1, 16, 64, 256 vehicles; no motors, or motors and battery; `fleet=True` or `False` | 200 | One step of all `k` vehicles in closed loop: a `Fleet` with a `FleetController`, or `k` separate vehicles with controllers (`fleet=False`). Time per step is for the whole fleet: divide by `k` to compare vehicles |
 | `run_sim` | 8 rotors | 1000 | `optimize.run_sim` through `DynamicsMultirotorEnv(allocate=True)`, which calls `step_dynamics` |
 | `log_scaling` | 8 rotors, `DataLog` | 1000, 5000, 20000 | memory pass only |
 | `cold_start` | none | none | fresh process: import, build vehicle, first and second `step_speeds`; build controller, first and second `Controller.step` |
@@ -276,7 +277,7 @@ tree. Each item in the tree records its `level` (`'coarse'` or `'fine'`).
 | level | scopes |
 |---|---|
 | `coarse` | `loop`, `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
-| `fine` | `integrator`, `model`, `forces_torques`, `propeller`, `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` |
+| `fine` | `integrator`, `model`, `forces_torques`, `propeller` |
 
 `scopes.view(tree, Level.COARSE)` returns the coarse tree. It removes fine scopes from
 paths and adds their time to the exclusive time of the nearest coarse ancestor:
@@ -316,7 +317,6 @@ misspelled attribute names.
 |---|---|---|
 | `loop` | `Runner.run` | the whole timed loop |
 | `controller` | `Controller.step` | |
-| `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` | `step` of each stage: position, velocity, attitude, rate, altitude, climb rate | its stage, on the steps where the stage runs |
 | `allocation` | `Multirotor.allocate_control` | |
 | `env.step` | `DynamicsMultirotorEnv.step` | |
 | `reward` | `DynamicsMultirotorEnv.reward` | |

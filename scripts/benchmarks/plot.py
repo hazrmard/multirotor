@@ -6,7 +6,7 @@
 Writes PNGs: ``time_per_step.png`` (median with min-max whiskers),
 ``speedup.png`` (first file / each later file), ``breakdown.png`` (share of step
 time by scope), ``memory.png`` (tracemalloc
-peak per case) and one ``<case>.png`` per sweep case, such as ``log_scaling.png``
+peak per case), ``fleet.png`` (time per vehicle of ``fleet_closed_loop``) and one ``<case>.png`` per sweep case, such as ``log_scaling.png``
 (memory growth against the swept parameter).
 """
 import argparse
@@ -232,6 +232,51 @@ def plot_sweeps(files, labels, colors, t, out):
         plt.close(fig)
 
 
+def plot_fleet(files, colors, t, out):
+    """
+    ``fleet.png``: time per vehicle per step of ``fleet_closed_loop`` against the
+    number of vehicles, for a `Fleet` and for separate vehicles. One panel without
+    motors, one with motors and a battery. Drawn from the last file that has the case.
+    """
+    runs = [f for f in files
+            if any(r['case'] == 'fleet_closed_loop' for r in f['results'])]
+    if not runs:
+        return
+    results = [r for r in runs[-1]['results']
+               if r['case'] == 'fleet_closed_loop' and 'stats' in r]
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.2), facecolor=t['surface'], sharey=True)
+    for ax, motor, title in zip(axes, (False, True), ('no motors', 'motors and battery')):
+        style(ax, t)
+        ax.grid(axis='y', color=t['grid'], linewidth=0.8)
+        for fleet, label, c in ((True, 'Fleet', colors[1 % len(colors)]),
+                                (False, 'separate vehicles', colors[0])):
+            pts = sorted((r['params']['k'], r['stats']['median'] / r['params']['k'])
+                         for r in results
+                         if r['params']['motor'] == motor and r['params']['fleet'] == fleet)
+            if pts:
+                x, y = zip(*pts)
+                ax.plot(x, y, color=c, lw=2, marker='o', ms=8,
+                        markeredgecolor=t['surface'], markeredgewidth=2, label=label)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ks = sorted({r['params']['k'] for r in results})
+        ax.set_xticks(ks, [str(k) for k in ks])
+        ax.set_yticks([3, 5, 10, 20, 40], ['3', '5', '10', '20', '40'])
+        ax.minorticks_off()
+        ax.tick_params(colors=t['ink2'], length=0)
+        ax.set_xlabel('vehicles')
+        ax.set_title(title, loc='left')
+    axes[0].set_ylabel('time per vehicle per step (us)')
+    axes[0].yaxis.label.set_color(t['ink2'])
+    leg = axes[0].legend(frameon=False, loc='upper right')
+    for txt in leg.get_texts():
+        txt.set_color(t['ink2'])
+    fig.suptitle('Closed-loop cost per vehicle', x=0.01, ha='left', color=t['ink'])
+    fig.tight_layout()
+    fig.savefig(out / 'fleet.png', dpi=150, facecolor=t['surface'])
+    plt.close(fig)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -253,6 +298,7 @@ def main(argv=None):
     plot_breakdown(files, labels, t, out, args.theme)
     plot_memory(files, labels, colors, t, out)
     plot_sweeps(files, labels, colors, t, out)
+    plot_fleet(files, colors, t, out)
     print('wrote', *sorted(p.name for p in out.glob('*.png')), 'to', out)
 
 

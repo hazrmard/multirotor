@@ -3,11 +3,15 @@
 
 skinparam defaultFontSize 20
 
+class PIDStage {
+    {field} k_p, k_i, k_d, max_err_i
+    {field} state
+}
 class PIDController {
-    {field} 
     step()
 }
 class Controller {
+    vehicle
     step()
 }
 class PosController
@@ -17,12 +21,13 @@ class RateController
 class AltController
 class AltRateController
 
-PIDController <|.. AltController : extends
-PIDController <|.. AltRateController : extends
-PIDController <|.. AttController : extends
-PIDController <|.. RateController : extends
-PIDController <|.. PosController : extends
-PIDController <|.. VelController : extends
+PIDStage <|-- PIDController : extends
+PIDStage <|-- AltController : extends
+PIDStage <|-- AltRateController : extends
+PIDStage <|-- AttController : extends
+PIDStage <|-- RateController : extends
+PIDStage <|-- PosController : extends
+PIDStage <|-- VelController : extends
 
 Controller *-- AltController
 AltController *-- AltRateController

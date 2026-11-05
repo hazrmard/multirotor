@@ -9,3 +9,4 @@ from .pid import (
     Controller
 )
 from .scurves import SCurveController
+from .fleet import FleetController

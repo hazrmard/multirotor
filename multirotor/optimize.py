@@ -4,6 +4,7 @@ from typing import Callable, Dict, Tuple
 
 import numpy as np
 import optuna
+from .fleet import Fleet
 from .simulation import Multirotor
 from .trajectories import Trajectory
 from .vehicle import VehicleParams, SimulationParams
@@ -13,7 +14,7 @@ from .controller import (
     AltController, AltRateController,
     PosController, AttController,
     VelController, RateController,
-    Controller,
+    Controller, FleetController,
     SCurveController
 )
 
@@ -128,7 +129,7 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
     assert m.simulation.dt <= 0.05, 'Simulation time step too large for the default gains.'
     pos = PosController( # PD
         0.8, 0., 3.75,
-        max_err_i=args.max_velocity, vehicle=m,
+        max_err_i=args.max_velocity,
         max_velocity=args.max_velocity,
         max_acceleration=args.max_acceleration,
         square_root_scaling=args.sqrt_scaling,
@@ -139,35 +140,54 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
     vel = VelController( # P
         0.5, 0., 0,
         max_err_i=args.max_acceleration,
-        vehicle=m,
         max_tilt=args.max_tilt)
     att = AttController( # P
         [8., 8., 0.], 0, 0., # yaw param is set to 0, in case use_yaw=False
-        max_err_i=args.max_err_i_attitude, vehicle=m)
+        max_err_i=args.max_err_i_attitude)
     # The rate controller outputs angular acceleration, and k_d acts on the change
     # of the rate error, which that acceleration causes. A k_d of 1 or more makes
     # the torque flip sign at every step, so there is no D term.
     rat = RateController( # P
         [32, 32, 0], 0, 0, # yaw param is set to 0, in case use_yaw=False
         max_err_i=args.max_err_i_rate,
-        vehicle=m,
         max_acceleration=args.max_angular_acceleration)
 
     alt = AltController(
         1, 0, 0,
-        max_err_i=args.max_velocity, vehicle=m,
+        max_err_i=args.max_velocity,
         max_velocity=args.max_velocity)
     alt_rate = AltRateController(
         10, 0, 0,
-        max_err_i=args.max_acceleration, vehicle=m)
+        max_err_i=args.max_acceleration)
 
     ctrl = Controller(
-        pos, vel, att, rat, alt, alt_rate,
+        pos, vel, att, rat, alt, alt_rate, vehicle=m,
         period_p=0.1, period_a=0.01, period_z=0.1,
     )
     if scurve:
         return SCurveController(ctrl)
     return ctrl
+
+
+
+def get_fleet_controller(fleet: Fleet, args: Namespace=DEFAULTS) -> FleetController:
+    """
+    Create a `FleetController` whose vehicles all have the default gains of
+    `get_controller`. Set the gains of a vehicle with `FleetController.set_params`.
+
+    Parameters
+    ----------
+    fleet : Fleet
+        The vehicles to control.
+    args : Namespace, optional
+        The default settings, by default DEFAULTS
+
+    Returns
+    -------
+    FleetController
+    """
+    template = get_controller(Multirotor(fleet.params[0], fleet.simulation), args=args)
+    return FleetController(fleet, template)
 
 
 
@@ -390,9 +410,8 @@ def make_trial_controller(
     """
     if ctrl is None:
         return get_controller(env.vehicle, args.scurve, args)
-    trial_ctrl = copy.deepcopy(ctrl)
-    trial_ctrl.vehicle = env.vehicle
-    return trial_ctrl
+    # The copy controls the vehicle of `env`, not a copy of the caller's vehicle
+    return copy.deepcopy(ctrl, {id(ctrl.vehicle): env.vehicle})
 
 
 

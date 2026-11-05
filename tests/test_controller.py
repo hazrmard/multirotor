@@ -54,31 +54,34 @@ def make_stages(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwargs)
     kwargs
         ``att_sqrt`` sets the attitude controller's ``square_root_scaling``.
     """
+    # The oracle's stages hold their vehicle. The stages of the implementation do not.
+    own = {} if module is pid else dict(vehicle=vehicle)
     pos = module.PosController(
-        0.8, 0., 3.75, max_err_i=args.max_velocity, vehicle=vehicle,
+        0.8, 0., 3.75, max_err_i=args.max_velocity, **own,
         max_velocity=args.max_velocity, max_acceleration=args.max_acceleration,
         square_root_scaling=args.sqrt_scaling, leashing=args.leashing)
     vel = module.VelController(
-        1, 0., 0, max_err_i=args.max_acceleration, vehicle=vehicle,
+        1, 0., 0, max_err_i=args.max_acceleration, **own,
         max_tilt=args.max_tilt)
     att = module.AttController(
-        [1., 1., 0.], 0, 0., max_err_i=args.max_err_i_attitude, vehicle=vehicle,
+        [1., 1., 0.], 0, 0., max_err_i=args.max_err_i_attitude, **own,
         square_root_scaling=kwargs.get('att_sqrt', False))
     rat = module.RateController(
-        [4, 4, 0], 0, [40, 40, 0], max_err_i=args.max_err_i_rate, vehicle=vehicle)
+        [4, 4, 0], 0, [40, 40, 0], max_err_i=args.max_err_i_rate, **own)
     alt = module.AltController(
-        1, 0, 0, max_err_i=args.max_velocity, vehicle=vehicle,
+        1, 0, 0, max_err_i=args.max_velocity, **own,
         max_velocity=args.max_velocity)
     alt_rate = module.AltRateController(
-        10, 0, 0, max_err_i=args.max_acceleration, vehicle=vehicle)
+        10, 0, 0, max_err_i=args.max_acceleration, **own)
     return pos, vel, att, rat, alt, alt_rate
 
 
 
 def make_controller(module, vehicle: Multirotor, args: Namespace=DEFAULTS, **kwargs):
     "A `Controller` of the stages of `make_stages`, with the same arguments."
+    own = dict(vehicle=vehicle) if module is pid else {}
     return module.Controller(
-        *make_stages(module, vehicle, args, **kwargs),
+        *make_stages(module, vehicle, args, **kwargs), **own,
         period_p=0.1, period_a=0.01, period_z=0.1)
 
 
@@ -337,7 +340,7 @@ def test_controller_keeps_the_parameters_of_the_stages_it_takes_over():
     vehicle = make_vehicle()
     stages = make_stages(pid, vehicle)
     stages[3].set_params(k_p=9., max_acceleration=np.asarray([1., 2., 3.]))
-    controller = pid.Controller(*stages)
+    controller = pid.Controller(*stages, vehicle=vehicle)
     assert all(stage._data is controller._data for stage in stages)
     np.testing.assert_array_equal(controller.ctrl_r.k_p, 9.)
     np.testing.assert_array_equal(controller.ctrl_r.max_acceleration, [1., 2., 3.])
@@ -347,9 +350,9 @@ def test_controller_keeps_the_parameters_of_the_stages_it_takes_over():
 def test_a_stage_belongs_to_one_controller():
     vehicle = make_vehicle()
     stages = make_stages(pid, vehicle)
-    first = pid.Controller(*stages)
+    first = pid.Controller(*stages, vehicle=vehicle)
     with pytest.raises(ValueError, match='already belongs'):
-        pid.Controller(*stages)
+        pid.Controller(*stages, vehicle=vehicle)
     assert all(stage._data is first._data for stage in stages), 'the first keeps its stages'
 
 
@@ -359,14 +362,13 @@ def test_a_controller_rejects_one_stage_in_two_roles():
     stages = list(make_stages(pid, vehicle))
     stages[1] = stages[0]
     with pytest.raises(ValueError, match='different object'):
-        pid.Controller(*stages)
+        pid.Controller(*stages, vehicle=vehicle)
     assert not any(stage._adopted for stage in stages), 'no stage moved'
 
 
 
 def test_standalone_stage_owns_its_data():
-    vehicle = make_vehicle()
-    stage = pid.AttController(1., 0., 0., 0.1, vehicle=vehicle)
+    stage = pid.AttController(1., 0., 0., 0.1)
     assert stage._data.params.shape[1] == stage.n == 3
     assert stage.k_p.shape == (3,)
 
