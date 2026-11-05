@@ -27,28 +27,30 @@ The arrays that the kernels take are the matrices of
 Every stage is the same PID law, `pid_channel`, plus a stage-specific step before
 or after it::
 
-    Stage     Kernel          Before the PID law       After the PID law
-    --------  --------------  -----------------------  ------------------------
-    position  `position_step` leash or square root     rotate to body frame, limit
-    velocity  `velocity_step` none                     clip tilt, flip roll sign
-    attitude  `attitude_step` optional square root     none
-    rate      `rate_step`     Euler rates to body rates  clip, multiply by inertia
-    altitude  `altitude_step` none                     clip climb rate
-    climb     `climb_step`    none                     tilt-compensated thrust
+    Stage     Kernel                Before the PID law         After the PID law
+    --------  --------------------  -------------------------  ---------------------------
+    position  `position_pid_step`   leash or square root       rotate to body frame, limit
+    velocity  `velocity_pid_step`   none                       clip tilt, flip roll sign
+    attitude  `attitude_pid_step`   optional square root       none
+    rate      `rate_pid_step`       Euler rates to body rates  clip, multiply by inertia
+    altitude  `altitude_pid_step`   none                       clip climb rate
+    climb     `climb_pid_step`      none                       tilt-compensated thrust
 
 Call chain::
 
-    position_step ----> leash_distance
-                  +---> sqrt_control or pid_channel
-    velocity_step ----> pid_channel
-    attitude_step ----> sqrt_control or pid_channel
-    rate_step --------> pid_channel
-    altitude_step ----> pid_channel
-    climb_step -------> pid_channel
-    pid_stage --------> pid_channel   (a bare `PIDController`)
-    cascade_step -----> altitude_step, climb_step, position_step, velocity_step,
-                        attitude_step, rate_step   (a whole `Controller`)
-    fleet_cascade_step -> cascade_step   (the `Controller` of each vehicle of a fleet)
+    position_pid_step -----> leash_distance
+                       +---> sqrt_control or pid_channel
+    velocity_pid_step -----> pid_channel
+    attitude_pid_step -----> sqrt_control or pid_channel
+    rate_pid_step ---------> pid_channel
+    altitude_pid_step -----> pid_channel
+    climb_pid_step --------> pid_channel
+    pid_stage -------------> pid_channel   (a bare `PIDController`)
+    cascaded_pid_step -----> altitude_pid_step, climb_pid_step, position_pid_step,
+                             velocity_pid_step, attitude_pid_step, rate_pid_step
+                             (a whole `Controller`)
+    fleet_cascaded_pid_step -> cascaded_pid_step
+                             (the `Controller` of each vehicle of a fleet)
 
 Stages run in order, because the output of one is the reference of the next.
 
@@ -240,7 +242,7 @@ def leash_distance(
 
 
 @njit
-def position_step(
+def position_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, body_state: np.ndarray, acceleration: np.ndarray,
     sim_dt: float, dt: float, leashing: bool, square_root_scaling: bool,
@@ -313,7 +315,7 @@ def position_step(
 
 
 @njit
-def velocity_step(
+def velocity_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, persist: bool, out: np.ndarray
 ) -> None:
@@ -335,7 +337,7 @@ def velocity_step(
 
 
 @njit
-def attitude_step(
+def attitude_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, square_root_scaling: bool, persist: bool,
     out: np.ndarray
@@ -367,7 +369,7 @@ def attitude_step(
 
 
 @njit
-def rate_step(
+def rate_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, orientation: np.ndarray, inertia: np.ndarray,
     dt: float, persist: bool, out: np.ndarray
@@ -400,7 +402,7 @@ def rate_step(
 
 
 @njit
-def altitude_step(
+def altitude_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, dt: float, persist: bool, out: np.ndarray
 ) -> None:
@@ -415,7 +417,7 @@ def altitude_step(
 
 
 @njit
-def climb_step(
+def climb_pid_step(
     pid_params: np.ndarray, x: np.ndarray, start: int, reference: np.ndarray,
     measurement: np.ndarray, orientation: np.ndarray, mass: float, weight: float,
     dt: float, persist: bool, out: np.ndarray
@@ -434,7 +436,7 @@ def climb_step(
 
 
 @njit
-def cascade_step(
+def cascaded_pid_step(
     pid_params: np.ndarray, x: np.ndarray, reference: np.ndarray,
     body_state: np.ndarray, acceleration: np.ndarray, inertia: np.ndarray,
     mass: float, weight: float, sim_dt: float, n: int, steps_p: int,
@@ -503,21 +505,23 @@ def cascade_step(
     out2 = np.empty(2)
     out3 = np.empty(3)
 
+    # Altitude control stage (with climb rate): target z -> thrust
     if n % steps_z == 0:
         dt = steps_z * sim_dt
-        altitude_step(
+        altitude_pid_step(
             pid_params, x, CASCADE_ALTITUDE, reference[2:3], position[2:3], dt,
             persist, out1)
         ref_vel_z = out1.copy()
         dcm = direction_cosine_matrix(orientation[0], orientation[1], orientation[2])
         inertial_z = body_to_inertial(velocity, dcm)[2:]
-        climb_step(
+        climb_pid_step(
             pid_params, x, CASCADE_CLIMB, ref_vel_z, inertial_z, orientation, mass,
             weight, dt, persist, thrust)
 
+    # Position control stage: target x, y -> velocity reference
     if n % steps_p == 0:
         dt = steps_p * sim_dt
-        position_step(
+        position_pid_step(
             pid_params, x, CASCADE_POSITION, reference[:2], position[:2], body_state,
             acceleration, sim_dt, dt, leashing, square_root_position, persist, pid_vel)
         for i in range(2):
@@ -528,20 +532,21 @@ def cascade_step(
             limit = pid_params[PID_LIMIT, CASCADE_POSITION]
             ref_vel[i] = min(max(ref_vel[i], -limit), limit)
 
+    # Attitude control stage: velocity, yaw targets -> orientation -> torques
     if n % steps_a == 0:
         dt = steps_a * sim_dt
-        velocity_step(
+        velocity_pid_step(
             pid_params, x, CASCADE_VELOCITY, ref_vel, velocity[:2], dt, persist,
             pitch_roll)
         ref_orientation = np.empty(3)
         ref_orientation[0] = pitch_roll[1]
         ref_orientation[1] = pitch_roll[0]
         ref_orientation[2] = reference[3]
-        attitude_step(
+        attitude_pid_step(
             pid_params, x, CASCADE_ATTITUDE, ref_orientation, orientation, dt,
             square_root_attitude, persist, out3)
         euler_rate = angular_to_euler_rate(body_state[9:12], orientation)
-        rate_step(
+        rate_pid_step(
             pid_params, x, CASCADE_RATE, out3, euler_rate, orientation, inertia, dt,
             persist, torques)
 
@@ -552,7 +557,7 @@ def cascade_step(
 
 
 @njit
-def fleet_cascade_step(
+def fleet_cascaded_pid_step(
     pid_params: np.ndarray, x: np.ndarray, reference: np.ndarray,
     body_state: np.ndarray, acceleration: np.ndarray, inertia: np.ndarray,
     mass: np.ndarray, weight: np.ndarray, sim_dt: float, n: int, steps_p: int,
@@ -563,10 +568,10 @@ def fleet_cascade_step(
     torques: np.ndarray, action: np.ndarray
 ) -> None:
     """
-    One step of the controllers of a fleet: `cascade_step` for each vehicle.
+    One step of the controllers of a fleet: `cascaded_pid_step` for each vehicle.
 
     Every array has the vehicle as its first axis, ``K`` vehicles in all. Apart
-    from that, the arguments are those of `cascade_step`. The step counter, the
+    from that, the arguments are those of `cascaded_pid_step`. The step counter, the
     periods and the options are the same for all vehicles.
 
     Parameters
@@ -591,7 +596,7 @@ def fleet_cascade_step(
         Output, shape (K, 4).
     """
     for k in range(pid_params.shape[0]):
-        cascade_step(
+        cascaded_pid_step(
             pid_params[k], x[k], reference[k], body_state[k], acceleration[k],
             inertia[k], mass[k], weight[k], sim_dt, n, steps_p, steps_a, steps_z,
             feed_forward[k], use_feed_forward, feedforward_weight[k], leashing,

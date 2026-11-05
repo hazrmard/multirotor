@@ -2,7 +2,7 @@
 The controllers of a `multirotor.fleet.Fleet`. `FleetController` holds the
 parameters and the state of the cascaded controller of each of ``K`` vehicles as
 arrays with the vehicle as the first axis, and steps all of them with one compiled
-loop over the vehicles (`multirotor.controller.kernels.fleet_cascade_step`).
+loop over the vehicles (`multirotor.controller.kernels.fleet_cascaded_pid_step`).
 
 It is the `Controller` of every vehicle at once. The controllers of the vehicles
 have the same structure: the same periods and options. Their gains and limits can
@@ -21,7 +21,7 @@ import numpy as np
 
 from ..fleet import Fleet
 from .kernels import (
-    N_CASCADE_CHANNELS, N_PID_PARAMS, N_PID_STATES, fleet_cascade_step
+    N_CASCADE_CHANNELS, N_PID_PARAMS, N_PID_STATES, fleet_cascaded_pid_step
 )
 from .pid import Controller
 
@@ -220,7 +220,7 @@ class FleetController:
             np.asarray(feed_forward_velocity, dtype=float)[..., :2], (k_vehicles, 2))) \
             if use_feed_forward else np.zeros((k_vehicles, 2))
         action = np.empty((k_vehicles, 4))
-        fleet_cascade_step(
+        fleet_cascaded_pid_step(
             self.params, self.state, target, np.ascontiguousarray(fleet.state),
             np.ascontiguousarray(fleet.acceleration), fleet._inertia, fleet._mass,
             fleet.weight, float(fleet.simulation.dt), self.n, self.steps_p,

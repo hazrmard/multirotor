@@ -402,7 +402,7 @@ class SmoothEnv(DynamicsMultirotorEnv):
 
 ## 5. Fleets
 
-`multirotor.fleet.Fleet` simulates many vehicles together. It holds the parameters and the state of all vehicles in arrays, and advances them with compiled loops, so one call steps the whole fleet. Its methods are those of `Multirotor`, but every input and output has one row per vehicle. A `Fleet` is made from a list of `VehicleParams`. The vehicles can differ in mass, inertia and propeller parameters, but must have the same number of propellers, and motors and batteries on all or on none.
+`multirotor.fleet.Fleet` simulates many vehicles together. It holds the parameters and the state of all vehicles in arrays, and steps through all vehicles together. It exposes the same core API as `Multirotor`: `step_speeds()`, `step_dynamics()`, `allocate_control()`. Every input and output has one row per vehicle. A `Fleet` is made from a list of `VehicleParams`. Vehicles must have a homogeneous configuration (the same propeller, motor and battery setup), but parameter values can vary.
 
 ```{code-cell} ipython3
 from multirotor.fleet import Fleet
@@ -417,7 +417,7 @@ fleet = Fleet(fleet_params, sp)
 print(len(fleet), 'vehicles. State shape:', fleet.state.shape)
 ```
 
-`FleetController` is the controller of every vehicle at once. `get_fleet_controller` gives each vehicle the default gains. Each vehicle gets its own target, one row per vehicle: $x, y, z, \psi$. Here the vehicles fly to points on a circle:
+`FleetController` is a batch of controllers, one for each vehicle in a fleet. `get_fleet_controller` gives each vehicle the default gains. Each vehicle gets its own target, one row per vehicle: $x, y, z, \psi$. Here the vehicles fly to points on a circle:
 
 ```{code-cell} ipython3
 fleet_ctrl = get_fleet_controller(fleet)
@@ -435,11 +435,11 @@ ax.plot(fleet.position[:, 0], fleet.position[:, 1], 'x', label='vehicles')
 ax.set_aspect('equal'); ax.legend();
 ```
 
-The gains can differ from vehicle to vehicle. `set_params` takes the same nested dictionary as `Controller.set_params`:
+The gains (i.e. the controllers' PID parameters) can differ from vehicle to vehicle. `set_params` takes the index of the vehicle (and so of its controller) whose gains to change, then the same nested dictionary as `Controller.set_params`. Here it sets the rate-stage gains of vehicle 3:
 
 ```{code-cell} ipython3
 fleet_ctrl.set_params(3, ctrl_r=dict(k_p=np.asarray([20., 20., 0.])))
 print(fleet_ctrl.get_params(3)['ctrl_r']['k_p'], fleet_ctrl.get_params(2)['ctrl_r']['k_p'])
 ```
 
-The vehicles share one solver call, so their results differ from those of separate `Multirotor` vehicles by the solver's tolerance. All vehicles of a `FleetController` share the periods and options (`leashing`, `square_root_scaling`) of their controllers. A fleet needs quadratic thrust; the blade-element model is not supported. Fleets with motors and batteries work the same way.
+Note: Fleet simulation can differ from individual vehicle simulation by the solver's tolerance. All controllers in the fleet must have identical structure and properties (for example `square_root_scaling` and `leashing`), but can have their own gains (i.e. PID parameters). A fleet needs quadratic thrust; the blade-element model is not supported. Fleets with motors and batteries work the same way.

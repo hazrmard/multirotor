@@ -11,15 +11,15 @@ the matrices and the vehicle's state to a compiled kernel in
 `multirotor.controller.kernels`, which does the arithmetic.
 
 Call chain of `Controller.step`, between the vehicle's steps. The stages do not
-call each other: ``cascade_step`` calls the stage kernels in order::
+call each other: ``cascaded_pid_step`` calls the stage kernels in order::
 
-    Controller.step ---> kernels.cascade_step
-        --> kernels.altitude_step
-        --> kernels.climb_step
-        --> kernels.position_step
-        --> kernels.velocity_step
-        --> kernels.attitude_step
-        --> kernels.rate_step
+    Controller.step ---> kernels.cascaded_pid_step
+        --> kernels.altitude_pid_step
+        --> kernels.climb_pid_step
+        --> kernels.position_pid_step
+        --> kernels.velocity_pid_step
+        --> kernels.attitude_pid_step
+        --> kernels.rate_pid_step
 
 A stage's own ``step`` calls its kernel directly, for a stage used on its own.
 
@@ -36,8 +36,8 @@ from .data import ControllerData
 from .kernels import (
     PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT, PID_MAX_ACCELERATION,
     PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION, PID_INTEGRAL,
-    pid_stage, leash_distance, position_step, velocity_step, attitude_step, rate_step,
-    altitude_step, climb_step, cascade_step,
+    pid_stage, leash_distance, position_pid_step, velocity_pid_step, attitude_pid_step, rate_pid_step,
+    altitude_pid_step, climb_pid_step, cascaded_pid_step,
     sqrt_control # noqa: F401, kept importable from here
 )
 
@@ -277,7 +277,7 @@ class PosController(PIDController):
 
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(2)
-        position_step(
+        position_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _state64(self.vehicle),
             _vector(self.vehicle.acceleration), self.vehicle.simulation.dt,
@@ -323,7 +323,7 @@ class VelController(PIDController):
         # ctrl[0] -> x dir -> pitch -> forward
         # ctrl[1] -> y dir -> roll -> lateral
         out = np.empty(2)
-        velocity_step(
+        velocity_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt), persist, out)
         return out # desired pitch, roll
@@ -369,7 +369,7 @@ class AttController(PIDController):
 
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(3)
-        attitude_step(
+        attitude_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt),
             self.square_root_scaling, persist, out)
@@ -419,7 +419,7 @@ class RateController(PIDController):
 
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(3)
-        rate_step(
+        rate_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
             np.asarray(self.vehicle.params.inertia_matrix, dtype=np.float64),
@@ -461,7 +461,7 @@ class AltController(PIDController):
         self, reference: np.ndarray, measurement: np.ndarray, dt: float = 1, persist: bool=True
     ) -> np.ndarray:
         out = np.empty(1)
-        altitude_step(
+        altitude_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), float(dt), persist, out)
         return out
@@ -487,7 +487,7 @@ class AltRateController(PIDController):
 
     def step(self, reference, measurement, dt, persist: bool=True):
         out = np.empty(1)
-        climb_step(
+        climb_pid_step(
             self._data.params, self._data.state, self._start,
             _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
             float(self.vehicle.params.mass), float(self.vehicle.weight), float(dt),
@@ -673,7 +673,7 @@ class Controller:
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
         action = np.empty(4)
-        cascade_step(
+        cascaded_pid_step(
             self._data.params, self._data.state, target, _state64(vehicle),
             _vector(vehicle.acceleration),
             np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
