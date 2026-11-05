@@ -83,7 +83,7 @@ class FleetController:
         # A pristine copy. The parameter getter and setter work on a fresh copy of
         # it for each call, so that they accept and return what `Controller` does,
         # and a setting that is not in the arrays does not carry over to other vehicles.
-        self._template: Controller = deepcopy(first)
+        self._template: Controller = self._copy(first)
 
         self.params: np.ndarray = np.stack(
             [c._data.params for c in controllers]).astype(float)
@@ -107,9 +107,15 @@ class FleetController:
         )
 
 
+    @staticmethod
+    def _copy(controller: Controller) -> Controller:
+        "A copy of a controller that shares its vehicle, which is not part of its gains."
+        return deepcopy(controller, {id(controller.vehicle): controller.vehicle})
+
+
     def _controller_of(self, index: int) -> Controller:
         "A new `Controller` with the parameters of one vehicle's controller."
-        controller = deepcopy(self._template)
+        controller = self._copy(self._template)
         controller._data.params[:] = self.params[index]
         controller.feedforward_weight = self.feedforward_weight[index]
         return controller
@@ -120,14 +126,28 @@ class FleetController:
         k_vehicles = len(self.fleet)
         self.state[:] = 0.
         self.action = np.zeros((k_vehicles, 4), self.fleet.dtype)
-        self.reference = np.zeros((k_vehicles, 4))
-        self.thrust = np.zeros((k_vehicles, 1))
-        self.torques = np.zeros((k_vehicles, 3))
+        self.reference = np.zeros((k_vehicles, 4), self.fleet.dtype)
+        # Scratch for the kernel, in float64 like the integrator's state. The
+        # public `thrust` and `torques` are in the fleet's dtype.
+        self._thrust = np.zeros((k_vehicles, 1))
+        self._torques = np.zeros((k_vehicles, 3))
         self._ref_vel = np.zeros((k_vehicles, 2))
         self._pid_vel = np.zeros((k_vehicles, 2))
         self._pitch_roll = np.zeros((k_vehicles, 2))
         self.n = 0
         self.t = self.fleet.t
+
+
+    @property
+    def thrust(self) -> np.ndarray:
+        "The thrust of each vehicle's climb stage at the last step, shape (K, 1)."
+        return self._thrust.astype(self.fleet.dtype)
+
+
+    @property
+    def torques(self) -> np.ndarray:
+        "The torques of each vehicle's rate stage at the last step, shape (K, 3)."
+        return self._torques.astype(self.fleet.dtype)
 
 
     def set_params(self, index: int, **params) -> None:
@@ -177,7 +197,7 @@ class FleetController:
         Dict[str, Dict[str, np.ndarray]]
             Copies of the parameters.
         """
-        return deepcopy(self._controller_of(index).get_params())
+        return self._controller_of(index).get_params()
 
 
     def step(
@@ -217,8 +237,8 @@ class FleetController:
             target[:, 2] = fleet.position[:, 2] + reference[:, 2]
             target[:, 3] = fleet.orientation[:, 2] + reference[:, 3]
         else:
-            target = np.array(reference)
-            self.reference = target.copy()
+            target = np.ascontiguousarray(reference)
+            self.reference = target.astype(fleet.dtype)
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = np.ascontiguousarray(np.broadcast_to(
             np.asarray(feed_forward_velocity, dtype=float)[..., :2], (k_vehicles, 2))) \
@@ -231,7 +251,7 @@ class FleetController:
             self.steps_a, self.steps_z, feed_forward, use_feed_forward,
             self.feedforward_weight, self.leashing, self.square_root_position,
             self.square_root_attitude, persist, self._ref_vel, self._pid_vel,
-            self._pitch_roll, self.thrust, self.torques, action)
+            self._pitch_roll, self._thrust, self._torques, action)
         action = action.astype(fleet.dtype)
         if persist:
             self.n += 1

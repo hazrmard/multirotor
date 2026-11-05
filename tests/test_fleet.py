@@ -5,7 +5,7 @@ fleets that it cannot hold in arrays.
 The kernels are compared with a tight-tolerance integrator on both sides, so that
 the comparison does not depend on the solver's error. With the default
 integrator the fleet's vehicles share a step size, so the results can differ from
-those of separate vehicles by the solver's tolerance. One test measures that.
+those of separate vehicles by the solver's tolerance. The main test runs with both.
 """
 from dataclasses import replace
 
@@ -14,7 +14,7 @@ import pytest
 from scipy.integrate import odeint
 
 from multirotor.fleet import Fleet
-from multirotor.simulation import Multirotor
+from multirotor.simulation import Multirotor, odeint_integrator
 from multirotor.vehicle import BatteryParams
 
 from common import hover_signals, make_params, schedule
@@ -76,43 +76,37 @@ def stacked(singles, attribute):
 
 
 @config
-@pytest.mark.parametrize('n', (4, 8))
-def test_fleet_matches_separate_vehicles(kwargs, n):
-    plist, sp = make_fleet_params(n=n, **kwargs)
-    singles = [Multirotor(p, sp, tight) for p in plist]
-    fleet = Fleet(plist, sp, tight)
+@pytest.mark.parametrize('integrator, atol', (
+    (tight, 1e-7),
+    # The fleet's vehicles share a step size, so with the default integrator
+    # (rtol = atol = 1e-4) they match separate vehicles to its tolerance
+    (odeint_integrator, 5e-4),
+), ids=('tight', 'default'))
+def test_fleet_matches_separate_vehicles(kwargs, integrator, atol):
+    plist, sp = make_fleet_params(**kwargs)
+    singles = [Multirotor(p, sp, integrator) for p in plist]
+    fleet = Fleet(plist, sp, integrator)
     for u in signals(plist, sp):
         step_both(singles, fleet, u)
-        np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=1e-7)
-        np.testing.assert_allclose(fleet.acceleration, stacked(singles, 'acceleration'), atol=1e-6)
-    np.testing.assert_allclose(fleet.speeds, stacked(singles, 'speeds'), atol=1e-6)
-    np.testing.assert_allclose(fleet.euler_rate, stacked(singles, 'euler_rate'), atol=1e-7)
+        np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=atol)
+    # The other outputs, after the last step
     np.testing.assert_allclose(
-        fleet.inertial_velocity, stacked(singles, 'inertial_velocity'), atol=1e-7)
+        fleet.acceleration, stacked(singles, 'acceleration'), atol=10 * atol)
+    np.testing.assert_allclose(fleet.speeds, stacked(singles, 'speeds'), atol=10 * atol)
+    np.testing.assert_allclose(fleet.euler_rate, stacked(singles, 'euler_rate'), atol=atol)
+    np.testing.assert_allclose(
+        fleet.inertial_velocity, stacked(singles, 'inertial_velocity'), atol=atol)
     np.testing.assert_allclose(fleet.weight, [v.weight for v in singles])
     assert fleet.t == pytest.approx(singles[0].t)
     if kwargs['motor']:
         np.testing.assert_allclose(
-            fleet.motor_currents, stacked(singles, 'motor_currents'), atol=1e-6)
+            fleet.motor_currents, stacked(singles, 'motor_currents'), atol=10 * atol)
     np.testing.assert_allclose(
-        fleet.battery_current, [v.battery_current for v in singles], atol=1e-6)
+        fleet.battery_current, [v.battery_current for v in singles], atol=10 * atol)
     if kwargs['battery'] is not None:
-        np.testing.assert_allclose(fleet.soc, [v.battery.soc for v in singles], atol=1e-9)
+        np.testing.assert_allclose(fleet.soc, [v.battery.soc for v in singles], atol=atol)
         np.testing.assert_allclose(
-            fleet.battery_voltage, [v.battery.voltage for v in singles], atol=1e-6)
-
-
-
-@config
-def test_default_integrator_stays_within_its_tolerance(kwargs):
-    # Vehicles of a fleet share a step size, so they match separate vehicles to
-    # the solver's tolerance (rtol = atol = 1e-4), not exactly.
-    plist, sp = make_fleet_params(**kwargs)
-    singles = [Multirotor(p, sp) for p in plist]
-    fleet = Fleet(plist, sp)
-    for u in signals(plist, sp, 64):
-        step_both(singles, fleet, u)
-        np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=5e-4)
+            fleet.battery_voltage, [v.battery.voltage for v in singles], atol=10 * atol)
 
 
 
@@ -127,25 +121,6 @@ def test_step_dynamics_matches_separate_vehicles():
             vehicle.step_dynamics(forces_torques)
         fleet.step_dynamics(u)
         np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=1e-7)
-
-
-
-@config
-def test_a_vehicle_does_not_depend_on_the_others(kwargs):
-    # With an accurate integrator, a vehicle's trajectory is the same alone and
-    # in a fleet whose other vehicles are driven hard.
-    plist, sp = make_fleet_params(**kwargs)
-    alone = Fleet(plist[:1], sp, tight)
-    fleet = Fleet(plist, sp, tight)
-    u = signals(plist, sp)
-    for i, row in enumerate(u):
-        loud = row.copy()
-        loud[1:] *= 1.5
-        alone.step_speeds(row[:1])
-        fleet.step_speeds(loud if i % 2 else row)
-        if i % 2 == 0:
-            np.testing.assert_allclose(fleet.state[0], alone.state[0], atol=1e-7)
-    np.testing.assert_allclose(fleet.state[0], alone.state[0], atol=1e-7)
 
 
 

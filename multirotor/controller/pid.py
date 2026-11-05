@@ -5,10 +5,16 @@ thrust and moments, through six stages that each wrap the same PID law::
     (x,y) --> PosController --> VelController --> AttController --> RateController --> (moments)
     (z)   --> AltController --> AltRateController --> (thrust)
 
-The stages are views of one `ControllerData`, which holds their parameters and
-state as matrices, one column per control channel. Each stage's ``step`` passes
-the matrices and the vehicle's state to a compiled kernel in
-`multirotor.controller.kernels`, which does the arithmetic.
+The stages (`PosController`, ...) are passive containers of the PID parameters and
+state of their control channels. They compute nothing and know no vehicle. A
+`Controller` is the executor, as `Multirotor` is for `VehicleParams`: it takes
+over the stages' values into one `ControllerData`, which holds them as matrices
+with one column per control channel, and passes the matrices and its vehicle's
+state to a compiled kernel in `multirotor.controller.kernels`.
+
+`PIDController` is the one stage that executes: a generic PID controller whose
+``step`` runs the PID law kernel. It can be used on its own, or to build a
+cascade with other stages.
 
 Call chain of `Controller.step`, between the vehicle's steps. The stages do not
 call each other: ``cascaded_pid_step`` calls the stage kernels in order::
@@ -20,8 +26,6 @@ call each other: ``cascaded_pid_step`` calls the stage kernels in order::
         --> kernels.velocity_pid_step
         --> kernels.attitude_pid_step
         --> kernels.rate_pid_step
-
-A stage's own ``step`` calls its kernel directly, for a stage used on its own.
 
 Altitude and position stages run every ``period_z`` and ``period_p`` seconds. The
 others run every ``period_a`` seconds.
@@ -36,8 +40,7 @@ from .data import ControllerData
 from .kernels import (
     PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT, PID_MAX_ACCELERATION,
     PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION, PID_INTEGRAL,
-    pid_stage, leash_distance, position_pid_step, velocity_pid_step, attitude_pid_step, rate_pid_step,
-    altitude_pid_step, climb_pid_step, cascaded_pid_step,
+    pid_stage, leash_distance, cascaded_pid_step,
     sqrt_control # noqa: F401, kept importable from here
 )
 
@@ -86,19 +89,18 @@ def _scalar_param(row: int, doc: str) -> property:
     return property(get, set, doc=doc)
 
 
-class PIDController:
+class PIDStage:
     """
-    Proportional Integral Derivative controller. Tracks a reference signal and outputs
-    a control signal to minimize output. The equation is:
+    The parameters and state of one or more PID control channels. A passive
+    container: it only holds values, and computes nothing. The PID equation that
+    the values are for is:
 
         err = reference - measurement
 
         u = k_p * err + k_d * d(err)/dt + k_i * int(err . dt)
-    
-    Can control a single or an array of signals, given float or array PID constants.
 
     The constants and the state are views of columns of a `ControllerData`. A
-    controller owns one until a `Controller` takes it over.
+    stage owns one until a `Controller` takes it over.
     """
 
     k_p = _param(PID_K_P, "Proportional constant")
@@ -130,7 +132,6 @@ class PIDController:
         """
         if n is None:
             n = max(np.size(k_p), np.size(k_i), np.size(k_d), 1)
-        self.dtype = np.dtype(np.float64)
         self._bind(ControllerData(n), 0, n)
         self._adopted: bool = False
         self.k_p, self.k_i, self.k_d = k_p, k_i, k_d
@@ -187,6 +188,15 @@ class PIDController:
         return np.concatenate((self.err_p, self.err_i, self.err_d))
 
 
+
+class PIDController(PIDStage):
+    """
+    Proportional Integral Derivative controller. Tracks a reference signal and
+    outputs a control signal to minimize the error, using the PID equation of
+    `PIDStage`. Can control a single signal or an array of signals, given float or
+    array PID constants.
+    """
+
     def step(
         self, reference: np.ndarray, measurement: np.ndarray, dt: float=1.,
         ref_is_error: bool=False, persist: bool=True
@@ -222,7 +232,7 @@ class PIDController:
 
 
 
-class PosController(PIDController):
+class PosController(PIDStage):
     """
     Position controller. Convert xy-waypoint into required xy-velocity in the body-frame.
     """
@@ -231,15 +241,13 @@ class PosController(PIDController):
     max_acceleration = _scalar_param(PID_MAX_ACCELERATION, "Maximum acceleration in m/s/s")
 
     def __init__(
-        self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor,
+        self, k_p, k_i, k_d, max_err_i,
         max_velocity: float=7.0, max_acceleration: float=3., max_jerk: float=100.0,
         square_root_scaling: bool=True, leashing: bool=True
     ):
         """
         Parameters
         ----------
-        vehicle : Multirotor
-            The vehicle to control.
         max_velocity : float
             Maximum velocity in m/s
         max_acceleration : float
@@ -251,12 +259,10 @@ class PosController(PIDController):
         leashing : bool
             Whether to limit proportional position error
         """
-        self.vehicle: Multirotor = vehicle
         self.max_jerk: float = max_jerk
         self.square_root_scaling: bool = square_root_scaling
         self.leashing: bool = leashing
         super().__init__(k_p, k_i, k_d, max_err_i, n=2)
-        self.dtype = self.vehicle.dtype
         self.max_velocity = max_velocity
         self.max_acceleration = max_acceleration
         if self.leashing or self.square_root_scaling:
@@ -265,28 +271,7 @@ class PosController(PIDController):
             ['max_velocity', 'max_acceleration', 'max_jerk', 'square_root_scaling', 'leashing'])
 
 
-    @property
-    def leash(self) -> float:
-        "The largest horizontal position error that is acted on, given the vehicle's motion."
-        if not self.leashing:
-            return np.inf
-        return leash_distance(
-            float(self.k_p[0]), _state64(self.vehicle),
-            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt)
-
-
-    def step(self, reference, measurement, dt, persist: bool=True):
-        out = np.empty(2)
-        position_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), _state64(self.vehicle),
-            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt,
-            float(dt), self.leashing, self.square_root_scaling, persist, out)
-        return out
-
-
-
-class VelController(PIDController):
+class VelController(PIDStage):
     """
     Velocity controller. Takes a reference x/y body-frame velocity (m/s) and
     outputs reference pitch and roll angles (rad) for x and y motion.
@@ -300,37 +285,21 @@ class VelController(PIDController):
     max_tilt = _scalar_param(PID_LIMIT, "Maximum tilt angle in radians")
 
     def __init__(
-        self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor,
+        self, k_p, k_i, k_d, max_err_i,
         max_tilt: float=np.pi / 18
     ):
         """
         Parameters
         ----------
-        vehicle : Multirotor
-            The vehicle to control.
         max_tilt : float
             Maximum tilt angle in radians
         """
-        self.vehicle: Multirotor = vehicle
         super().__init__(k_p, k_i, k_d, max_err_i, n=2)
-        self.dtype = self.vehicle.dtype
         self.max_tilt = max_tilt
         self._params = tuple(list(self._params) + ['max_tilt'])
 
 
-    def step(self, reference, measurement, dt, persist: bool=True):
-        # desired pitch, roll
-        # ctrl[0] -> x dir -> pitch -> forward
-        # ctrl[1] -> y dir -> roll -> lateral
-        out = np.empty(2)
-        velocity_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), float(dt), persist, out)
-        return out # desired pitch, roll
-
-
-
-class AttController(PIDController):
+class AttController(PIDStage):
     """
     Attitude controller. Convert velocity reference into angular rate control
     signal.
@@ -339,15 +308,13 @@ class AttController(PIDController):
     max_acceleration = _scalar_param(PID_MAX_ACCELERATION, "Maximum acceleration in rad/s/s")
 
     def __init__(
-        self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor,
+        self, k_p, k_i, k_d, max_err_i,
         max_acceleration: float=0.2, max_jerk: float=100.0,
         square_root_scaling: bool=False
     ):
         """
         Parameters
         ----------
-        vehicle : Multirotor
-            The vehicle to control.
         max_acceleration : float
             Maximum acceleration in rad/s/s
         max_jerk : float
@@ -355,11 +322,9 @@ class AttController(PIDController):
         square_root_scaling : bool
             Whether to scale P-gain with the square root of the error
         """
-        self.vehicle: Multirotor = vehicle
         self.max_jerk: float = max_jerk
         self.square_root_scaling: bool = square_root_scaling
         super().__init__(k_p, k_i, k_d, max_err_i, n=3)
-        self.dtype = self.vehicle.dtype
         self.max_acceleration = max_acceleration
         if self.square_root_scaling:
             self.k_p = self.max_jerk / self.max_acceleration
@@ -367,17 +332,7 @@ class AttController(PIDController):
             ['max_acceleration', 'max_jerk', 'square_root_scaling'])
 
 
-    def step(self, reference, measurement, dt, persist: bool=True):
-        out = np.empty(3)
-        attitude_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), float(dt),
-            self.square_root_scaling, persist, out)
-        return out # Euler rate
-
-
-
-class RateController(PIDController):
+class RateController(PIDStage):
     """
     Attitude rate controller. Tracks reference roll, pitch, yaw rates and outputs
     the necessary moments about each x,y,z axes to achieve them.
@@ -388,21 +343,17 @@ class RateController(PIDController):
     """
 
     def __init__(
-        self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor,
+        self, k_p, k_i, k_d, max_err_i,
         max_acceleration: float=0.2
     ):
         """
         Parameters
         ----------
-        vehicle : Multirotor
-            The vehicle to control.
         max_acceleration : float or np.ndarray
             Maximum acceleration in rad/s/s, for all or for each axis.
         """
-        self.vehicle: Multirotor = vehicle
         # TODO: check max acceleration limits from ardupilot
         super().__init__(k_p, k_i, k_d, max_err_i, n=3)
-        self.dtype = self.vehicle.dtype
         self.max_acceleration = max_acceleration
         self._params = tuple(list(self._params) + ['max_acceleration'])
 
@@ -417,18 +368,7 @@ class RateController(PIDController):
         self._data.params[PID_LIMIT, self._start:self._stop] = value
 
 
-    def step(self, reference, measurement, dt, persist: bool=True):
-        out = np.empty(3)
-        rate_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
-            np.asarray(self.vehicle.params.inertia_matrix, dtype=np.float64),
-            float(dt), persist, out)
-        return out # torque
-
-
-
-class AltController(PIDController):
+class AltController(PIDStage):
     """
     Altitude Controller. Tracks z-position and outputs velocity.
 
@@ -440,60 +380,26 @@ class AltController(PIDController):
     max_velocity = _scalar_param(PID_LIMIT, "Maximum velocity in m/s")
 
     def __init__(
-        self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor, max_velocity: float=5
+        self, k_p, k_i, k_d, max_err_i, max_velocity: float=5
     ):
         """
         Parameters
         ----------
-        vehicle : Multirotor
-            The vehicle to control.
         max_velocity : float
             Maximum velocity in m/s
         """
-        self.vehicle: Multirotor = vehicle
         super().__init__(k_p, 0., 0., max_err_i, n=1) # strictly a P controller
-        self.dtype = self.vehicle.dtype
         self.max_velocity = max_velocity
         self._params = tuple(list(self._params) + ['max_velocity'])
 
 
-    def step(
-        self, reference: np.ndarray, measurement: np.ndarray, dt: float = 1, persist: bool=True
-    ) -> np.ndarray:
-        out = np.empty(1)
-        altitude_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), float(dt), persist, out)
-        return out
-
-
-
-class AltRateController(PIDController):
+class AltRateController(PIDStage):
     """
     Climb rate controller. Tracks z-velocity and outputs thrust force needed.
     """
 
-    def __init__(self, k_p, k_i, k_d, max_err_i, vehicle: Multirotor):
-        """
-        Parameters
-        ----------
-        vehicle : Multirotor
-            The vehicle to control.
-        """
-        self.vehicle: Multirotor = vehicle
+    def __init__(self, k_p, k_i, k_d, max_err_i):
         super().__init__(k_p, k_i, k_d, max_err_i, n=1)
-        self.dtype = self.vehicle.dtype
-
-
-    def step(self, reference, measurement, dt, persist: bool=True):
-        out = np.empty(1)
-        climb_pid_step(
-            self._data.params, self._data.state, self._start,
-            _vector(reference), _vector(measurement), _vector(self.vehicle.orientation),
-            float(self.vehicle.params.mass), float(self.vehicle.weight), float(dt),
-            persist, out)
-        return out # thrust force
-
 
 
 class Controller:
@@ -510,6 +416,7 @@ class Controller:
         ctrl_p: PosController, ctrl_v: VelController,
         ctrl_a: AttController, ctrl_r: RateController,
         ctrl_z: AltController, ctrl_vz: AltRateController,
+        vehicle: Multirotor,
         period_p: float=1e-1,
         period_a: float=1e-2,
         period_z: float=1e-1,
@@ -530,6 +437,8 @@ class Controller:
             The altitude controller
         ctrl_vz : AltRateController
             The altitude rate controller
+        vehicle : Multirotor
+            The vehicle to control.
         period_[p | a | z] : float, optional
             The period (s) of the [position | attitude | altitude] controller, by
             default 1. The controller computes a new action once per period and
@@ -540,10 +449,6 @@ class Controller:
             The weight to assign to a separately specified velocity reference,
             which overrides the velocity signal given by the position controller.
         
-        Attributes
-        ----------
-        vehicle: Multirotor
-            The vehicle being controlled.
         """
         self.ctrl_p = ctrl_p
         self.ctrl_v = ctrl_v
@@ -551,8 +456,8 @@ class Controller:
         self.ctrl_r = ctrl_r
         self.ctrl_z = ctrl_z
         self.ctrl_vz = ctrl_vz
-        self.vehicle = self.ctrl_a.vehicle
-        self.dtype = self.vehicle.dtype
+        self.vehicle = vehicle
+        self.dtype = vehicle.dtype
         self.period_p = period_p
         self.period_a = period_a
         self.period_z = period_z
@@ -563,11 +468,6 @@ class Controller:
         self.steps_a = max(1, round(self.period_a / dt))
         self.steps_z = max(1, round(self.period_z / dt))
         self.feedforward_weight = feedforward_weight
-        assert self.ctrl_a.vehicle is self.ctrl_p.vehicle, "Vehicle instances different."
-        assert self.ctrl_a.vehicle is self.ctrl_v.vehicle, "Vehicle instances different."
-        assert self.ctrl_a.vehicle is self.ctrl_r.vehicle, "Vehicle instances different."
-        assert self.ctrl_a.vehicle is self.ctrl_z.vehicle, "Vehicle instances different."
-        assert self.ctrl_a.vehicle is self.ctrl_vz.vehicle, "Vehicle instances different."
         # The stages become views of the columns of one data object
         stages = (self.ctrl_p, self.ctrl_v, self.ctrl_a, self.ctrl_r, self.ctrl_z,
                   self.ctrl_vz)
@@ -589,12 +489,13 @@ class Controller:
     def reset(self):
         self.action = np.zeros(4, self.vehicle.dtype)
         self.reference = np.zeros_like(self.action)
-        # Outputs of the stages that later stages, and the steps in between, reuse
-        self.thrust = np.zeros(1)
-        self.torques = np.zeros(3)
+        # Outputs of the stages that later stages, and the steps in between, reuse.
+        # Scratch for the kernel, in float64 like the integrator's state. The
+        # public `thrust` and `torques` are in the vehicle's dtype.
+        self._thrust = np.zeros(1)
+        self._torques = np.zeros(3)
         self._ref_vel = np.zeros(2)
         self._pid_vel = np.zeros(2)
-        self._scurve_vel = np.zeros(2, self.vehicle.dtype)
         self._pitch_roll = np.zeros(2)
         self.n = 0
         self.t = self.vehicle.t
@@ -642,17 +543,28 @@ class Controller:
             (self.ctrl_p.state, self.ctrl_v.state, self.ctrl_a.state,
             self.ctrl_r.state, self.ctrl_z.state, self.ctrl_vz.state)
         )
+
+
     @property
-    def vehicle(self) -> Multirotor:
-        return self.ctrl_p.vehicle
-    @vehicle.setter
-    def vehicle(self, v: Multirotor):
-        self.ctrl_p.vehicle = v
-        self.ctrl_v.vehicle = v
-        self.ctrl_a.vehicle = v
-        self.ctrl_r.vehicle = v
-        self.ctrl_z.vehicle = v
-        self.ctrl_vz.vehicle = v
+    def thrust(self) -> np.ndarray:
+        "The output of the climb stage at the last step."
+        return self._thrust.astype(self.dtype)
+
+
+    @property
+    def torques(self) -> np.ndarray:
+        "The output of the rate stage at the last step."
+        return self._torques.astype(self.dtype)
+
+
+    @property
+    def leash(self) -> float:
+        "The largest horizontal position error that is acted on, given the vehicle's motion."
+        if not self.ctrl_p.leashing:
+            return np.inf
+        return leash_distance(
+            float(self.ctrl_p.k_p[0]), _state64(self.vehicle),
+            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt)
 
 
     def step(
@@ -682,8 +594,8 @@ class Controller:
             self.steps_z, feed_forward, use_feed_forward,
             float(self.feedforward_weight), self.ctrl_p.leashing,
             self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling,
-            persist, self._ref_vel, self._pid_vel, self._pitch_roll, self.thrust,
-            self.torques, action)
+            persist, self._ref_vel, self._pid_vel, self._pitch_roll, self._thrust,
+            self._torques, action)
         action = action.astype(self.dtype)
         if persist:
             self.n += 1

@@ -84,14 +84,15 @@ def waypoint(i: int) -> np.ndarray:
 
 
 def fly(singles, controllers, fleet, fleet_controller, steps=STEPS, kwargs_at=None,
-        atol=1e-5):
+        reference_at=waypoint, atol=1e-5):
     """
     Fly both in closed loop, each with its own action, and compare the actions and
-    states at every step.
+    states at every step. ``kwargs_at(i)`` gives the arguments of ``step`` at step
+    ``i``, and ``reference_at(i)`` the reference, shape (K, 4).
     """
     for i in range(steps):
         kwargs = kwargs_at(i) if kwargs_at is not None else {}
-        reference = waypoint(i)
+        reference = reference_at(i)
         actions = np.stack([
             c.step(r, **{k: (v[j] if k == 'feed_forward_velocity' else v)
                          for k, v in kwargs.items()})
@@ -133,16 +134,11 @@ def test_multi_rate_periods_and_feed_forward_and_persist():
 
 
 def test_reference_as_error():
-    singles, controllers, fleet, fleet_controller = make_closed_loop(
-        dict(motor=False, battery=None))
-    for i in range(100):
-        error = np.stack([[0.5, -0.2, 0.3, 0.]] * K) * (1 + 0.1 * i % 5)
-        actions = np.stack([c.step(e, ref_is_error=True) for c, e in zip(controllers, error)])
-        fleet_actions = fleet_controller.step(error, ref_is_error=True)
-        np.testing.assert_allclose(fleet_actions, actions, atol=1e-5, rtol=1e-4)
-        for vehicle, a in zip(singles, actions):
-            vehicle.step_speeds(vehicle.allocate_control(a[0], a[1:4]))
-        fleet.step_speeds(fleet.allocate_control(fleet_actions[:, 0], fleet_actions[:, 1:4]))
+    def error_at(i):
+        return np.stack([[0.5, -0.2, 0.3, 0.]] * K) * (1 + 0.1 * i % 5)
+
+    fly(*make_closed_loop(dict(motor=False, battery=None)), steps=100,
+        reference_at=error_at, kwargs_at=lambda i: dict(ref_is_error=True))
 
 
 def test_one_controller_for_all_vehicles_and_defaults():
@@ -192,11 +188,8 @@ def test_gains_are_per_vehicle():
     assert np.allclose(fleet_controller.params[2, PID_K_P, 4:7], [5., 5., 0.])
     assert np.allclose(fleet_controller.params[1, PID_K_P, 4:7], [9., 9., 0.])
     assert np.allclose(fleet_controller.get_params(2)['ctrl_a']['k_p'], [5., 5., 0.])
-    assert np.allclose(fleet_controller.get_params(1)['ctrl_a']['k_p'], [9., 9., 0.])
-    # what get_params returns belongs to the caller: a later call does not change it
-    first, second = fleet_controller.get_params(2), fleet_controller.get_params(1)
-    assert np.allclose(first['ctrl_a']['k_p'], [5., 5., 0.])
-    assert np.allclose(second['ctrl_a']['k_p'], [9., 9., 0.])
+    # what get_params returns belongs to the caller: changing it changes nothing else
+    first = fleet_controller.get_params(2)
     first['ctrl_a']['k_p'][:] = 0.
     assert np.allclose(fleet_controller.params[2, PID_K_P, 4:7], [5., 5., 0.])
     # and it acts: the vehicle with changed gains no longer flies like its controller

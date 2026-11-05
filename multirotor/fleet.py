@@ -137,10 +137,6 @@ class Fleet:
     def _check_alike(self, vehicles: List[Multirotor]) -> None:
         "Raise if the vehicles are not of one kind."
         first = vehicles[0]
-        if not first._data.use_thrust_constant:
-            raise NotImplementedError(
-                'A Fleet needs quadratic thrust (use_thrust_constant=True). '
-                'The blade-element model is not supported.')
         kinds = {
             'number of propellers': lambda v: len(v.propellers),
             'motors': lambda v: v._data.motors is not None,
@@ -153,6 +149,10 @@ class Fleet:
         for name, kind in kinds.items():
             if len({kind(v) for v in vehicles}) > 1:
                 raise ValueError(f'All vehicles in a fleet must have the same {name}.')
+        if not first._data.use_thrust_constant:
+            raise NotImplementedError(
+                'A Fleet needs quadratic thrust (use_thrust_constant=True). '
+                'The blade-element model is not supported.')
 
 
     def __len__(self) -> int:
@@ -432,8 +432,8 @@ class Fleet:
         common = (self._g, self._mass, self._inertia, self._inertia_inverse,
                   self._prop_params, self._motor_params, self._clockwise, self._positions)
         if self._battery:
-            # The last element of the state is the charge drawn during this step
-            self._x[:, -1] = 0.
+            # The last column of the state integrates the charge drawn during this
+            # step. It is zero between steps (see below), so each step starts at 0.
             rhs = fleet_rhs_body_with_motors_and_battery
             args = (u, self._battery_cutoff.copy(), disturbance) + common \
                 + (self._battery_params, self._ocv_soc, self._ocv_voltage,
@@ -450,7 +450,7 @@ class Fleet:
         # kernels the array layout that a single vehicle's motors have
         speeds = np.ascontiguousarray(self._speed)
         if self._battery:
-            self._x[:, -1] = 0.
+            self._x[:, -1] = 0. # the charge is kept in `_battery_charge_drawn`
             fleet_battery_end_step(
                 x[:, -1].copy(), self._battery_charge_drawn, self._battery_cutoff,
                 self._battery_overload, self._battery_voltage, self._battery_current,

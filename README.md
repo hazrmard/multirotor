@@ -30,13 +30,13 @@ kernels, so a simulation step takes microseconds.
 - Apply disturbance forces and torques, such as wind.
 - Follow waypoints with `trajectories.Trajectory`, record with `helpers.DataLog`, and view with `visualize`.
 
-**Simulate many vehicles at once.** `fleet.Fleet` steps through a list of vehicles together, and `controller.FleetController` controls all of them, each with its own PID gains. In a closed loop of 64 vehicles, each vehicle costs about 1/6 of the time that a separate vehicle takes without motors, and less than half with motors and a battery.
+**Simulate many vehicles at once.** `fleet.Fleet` steps through a list of vehicles together, and `controller.FleetController` controls all of them, each with its own PID gains. In a closed loop of 64 four-rotor vehicles, one step takes about 3 µs per vehicle without motors, and 15 µs with motors and a battery.
 
 **Control and tune.** `controller.Controller` is a cascaded PID controller for position, velocity, attitude and rate. `optimize.optimize` searches its gains with [optuna](https://optuna.org). Each trial flies the same set of start positions, and the best gains are scored on positions that the search did not fly.
 
 **Train agents.** `env.DynamicsMultirotorEnv` takes forces and torques as actions, and `env.SpeedsMultirotorEnv` takes propeller speeds. Both follow the Gymnasium API. Subclass `env.BaseMultirotorEnv` to change the reward.
 
-**Run fast.** One `step_speeds` call takes 12 µs for an 8-propeller vehicle, against 191 µs in the release before 0.6. With motors it takes 27 µs against 853 µs. A closed loop of controller and vehicle takes 16 µs per step against 125 µs. See `scripts/benchmarks` to reproduce the numbers.
+**Run fast.** One `step_speeds` call takes 12 µs for an 8-propeller vehicle, and 27 µs with motors. A closed loop of controller and vehicle takes 16 µs per step. See `scripts/benchmarks` to reproduce the numbers.
 
 ## Example
 

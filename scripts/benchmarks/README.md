@@ -277,7 +277,7 @@ tree. Each item in the tree records its `level` (`'coarse'` or `'fine'`).
 | level | scopes |
 |---|---|
 | `coarse` | `loop`, `controller`, `allocation`, `env.step`, `reward`, `step_speeds`, `step_dynamics`, `log`, `log_done` |
-| `fine` | `integrator`, `model`, `forces_torques`, `propeller`, `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` |
+| `fine` | `integrator`, `model`, `forces_torques`, `propeller` |
 
 `scopes.view(tree, Level.COARSE)` returns the coarse tree. It removes fine scopes from
 paths and adds their time to the exclusive time of the nearest coarse ancestor:
@@ -317,7 +317,6 @@ misspelled attribute names.
 |---|---|---|
 | `loop` | `Runner.run` | the whole timed loop |
 | `controller` | `Controller.step` | |
-| `ctrl_p`, `ctrl_v`, `ctrl_a`, `ctrl_r`, `ctrl_z`, `ctrl_vz` | `step` of each stage: position, velocity, attitude, rate, altitude, climb rate | its stage, on the steps where the stage runs |
 | `allocation` | `Multirotor.allocate_control` | |
 | `env.step` | `DynamicsMultirotorEnv.step` | |
 | `reward` | `DynamicsMultirotorEnv.reward` | |

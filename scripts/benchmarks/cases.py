@@ -159,11 +159,8 @@ def vehicle_points(v: Multirotor) -> List[ScopePoint]:
 
 
 def controller_points(controller) -> List[ScopePoint]:
-    """The controller as one coarse scope, and each of its stages as a fine scope."""
-    pts = [ScopePoint(Level.COARSE, controller, 'step', 'controller')]
-    for name in ('ctrl_p', 'ctrl_v', 'ctrl_a', 'ctrl_r', 'ctrl_z', 'ctrl_vz'):
-        pts.append(ScopePoint(Level.FINE, getattr(controller, name), 'step', name))
-    return pts
+    """The controller as one coarse scope. Its stages are compiled into one kernel."""
+    return [ScopePoint(Level.COARSE, controller, 'step', 'controller')]
 
 
 def log_points() -> List[ScopePoint]:
