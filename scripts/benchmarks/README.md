@@ -132,7 +132,7 @@ exempt from the memory check. The scope deltas are diagnostic and do not affect 
 exit status.
 
 `plot.py` writes `time_per_step.png`, `speedup.png` (two or more files),
-`breakdown.png`, `memory.png` and one `CASE.png` per sweep case (`log_scaling.png`).
+`breakdown.png`, `memory.png`, `fleet.png` (time per vehicle of `fleet_closed_loop`, if a file has it) and one `CASE.png` per sweep case (`log_scaling.png`).
 
 ## Cases
 
