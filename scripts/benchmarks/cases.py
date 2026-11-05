@@ -18,9 +18,10 @@ from typing import Dict, List, Optional, Tuple, Type
 import numpy as np
 
 from multirotor.env import DynamicsMultirotorEnv
+from multirotor.fleet import Fleet
 from multirotor.helpers import DataLog, find_nominal_speed, vehicle_params_factory
 from multirotor.models.tarott18 import BP, MP, PP, SP
-from multirotor.optimize import get_controller, run_sim
+from multirotor.optimize import get_controller, get_fleet_controller, run_sim
 from multirotor.simulation import Multirotor
 from multirotor.vehicle import MotorParams, PropellerParams
 
@@ -341,6 +342,56 @@ class ClosedLoop(Runner):
                 + vehicle_points(self.v) + log_points())
 
 
+class FleetClosedLoop(Runner):
+    """
+    ``k`` vehicles in closed loop. With ``fleet=True``, a ``Fleet`` with a
+    ``FleetController``; otherwise ``k`` separate vehicles with their own
+    controllers, which is the baseline. One step advances all ``k`` vehicles, so the
+    time per step is for the whole fleet: divide by ``k`` to compare vehicles.
+    """
+    def __init__(self, k=64, n=4, motor=False, battery=False, fleet=True):
+        v = make_vehicle(n, 'quadratic', motor, battery)
+        self.dt = v.simulation.dt
+        self.k, self.fleet_mode = k, fleet
+        self.ref = np.asarray([0, 0, ALTITUDE, 0], v.dtype)
+        if fleet:
+            self.fleet = Fleet([v.params] * k, v.simulation)
+            self.fc = get_fleet_controller(self.fleet)
+            self.refs = np.tile(self.ref, (k, 1))
+        else:
+            self.vs = [Multirotor(v.params, v.simulation) for _ in range(k)]
+            self.cs = [get_controller(vehicle) for vehicle in self.vs]
+
+    def reset(self):
+        if self.fleet_mode:
+            self.fleet.reset()
+            self.fc.reset()
+        else:
+            for v, c in zip(self.vs, self.cs):
+                v.reset()
+                c.reset()
+
+    def run(self, n):
+        if self.fleet_mode:
+            fleet, fc, refs = self.fleet, self.fc, self.refs
+            for _ in range(n):
+                a = fc.step(refs)
+                fleet.step_speeds(fleet.allocate_control(a[:, 0], a[:, 1:4]))
+            return
+        ref = self.ref
+        for _ in range(n):
+            for v, c in zip(self.vs, self.cs):
+                a = c.step(reference=ref)
+                v.step_speeds(v.allocate_control(a[0], a[1:4]))
+
+    def scope_points(self):
+        if not self.fleet_mode:
+            return []
+        return [ScopePoint(Level.COARSE, self.fc, 'step', 'fleet controller'),
+                ScopePoint(Level.COARSE, self.fleet, 'allocate_control', 'allocation'),
+                ScopePoint(Level.COARSE, self.fleet, 'step_speeds', 'fleet step_speeds')]
+
+
 class RunSim(Runner):
     """``optimize.run_sim`` through the gymnasium env, over a bounded trajectory."""
     def __init__(self, n=8):
@@ -428,6 +479,11 @@ CASES: Dict[str, Case] = {
     'closed_loop': Case(ClosedLoop, quick_steps=200, params=[
         dict(n=8, thrust_model='quadratic', motor=False, log=False, steps=2000),
         dict(n=8, thrust_model='quadratic', motor=False, log=True, steps=2000),
+    ]),
+    # one step is a step of all k vehicles
+    'fleet_closed_loop': Case(FleetClosedLoop, measures=('time',), quick_steps=50, params=[
+        dict(k=k, motor=motor, battery=motor, fleet=fleet, steps=200)
+        for motor in (False, True) for k in (1, 16, 64, 256) for fleet in (True, False)
     ]),
     'run_sim': Case(RunSim, quick_steps=100, params=[dict(n=8, steps=1000)]),
     # memory growth of DataLog across step counts

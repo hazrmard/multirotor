@@ -14,12 +14,13 @@ kernelspec:
 # multirotor - Quickstart
 
 
-This tutorial shows how to use `multirotor` to simulate, control, and tune a drone. It has four parts:
+This tutorial shows how to use `multirotor` to simulate, control, and tune a drone. It has five parts:
 
 1. **A first flight.** Create a vehicle, tune a controller, and fly waypoints with logging. This is the example in the README, with explanations.
 2. **Motors and a battery.** Simulate the electrical side of the same flight.
 3. **Trajectories.** Fly a longer path and add a wind disturbance.
 4. **Environments.** Use the vehicle as a [Gymnasium](https://gymnasium.farama.org) environment for reinforcement learning.
+5. **Fleets.** Simulate and control many vehicles together.
 
 This document can be run as a Jupyter notebook using the [jupytext](https://jupytext.readthedocs.io/en/latest/) extension. Link to raw markdown file is [here](https://raw.githubusercontent.com/hazrmard/multirotor/master/docs/Quickstart.md).
 
@@ -398,3 +399,47 @@ class SmoothEnv(DynamicsMultirotorEnv):
         reward = super().reward(state, action, nstate)
         return reward - 0.01 * np.linalg.norm(nstate[9:12])
 ```
+
+## 5. Fleets
+
+`multirotor.fleet.Fleet` simulates many vehicles together. It holds the parameters and the state of all vehicles in arrays, and advances them with compiled loops, so one call steps the whole fleet. Its methods are those of `Multirotor`, but every input and output has one row per vehicle. A `Fleet` is made from a list of `VehicleParams`. The vehicles can differ in mass, inertia and propeller parameters, but must have the same number of propellers, and motors and batteries on all or on none.
+
+```{code-cell} ipython3
+from multirotor.fleet import Fleet
+from multirotor.optimize import get_fleet_controller
+
+# Eight vehicles whose bodies weigh between 2 and 3.75 kg
+fleet_params = [
+    vehicle_params_factory(n=4, m_prop=1e-2, d_prop=0.3, params=pp, m_body=2 + 0.25 * k)
+    for k in range(8)
+]
+fleet = Fleet(fleet_params, sp)
+print(len(fleet), 'vehicles. State shape:', fleet.state.shape)
+```
+
+`FleetController` is the controller of every vehicle at once. `get_fleet_controller` gives each vehicle the default gains. Each vehicle gets its own target, one row per vehicle: $x, y, z, \psi$. Here the vehicles fly to points on a circle:
+
+```{code-cell} ipython3
+fleet_ctrl = get_fleet_controller(fleet)
+angles = np.linspace(0, 2 * np.pi, len(fleet), endpoint=False)
+targets = np.stack([4 * np.cos(angles), 4 * np.sin(angles), np.full_like(angles, 3), np.zeros_like(angles)], axis=1)
+
+for i in range(1500):
+    dynamics = fleet_ctrl.step(targets)                                      # shape (K, 4)
+    speeds = fleet.allocate_control(dynamics[:, 0], dynamics[:, 1:4])        # shape (K, n)
+    fleet.step_speeds(speeds)
+
+fig, ax = plt.subplots(figsize=(3.5, 3.5))
+ax.plot(targets[:, 0], targets[:, 1], 'o', ms=8, mfc='none', label='targets')
+ax.plot(fleet.position[:, 0], fleet.position[:, 1], 'x', label='vehicles')
+ax.set_aspect('equal'); ax.legend();
+```
+
+The gains can differ from vehicle to vehicle. `set_params` takes the same nested dictionary as `Controller.set_params`:
+
+```{code-cell} ipython3
+fleet_ctrl.set_params(3, ctrl_r=dict(k_p=np.asarray([20., 20., 0.])))
+print(fleet_ctrl.get_params(3)['ctrl_r']['k_p'], fleet_ctrl.get_params(2)['ctrl_r']['k_p'])
+```
+
+The vehicles share one solver call, so their results differ from those of separate `Multirotor` vehicles by the solver's tolerance. All vehicles of a `FleetController` share the periods and options (`leashing`, `square_root_scaling`) of their controllers. A fleet needs quadratic thrust; the blade-element model is not supported. Fleets with motors and batteries work the same way.

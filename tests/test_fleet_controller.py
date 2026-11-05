@@ -193,6 +193,12 @@ def test_gains_are_per_vehicle():
     assert np.allclose(fleet_controller.params[1, PID_K_P, 4:7], [9., 9., 0.])
     assert np.allclose(fleet_controller.get_params(2)['ctrl_a']['k_p'], [5., 5., 0.])
     assert np.allclose(fleet_controller.get_params(1)['ctrl_a']['k_p'], [9., 9., 0.])
+    # what get_params returns belongs to the caller: a later call does not change it
+    first, second = fleet_controller.get_params(2), fleet_controller.get_params(1)
+    assert np.allclose(first['ctrl_a']['k_p'], [5., 5., 0.])
+    assert np.allclose(second['ctrl_a']['k_p'], [9., 9., 0.])
+    first['ctrl_a']['k_p'][:] = 0.
+    assert np.allclose(fleet_controller.params[2, PID_K_P, 4:7], [5., 5., 0.])
     # and it acts: the vehicle with changed gains no longer flies like its controller
     controllers[2].set_params(ctrl_a=dict(k_p=np.asarray([5., 5., 0.])))
     fly(singles, controllers, fleet, fleet_controller, steps=100)

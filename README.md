@@ -30,6 +30,8 @@ kernels, so a simulation step takes microseconds.
 - Apply disturbance forces and torques, such as wind.
 - Follow waypoints with `trajectories.Trajectory`, record with `helpers.DataLog`, and view with `visualize`.
 
+**Simulate many vehicles at once.** `fleet.Fleet` steps a list of vehicles with compiled loops, and `controller.FleetController` controls all of them with their own gains. In a closed loop of 64 vehicles, each vehicle costs about 1/6 of the time that a separate vehicle takes without motors, and less than half with motors and a battery.
+
 **Control and tune.** `controller.Controller` is a cascaded PID controller for position, velocity, attitude and rate. `optimize.optimize` searches its gains with [optuna](https://optuna.org). Each trial flies the same set of start positions, and the best gains are scored on positions that the search did not fly.
 
 **Train agents.** `env.DynamicsMultirotorEnv` takes forces and torques as actions, and `env.SpeedsMultirotorEnv` takes propeller speeds. Both follow the Gymnasium API. Subclass `env.BaseMultirotorEnv` to change the reward.
@@ -133,5 +135,5 @@ These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
 functions call which, and how the integrated state is laid out. Those of
 `multirotor/controller/pid.py` and `multirotor/controller/kernels.py` do the same
-for the controller. The compiled reward of the environments is in
+for the controller. `multirotor/fleet.py` and `multirotor/fleet_kernels.py` show how a fleet's arrays are laid out and which kernels its loops call. The compiled reward of the environments is in
 `multirotor/env_kernels.py`.

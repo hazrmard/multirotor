@@ -160,11 +160,16 @@ class FleetController:
         ----------
         index : int
             The vehicle.
+
+        Returns
+        -------
+        Dict[str, Dict[str, np.ndarray]]
+            Copies of the parameters.
         """
         scratch = self._scratch
         scratch._data.params[:] = self.params[index]
         scratch.feedforward_weight = self.feedforward_weight[index]
-        return scratch.get_params()
+        return deepcopy(scratch.get_params())
 
 
     def step(
