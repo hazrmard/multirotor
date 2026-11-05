@@ -204,6 +204,17 @@ def test_gains_are_per_vehicle():
     fly(singles, controllers, fleet, fleet_controller, steps=100)
 
 
+def test_a_setting_outside_the_arrays_does_not_carry_over_to_other_vehicles():
+    # max_jerk is only used to make the position gain. It is not in the arrays.
+    singles, controllers, fleet, fleet_controller = make_closed_loop(
+        dict(motor=False, battery=None))
+    before = fleet_controller.get_params(1)['ctrl_p']['max_jerk']
+    fleet_controller.set_params(0, ctrl_p=dict(max_jerk=12345.))
+    assert fleet_controller.get_params(1)['ctrl_p']['max_jerk'] == before
+    assert before != 12345.
+
+
+
 def test_structure_must_be_the_same_for_all_vehicles():
     plist, sp = make_fleet_params()
     singles = [Multirotor(p, sp) for p in plist]

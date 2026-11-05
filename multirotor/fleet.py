@@ -3,8 +3,9 @@ A fleet of vehicles simulated together. `Fleet` holds the parameters and the sta
 of ``K`` vehicles as arrays with the vehicle as the first axis, and advances all of
 them with compiled loops over the vehicles (`multirotor.fleet_kernels`). It
 is a peer of `multirotor.simulation.Multirotor`, not a collection of
-`Multirotor` instances, and has the same methods, which take and return one row
-per vehicle.
+`Multirotor` instances. Its stepping, control allocation and state methods are those of
+`Multirotor`, taking and returning one row per vehicle. It has no objects for single
+propellers, motors or batteries; their state is in arrays.
 
 Compared with ``K`` separate `Multirotor` vehicles, a `Fleet`:
 
@@ -439,16 +440,19 @@ class Fleet:
         x = self.integrator(rhs, x0, self.simulation.dt, args).reshape(k_vehicles, -1)
 
         self._x[:] = x
+        # The motor speeds are columns of the state: contiguous copies give the
+        # kernels the array layout that a single vehicle's motors have
+        speeds = np.ascontiguousarray(self._speed)
         if self._battery:
             self._x[:, -1] = 0.
             fleet_battery_end_step(
                 x[:, -1].copy(), self._battery_charge_drawn, self._battery_cutoff,
                 self._battery_overload, self._battery_voltage, self._battery_current,
-                self._speed, u, self._motor_params, self._battery_params,
+                speeds, u, self._motor_params, self._battery_params,
                 self._ocv_soc, self._ocv_voltage, self.simulation.dt,
                 self._motor_voltage_limit)
         fleet_motor_electrical(
-            self._speed, u, self._motor_voltage_limit, self._motor_params,
+            speeds, u, self._motor_voltage_limit, self._motor_params,
             self._voltage, self._current)
 
 

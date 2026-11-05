@@ -36,7 +36,7 @@ kernels, so a simulation step takes microseconds.
 
 **Train agents.** `env.DynamicsMultirotorEnv` takes forces and torques as actions, and `env.SpeedsMultirotorEnv` takes propeller speeds. Both follow the Gymnasium API. Subclass `env.BaseMultirotorEnv` to change the reward.
 
-**Run fast.** One `step_speeds` call takes 12 µs for an 8-propeller vehicle, against 191 µs in the release before 0.6. With motors it takes 27 µs against 853 µs. A closed loop of controller and vehicle takes 20 µs per step against 125 µs. See `scripts/benchmarks` to reproduce the numbers.
+**Run fast.** One `step_speeds` call takes 12 µs for an 8-propeller vehicle, against 191 µs in the release before 0.6. With motors it takes 27 µs against 853 µs. A closed loop of controller and vehicle takes 16 µs per step against 125 µs. See `scripts/benchmarks` to reproduce the numbers.
 
 ## Example
 

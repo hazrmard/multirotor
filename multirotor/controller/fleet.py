@@ -77,9 +77,10 @@ class FleetController:
         (self.steps_p, self.steps_a, self.steps_z,
          self.leashing, self.square_root_position, self.square_root_attitude) = \
             self._structure(first)
-        # An isolated controller that the parameter getter and setter work on, so
-        # that they accept and return what `Controller` does
-        self._scratch: Controller = deepcopy(first)
+        # A pristine copy. The parameter getter and setter work on a fresh copy of
+        # it for each call, so that they accept and return what `Controller` does,
+        # and a setting that is not in the arrays does not carry over to other vehicles.
+        self._template: Controller = deepcopy(first)
 
         self.params: np.ndarray = np.stack(
             [c._data.params for c in controllers]).astype(float)
@@ -101,6 +102,14 @@ class FleetController:
             bool(controller.ctrl_p.square_root_scaling),
             bool(controller.ctrl_a.square_root_scaling),
         )
+
+
+    def _controller_of(self, index: int) -> Controller:
+        "A new `Controller` with the parameters of one vehicle's controller."
+        controller = deepcopy(self._template)
+        controller._data.params[:] = self.params[index]
+        controller.feedforward_weight = self.feedforward_weight[index]
+        return controller
 
 
     def reset(self) -> None:
@@ -136,9 +145,7 @@ class FleetController:
             If the parameters change the periods or options, which are shared by
             all vehicles.
         """
-        scratch = self._scratch
-        scratch._data.params[:] = self.params[index]
-        scratch.feedforward_weight = self.feedforward_weight[index]
+        scratch = self._controller_of(index)
         scratch.set_params(**params)
         if self._structure(scratch) != (
             self.steps_p, self.steps_a, self.steps_z, self.leashing,
@@ -166,10 +173,7 @@ class FleetController:
         Dict[str, Dict[str, np.ndarray]]
             Copies of the parameters.
         """
-        scratch = self._scratch
-        scratch._data.params[:] = self.params[index]
-        scratch.feedforward_weight = self.feedforward_weight[index]
-        return deepcopy(scratch.get_params())
+        return deepcopy(self._controller_of(index).get_params())
 
 
     def step(
