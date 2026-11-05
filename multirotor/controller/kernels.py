@@ -48,6 +48,7 @@ Call chain::
     pid_stage --------> pid_channel   (a bare `PIDController`)
     cascade_step -----> altitude_step, climb_step, position_step, velocity_step,
                         attitude_step, rate_step   (a whole `Controller`)
+    fleet_cascade_step -> cascade_step   (the `Controller` of each vehicle of a fleet)
 
 Stages run in order, because the output of one is the reference of the next.
 
@@ -547,3 +548,52 @@ def cascade_step(
     action[0] = thrust[0]
     for i in range(3):
         action[1 + i] = torques[i]
+
+
+
+@njit
+def fleet_cascade_step(
+    pid_params: np.ndarray, x: np.ndarray, reference: np.ndarray,
+    body_state: np.ndarray, acceleration: np.ndarray, inertia: np.ndarray,
+    mass: np.ndarray, weight: np.ndarray, sim_dt: float, n: int, steps_p: int,
+    steps_a: int, steps_z: int, feed_forward: np.ndarray, use_feed_forward: bool,
+    feedforward_weight: np.ndarray, leashing: bool, square_root_position: bool,
+    square_root_attitude: bool, persist: bool, ref_vel: np.ndarray,
+    pid_vel: np.ndarray, pitch_roll: np.ndarray, thrust: np.ndarray,
+    torques: np.ndarray, action: np.ndarray
+) -> None:
+    """
+    One step of the controllers of a fleet: `cascade_step` for each vehicle.
+
+    Every array has the vehicle as its first axis, ``K`` vehicles in all. Apart
+    from that, the arguments are those of `cascade_step`. The step counter, the
+    periods and the options are the same for all vehicles.
+
+    Parameters
+    ----------
+    pid_params, x : np.ndarray
+        Parameters and state of the stages, shape (K, N_PID_PARAMS, 12) and
+        (K, N_PID_STATES, 12).
+    reference : np.ndarray
+        The targets, shape (K, 4).
+    body_state, acceleration, inertia : np.ndarray
+        The vehicles' body states, accelerations and inertia matrices, shape
+        (K, 12), (K, 3) and (K, 3, 3).
+    mass, weight, feedforward_weight : np.ndarray
+        Shape (K,).
+    feed_forward : np.ndarray
+        Velocity references, shape (K, 2).
+    ref_vel, pid_vel, pitch_roll : np.ndarray
+        Loop variables, shape (K, 2).
+    thrust, torques : np.ndarray
+        Loop variables, shape (K, 1) and (K, 3).
+    action : np.ndarray
+        Output, shape (K, 4).
+    """
+    for k in range(pid_params.shape[0]):
+        cascade_step(
+            pid_params[k], x[k], reference[k], body_state[k], acceleration[k],
+            inertia[k], mass[k], weight[k], sim_dt, n, steps_p, steps_a, steps_z,
+            feed_forward[k], use_feed_forward, feedforward_weight[k], leashing,
+            square_root_position, square_root_attitude, persist, ref_vel[k],
+            pid_vel[k], pitch_roll[k], thrust[k], torques[k], action[k])

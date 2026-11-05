@@ -4,6 +4,7 @@ from typing import Callable, Dict, Tuple
 
 import numpy as np
 import optuna
+from .fleet import Fleet
 from .simulation import Multirotor
 from .trajectories import Trajectory
 from .vehicle import VehicleParams, SimulationParams
@@ -13,7 +14,7 @@ from .controller import (
     AltController, AltRateController,
     PosController, AttController,
     VelController, RateController,
-    Controller,
+    Controller, FleetController,
     SCurveController
 )
 
@@ -168,6 +169,27 @@ def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Con
     if scurve:
         return SCurveController(ctrl)
     return ctrl
+
+
+
+def get_fleet_controller(fleet: Fleet, args: Namespace=DEFAULTS) -> FleetController:
+    """
+    Create a `FleetController` whose vehicles all have the default gains of
+    `get_controller`. Set the gains of a vehicle with `FleetController.set_params`.
+
+    Parameters
+    ----------
+    fleet : Fleet
+        The vehicles to control.
+    args : Namespace, optional
+        The default settings, by default DEFAULTS
+
+    Returns
+    -------
+    FleetController
+    """
+    template = get_controller(Multirotor(fleet.params[0], fleet.simulation), args=args)
+    return FleetController(fleet, template)
 
 
 
