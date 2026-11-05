@@ -2,7 +2,7 @@
 
 [![Documentation Status](https://readthedocs.org/projects/multirotor/badge/?version=latest)](https://multirotor.readthedocs.io/en/latest/?badge=latest)
 
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/logo.jpg)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.8.0/_static/logo.jpg)
 
 Simulation of multi-rotor unmanned aerial vehicles in python.
 
@@ -126,10 +126,10 @@ uv publish               # uploads dist/* to PyPI (set UV_PUBLISH_TOKEN)
 ## Code organization
 
 The following main classes are available in the code. For simulating the vehicle:
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/vehicle_classdiagram.png)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.8.0/_static/vehicle_classdiagram.png)
 
 And for simulating control:
-![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.7.0/_static/controller_classdiagram.png)
+![](https://raw.githubusercontent.com/hazrmard/multirotor/v0.8.0/_static/controller_classdiagram.png)
 
 These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
