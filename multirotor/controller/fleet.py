@@ -29,7 +29,9 @@ from .pid import Controller
 
 class FleetController:
     """
-    The cascaded PID controllers of the vehicles of a `Fleet`.
+    A batch of cascaded PID controllers, one for each vehicle in a `Fleet`. The
+    controllers have their own gains (i.e. PID parameters), but must have an
+    identical structure and properties (periods, ``leashing``, ``square_root_scaling``).
 
     Call `step` between the fleet's steps, as one calls `Controller.step` between
     the steps of a vehicle.
@@ -47,9 +49,10 @@ class FleetController:
             The controller of each vehicle, or one controller for all of them.
             `FleetController` copies their parameters at construction: changing
             a controller afterwards does not affect the fleet's controllers, and
-            a controller is not changed by the fleet. Each must have been built on a vehicle with the
-            simulation time step of the fleet. They must have the same periods
-            and options (``leashing``, ``square_root_scaling``).
+            a controller is not changed by the fleet. Each must have been built
+            on a vehicle with the simulation time step of the fleet. They must
+            have the same periods and options (``leashing``, ``square_root_scaling``),
+            but can have different gains.
 
         Raises
         ------
@@ -129,15 +132,16 @@ class FleetController:
 
     def set_params(self, index: int, **params) -> None:
         """
-        Set the parameters of one vehicle's controller, as `Controller.set_params`
-        does for a controller.
+        Set the gains (i.e. the PID parameters) of one vehicle's controller, as
+        `Controller.set_params` does for a controller.
 
         Parameters
         ----------
         index : int
-            The vehicle.
+            The index of the vehicle, and so of its controller, in the fleet.
         **params
-            The parameters, for example ``ctrl_r=dict(k_p=[20, 20, 0])``.
+            The gains, for example ``ctrl_r=dict(k_p=[20, 20, 0])`` for the
+            rate stage.
 
         Raises
         ------
@@ -160,13 +164,13 @@ class FleetController:
 
     def get_params(self, index: int) -> Dict[str, Dict[str, np.ndarray]]:
         """
-        The parameters of one vehicle's controller, as `Controller.get_params`
-        returns them.
+        The gains (i.e. the PID parameters) of one vehicle's controller, as
+        `Controller.get_params` returns them.
 
         Parameters
         ----------
         index : int
-            The vehicle.
+            The index of the vehicle, and so of its controller, in the fleet.
 
         Returns
         -------

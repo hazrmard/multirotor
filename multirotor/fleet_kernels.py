@@ -10,8 +10,11 @@ parameters have shape ``(K, N_PROP_PARAMS, n)``. A vehicle's slice, such as
 single-vehicle kernel takes.
 
 The right-hand sides take the integrated state of the whole fleet as one flat
-vector, the ``K`` vehicles' states one after the other, as an integrator
-expects. Each vehicle's state has the layout of `multirotor.dynamics`.
+vector, the ``K`` vehicles' states one after the other. The flatness is not for
+speed: an integrator such as `scipy.integrate.odeint` passes and expects a 1-D
+state. Inside, ``x.reshape(K, -1)`` is a free view (the rows are contiguous, so
+nothing is copied) and the result is flattened the same way. Each vehicle's
+state has the layout of `multirotor.dynamics`.
 
 Which loop calls which kernel::
 
@@ -48,7 +51,7 @@ def fleet_rhs_body(
     t : float
         Time.
     x : np.ndarray
-        The body states of all vehicles, flat, shape (K * 12,).
+        The body states of all vehicles, flat (see the module docstring), shape (K * 12,).
     forces, torques : np.ndarray
         Forces (N) and torques (N m) in each body frame, shape (K, 3).
     g : float

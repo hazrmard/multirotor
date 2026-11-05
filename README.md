@@ -30,7 +30,7 @@ kernels, so a simulation step takes microseconds.
 - Apply disturbance forces and torques, such as wind.
 - Follow waypoints with `trajectories.Trajectory`, record with `helpers.DataLog`, and view with `visualize`.
 
-**Simulate many vehicles at once.** `fleet.Fleet` steps a list of vehicles with compiled loops, and `controller.FleetController` controls all of them with their own gains. In a closed loop of 64 vehicles, each vehicle costs about 1/6 of the time that a separate vehicle takes without motors, and less than half with motors and a battery.
+**Simulate many vehicles at once.** `fleet.Fleet` steps through a list of vehicles together, and `controller.FleetController` controls all of them, each with its own PID gains. In a closed loop of 64 vehicles, each vehicle costs about 1/6 of the time that a separate vehicle takes without motors, and less than half with motors and a battery.
 
 **Control and tune.** `controller.Controller` is a cascaded PID controller for position, velocity, attitude and rate. `optimize.optimize` searches its gains with [optuna](https://optuna.org). Each trial flies the same set of start positions, and the best gains are scored on positions that the search did not fly.
 

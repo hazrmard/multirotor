@@ -1,20 +1,21 @@
 """
 A fleet of vehicles simulated together. `Fleet` holds the parameters and the state
-of ``K`` vehicles as arrays with the vehicle as the first axis, and advances all of
-them with compiled loops over the vehicles (`multirotor.fleet_kernels`). It
-is a peer of `multirotor.simulation.Multirotor`, not a collection of
-`Multirotor` instances. Its stepping, control allocation and state methods are those of
-`Multirotor`, taking and returning one row per vehicle. It has no objects for single
+of ``K`` vehicles as arrays with the vehicle as the first axis, and steps through all
+vehicles together. It is a peer of `multirotor.simulation.Multirotor`, not a
+collection of `Multirotor` instances. It exposes the same core API as `Multirotor`:
+`Fleet.step_speeds()`, `Fleet.step_dynamics()` and `Fleet.allocate_control()`, with
+one row per vehicle in every input and output. It has no objects for single
 propellers, motors or batteries; their state is in arrays.
 
 Compared with ``K`` separate `Multirotor` vehicles, a `Fleet`:
 
 * integrates all vehicles with one call of the integrator, so the cost of the
-  call is shared. With the default integrator the vehicles share one step size, so the results
-  differ from those of separate vehicles by the integrator's tolerance.
-* needs vehicles of the same kind: the same number of propellers, motors on all
-  or on none, and a battery model on all or on none. Masses, inertia, propeller,
-  motor and battery parameters can differ.
+  call is shared.
+* needs vehicles of a homogeneous configuration: the same number of propellers,
+  motors on all or on none, and a battery model on all or on none. Masses,
+  inertia, propeller, motor and battery parameter values can differ.
+* can differ from separate vehicles by the integrator's tolerance (Note: with the
+  default integrator, the vehicles share one step size).
 * supports propellers with ``k_thrust * speed**2`` thrust. Blade-element thrust
   needs a numerical solution at every evaluation of the derivative and is not
   supported.
@@ -36,8 +37,13 @@ from .vehicle import SimulationParams, VehicleParams
 
 class Fleet:
     """
-    ``K`` multirotors simulated together. Every state quantity and every input
-    has one row per vehicle.
+    ``K`` multirotors simulated together. It exposes the same core API as
+    `Multirotor`: `step_speeds()`, `step_dynamics()` and `allocate_control()`.
+    Every state quantity and every input has one row per vehicle.
+
+    Note: results can differ from those of separate `Multirotor` vehicles by the
+    integrator's tolerance. The vehicles must have a homogeneous configuration
+    (the same propeller, motor and battery setup), but parameter values can vary.
     """
 
     def __init__(
@@ -60,7 +66,7 @@ class Fleet:
         Raises
         ------
         ValueError
-            If there are no vehicles, or the vehicles are not of the same kind.
+            If there are no vehicles, or their configurations are not homogeneous.
         NotImplementedError
             If the propellers use the blade-element thrust model.
         """
@@ -297,9 +303,9 @@ class Fleet:
         if not self._motors:
             return np.full(len(self), np.nan)
         power = np.sum(self._current * self._voltage, axis=1)
-        with np.errstate(invalid='ignore'):
-            current = power / self._max_voltage
-        return np.where(np.isfinite(self._max_voltage), current, np.nan)
+        return np.divide(
+            power, self._max_voltage, out=np.full(len(self), np.nan),
+            where=np.isfinite(self._max_voltage))
 
 
     def _signals(self, u: np.ndarray) -> np.ndarray:
