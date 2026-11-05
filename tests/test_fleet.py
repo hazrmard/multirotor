@@ -149,37 +149,38 @@ def test_allocate_control_matches_separate_vehicles():
 
 
 @config
-def test_float32_fleet_keeps_float32_precision_and_tracks_float64(kwargs):
+def test_float32_fleet_has_float32_properties_and_tracks_float64(kwargs):
     plist64, sp64 = make_fleet_params(dtype=np.float64, **kwargs)
     plist32, sp32 = make_fleet_params(dtype=np.float32, **kwargs)
     fleet64, fleet32 = Fleet(plist64, sp64), Fleet(plist32, sp32)
     for u in signals(plist64, sp64, 20):
         fleet64.step_speeds(u)
         fleet32.step_speeds(u)
-        state = fleet32.state
-        assert np.array_equal(state, state.astype(np.float32).astype(np.float64))
+    for name in ('state', 'position', 'velocity', 'orientation', 'angular_rate',
+                 'inertial_velocity', 'euler_rate', 'acceleration', 'speeds'):
+        assert getattr(fleet32, name).dtype == np.float32, name
+        assert getattr(fleet64, name).dtype == np.float64, name
     np.testing.assert_allclose(fleet32.state, fleet64.state, atol=1e-3)
 
 
 
 @config
-def test_state_is_one_array_that_the_fleet_updates_in_place(kwargs):
+def test_state_is_a_copy_that_is_set_through_the_setter(kwargs):
     plist, sp = make_fleet_params(**kwargs)
     fleet = Fleet(plist, sp)
     state = fleet.state
     assert state.shape == (K, 12)
-    assert np.shares_memory(state, fleet.position)
-    assert np.shares_memory(state, fleet.orientation)
-    fleet.position[:] = [1, 2, 3]
-    assert np.all(state[:, :3] == [1, 2, 3])
+    assert not np.shares_memory(state, fleet.state)
+    state[:] = 5.                        # changes the copy only
+    assert np.all(fleet.state == 0)
+    fleet.state = np.ones(12)            # one state for all vehicles
+    assert np.all(fleet.position == 1) and np.all(fleet.orientation == 1)
     fleet.step_speeds(np.tile(hover_signals(plist[0], sp), (K, 1)))
-    assert fleet.state is not None and np.shares_memory(state, fleet.state)
-    assert np.all(state[:, :3] != 0)
+    assert np.all(fleet.position != 1)
     fleet.reset()
-    assert np.all(state == 0) and np.shares_memory(state, fleet.state)
-    assert np.all(fleet.speeds == 0)
-    fleet.reset(np.ones(12))
-    assert np.all(state == 1)
+    assert np.all(fleet.state == 0) and np.all(fleet.speeds == 0)
+    fleet.reset(np.full(12, 2.))
+    assert np.all(fleet.state == 2)
 
 
 

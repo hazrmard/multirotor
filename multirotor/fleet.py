@@ -117,6 +117,9 @@ class Fleet:
         # sets the precision that is kept: see `step_speeds`.
         self._width = N_BODY_STATES + (n if self._motors else 0) + int(self._battery)
         self._x = np.zeros((len(vehicles), self._width))
+        # The body states, float64 whatever the dtype. The public properties
+        # return copies of them in the dtype of the simulation.
+        self._state = self._x[:, :N_BODY_STATES]
         if self._motors:
             self._speed = self._x[:, N_BODY_STATES:N_BODY_STATES + n]
             self._voltage = np.zeros((len(vehicles), n))
@@ -197,56 +200,55 @@ class Fleet:
     def state(self) -> np.ndarray:
         """
         The body states, shape (K, 12): position ``[0:3]``, body velocity
-        ``[3:6]``, orientation ``[6:9]``, body angular rate ``[9:12]``. A view
-        of the fleet's state: changing it changes the fleet. float64 whatever the
-        dtype of the simulation.
+        ``[3:6]``, orientation ``[6:9]``, body angular rate ``[9:12]``. A copy,
+        in the dtype of the simulation: set the state with ``fleet.state = ...``.
         """
-        return self._x[:, :N_BODY_STATES]
+        return self._state.astype(self.dtype)
     @state.setter
     def state(self, state: np.ndarray):
-        self._x[:, :N_BODY_STATES] = state
+        self._state[:] = np.asarray(state, dtype=self.dtype)
 
 
     @property
     def position(self) -> np.ndarray:
-        """Positions in the inertial frame, shape (K, 3). A view."""
-        return self._x[:, 0:3]
+        """Positions in the inertial frame, shape (K, 3). A copy."""
+        return self._state[:, 0:3].astype(self.dtype)
 
 
     @property
     def velocity(self) -> np.ndarray:
-        """Body-frame velocities, shape (K, 3). A view."""
-        return self._x[:, 3:6]
+        """Body-frame velocities, shape (K, 3). A copy."""
+        return self._state[:, 3:6].astype(self.dtype)
 
 
     @property
     def inertial_velocity(self) -> np.ndarray:
         """Velocities in the inertial frame, shape (K, 3)."""
-        return fleet_inertial_velocity(np.ascontiguousarray(self.state))
+        return fleet_inertial_velocity(np.ascontiguousarray(self._state)).astype(self.dtype)
 
 
     @property
     def acceleration(self) -> np.ndarray:
-        """Body-frame accelerations at the start of the last step, shape (K, 3)."""
-        return self._dxdt[:, 3:6]
+        """Body-frame accelerations at the start of the last step, shape (K, 3). A copy."""
+        return self._dxdt[:, 3:6].astype(self.dtype)
 
 
     @property
     def orientation(self) -> np.ndarray:
-        """Euler rotations (roll, pitch, yaw), shape (K, 3). A view."""
-        return self._x[:, 6:9]
+        """Euler rotations (roll, pitch, yaw), shape (K, 3). A copy."""
+        return self._state[:, 6:9].astype(self.dtype)
 
 
     @property
     def angular_rate(self) -> np.ndarray:
-        """Angular rate of the body frame axes, shape (K, 3). A view."""
-        return self._x[:, 9:12]
+        """Angular rate of the body frame axes, shape (K, 3). A copy."""
+        return self._state[:, 9:12].astype(self.dtype)
 
 
     @property
     def euler_rate(self) -> np.ndarray:
         """Rate of change of roll, pitch and yaw, shape (K, 3)."""
-        return fleet_euler_rate(np.ascontiguousarray(self.state))
+        return fleet_euler_rate(np.ascontiguousarray(self._state)).astype(self.dtype)
 
 
     @property
@@ -334,8 +336,7 @@ class Fleet:
     def _round_state(self) -> None:
         "Keep the body states at the precision of the simulation's dtype."
         if self.dtype != np.float64:
-            body = self._x[:, :N_BODY_STATES]
-            body[:] = body.astype(self.dtype)
+            self._state[:] = self._state.astype(self.dtype)
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -356,10 +357,10 @@ class Fleet:
         self.t += self.simulation.dt
         u = np.ascontiguousarray(np.asarray(u, dtype=float))
         args = (u[:, :3].copy(), u[:, 3:].copy()) + self._body_args()
-        x0 = np.ascontiguousarray(self.state).reshape(-1)
+        x0 = np.ascontiguousarray(self._state).reshape(-1)
         self._dxdt[:] = fleet_rhs_body(self.t, x0, *args).reshape(len(self), -1)
         x = self.integrator(fleet_rhs_body, x0, self.simulation.dt, args)
-        self.state = x.reshape(len(self), N_BODY_STATES)
+        self._state[:] = x.reshape(len(self), N_BODY_STATES)
         self._round_state()
         return self.state
 

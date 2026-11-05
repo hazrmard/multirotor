@@ -233,9 +233,8 @@ class FleetController:
         reference = np.broadcast_to(np.asarray(reference, dtype=float), (k_vehicles, 4))
         if ref_is_error:
             target = np.empty((k_vehicles, 4))
-            target[:, :2] = fleet.position[:, :2] + reference[:, :2]
-            target[:, 2] = fleet.position[:, 2] + reference[:, 2]
-            target[:, 3] = fleet.orientation[:, 2] + reference[:, 3]
+            target[:, :3] = fleet._state[:, :3] + reference[:, :3]
+            target[:, 3] = fleet._state[:, 8] + reference[:, 3]
         else:
             target = np.ascontiguousarray(reference)
             self.reference = target.astype(fleet.dtype)
@@ -245,8 +244,8 @@ class FleetController:
             if use_feed_forward else np.zeros((k_vehicles, 2))
         action = np.empty((k_vehicles, 4))
         fleet_cascaded_pid_step(
-            self.params, self.state, target, np.ascontiguousarray(fleet.state),
-            np.ascontiguousarray(fleet.acceleration), fleet._inertia, fleet._mass,
+            self.params, self.state, target, np.ascontiguousarray(fleet._state),
+            np.ascontiguousarray(fleet._dxdt[:, 3:6]), fleet._inertia, fleet._mass,
             fleet.weight, float(fleet.simulation.dt), self.n, self.steps_p,
             self.steps_a, self.steps_z, feed_forward, use_feed_forward,
             self.feedforward_weight, self.leashing, self.square_root_position,
