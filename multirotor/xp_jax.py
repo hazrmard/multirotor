@@ -13,8 +13,13 @@ from jax.numpy import (
 
 
 def _as_arrays(tree):
-    "numpy arrays can't be indexed by a traced loop index; JAX arrays can."
-    return jax.tree_util.tree_map(jnp.asarray, tree)
+    """
+    numpy arrays can't be indexed by a traced loop index; JAX arrays can. Python
+    scalars and functions are left as they are, so that counts stay static.
+    """
+    keep = (int, float, bool)
+    return jax.tree_util.tree_map(
+        lambda a: a if callable(a) or isinstance(a, keep) else jnp.asarray(a), tree)
 
 
 
@@ -55,6 +60,16 @@ def fold(f, init, n, consts):
     "``acc = f(acc, i, consts)`` for ``i`` in ``range(n)``, starting from ``init``."
     consts = _as_arrays(consts)
     return lax.scan(lambda acc, i: (f(acc, i, consts), None), init, jnp.arange(n))[0]
+
+
+
+def scan(f, init, n, consts):
+    """
+    ``carry, y = f(carry, i, consts)`` for ``i`` in ``range(n)``, starting from
+    ``init``. Returns the last carry and the ``y`` of every step, shape (n, k).
+    """
+    consts = _as_arrays(consts)
+    return lax.scan(lambda carry, i: f(carry, i, consts), init, jnp.arange(n))
 
 
 

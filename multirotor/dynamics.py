@@ -53,7 +53,9 @@ Which one `Multirotor` integrates:
 from typing import Tuple
 
 import numpy as np
-from numba import njit
+
+from . import xp_numba as xp
+from .lazy import build
 
 from .coords import rotating_frame_derivative
 from .physics import (
@@ -67,7 +69,6 @@ N_BODY_STATES = 12
 
 
 
-@njit
 def rhs_body(
     t: float, x: np.ndarray, forces: np.ndarray, torques: np.ndarray, g: float,
     mass: float, inertia_matrix: np.ndarray, inertia_matrix_inverse: np.ndarray
@@ -109,7 +110,6 @@ def rhs_body(
 
 
 
-@njit
 def rhs_motor_only(
     t: float, speed: np.ndarray, u: np.ndarray, max_voltage: float,
     motor_params: np.ndarray
@@ -140,7 +140,6 @@ def rhs_motor_only(
 
 
 
-@njit
 def rhs_body_with_motors(
     t: float, x: np.ndarray, u: np.ndarray, max_voltage: float,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
@@ -192,16 +191,29 @@ def rhs_body_with_motors(
     body_state = x[:N_BODY_STATES]
     speeds = x[N_BODY_STATES:]
     forces, torques = forces_torques(speeds, prop_params, clockwise, positions)
-    dxdt = np.empty_like(x)
-    dxdt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
-        inertia_matrix, inertia_matrix_inverse)
-    dxdt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
-    return dxdt
+    return xp.concatenate((
+        body_derivative(
+            forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
+            inertia_matrix, inertia_matrix_inverse),
+        motor_acc(speeds, u, max_voltage, motor_params)))
 
 
 
-@njit
+def _no_current(op):
+    "A battery that is cut off or empty supplies no current, and the motors get no voltage."
+    return op[0], 0., 0.
+
+
+
+def _supplying(op):
+    open_circuit_voltage, speeds, u, motor_params, battery_params = op
+    terminal_voltage, power, _ = battery_operating_point(
+        speeds, u, open_circuit_voltage,
+        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
+    return terminal_voltage, power / terminal_voltage, terminal_voltage
+
+
+
 def battery_state(
     speeds: np.ndarray, u: np.ndarray, charge: float, cutoff: bool,
     motor_params: np.ndarray, battery_params: np.ndarray, ocv_soc: np.ndarray,
@@ -240,16 +252,12 @@ def battery_state(
     """
     soc = 1. - charge / battery_params[BATTERY_CAPACITY]
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
-    if cutoff or soc <= 0.:
-        return open_circuit_voltage, 0., 0.
-    terminal_voltage, power, _ = battery_operating_point(
-        speeds, u, open_circuit_voltage,
-        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
-    return terminal_voltage, power / terminal_voltage, terminal_voltage
+    return xp.cond(
+        cutoff | (soc <= 0.), _no_current, _supplying,
+        (open_circuit_voltage, speeds, u, motor_params, battery_params))
 
 
 
-@njit
 def rhs_body_with_motors_and_battery(
     t: float, x: np.ndarray, u: np.ndarray, cutoff: bool,
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
@@ -291,14 +299,23 @@ def rhs_body_with_motors_and_battery(
         speeds, u, charge, cutoff, motor_params, battery_params, ocv_soc,
         ocv_voltage)
     forces, torques = forces_torques(speeds, prop_params, clockwise, positions)
-    dxdt = np.empty_like(x)
-    dxdt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
-        inertia_matrix, inertia_matrix_inverse)
-    dxdt[N_BODY_STATES:N_BODY_STATES + n] = motor_acc(
-        speeds, u, motor_voltage_limit, motor_params)
-    dxdt[N_BODY_STATES + n] = battery_current
-    return dxdt
+    return xp.concatenate((
+        body_derivative(
+            forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
+            inertia_matrix, inertia_matrix_inverse),
+        motor_acc(speeds, u, motor_voltage_limit, motor_params),
+        xp.array((battery_current,))))
+
+
+
+# The equations above are plain Python against ``xp``; compile them for numba
+# under their own names. `multirotor.xp_jax` builds the same source for JAX.
+NAMES = (
+    'rhs_body', 'rhs_motor_only', 'rhs_body_with_motors', '_no_current',
+    '_supplying', 'battery_state', 'rhs_body_with_motors_and_battery',
+)
+SOURCE = {name: globals()[name] for name in NAMES}
+globals().update(vars(build(SOURCE, NAMES, 'numba', globals())))
 
 
 
@@ -338,9 +355,8 @@ def rhs_body_with_motors_blade_element(
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
     torques = body_torques(thrusts, drag_torques, clockwise, positions)
     forces = np.asarray([0., 0., thrusts.sum()])
-    dxdt = np.empty_like(x)
-    dxdt[:N_BODY_STATES] = body_derivative(
-        forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
-        inertia_matrix, inertia_matrix_inverse)
-    dxdt[N_BODY_STATES:] = motor_acc(speeds, u, max_voltage, motor_params)
-    return dxdt
+    return xp.concatenate((
+        body_derivative(
+            forces + disturbance[:3], torques + disturbance[3:], body_state, g, mass,
+            inertia_matrix, inertia_matrix_inverse),
+        motor_acc(speeds, u, max_voltage, motor_params)))

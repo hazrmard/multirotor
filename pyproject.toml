@@ -22,6 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 control = ["control"]
+# Differentiable closed-loop rollouts (multirotor.rollout, built for JAX)
+jax = ["jax"]
 
 [dependency-groups]
 dev = [

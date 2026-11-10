@@ -78,6 +78,23 @@ def fold(f, init, n, consts):
 
 
 @njit(inline='always')
+def scan(f, init, n, consts):
+    """
+    ``carry, y = f(carry, i, consts)`` for ``i`` in ``range(n)``, starting from
+    ``init``. Returns the last carry and the ``y`` of every step, shape (n, k).
+    Each ``y`` is a 1-D array of the same length; ``n`` is at least 1.
+    """
+    carry, y = f(init, 0, consts)
+    ys = np.empty((n, y.shape[0]))
+    ys[0] = y
+    for i in range(1, n):
+        carry, y = f(carry, i, consts)
+        ys[i] = y
+    return carry, ys
+
+
+
+@njit(inline='always')
 def cond(pred, f, g, operand):
     "``f(operand)`` if ``pred`` else ``g(operand)``. Only the chosen one runs."
     if pred:
