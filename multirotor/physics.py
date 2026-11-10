@@ -45,6 +45,9 @@ import numpy as np
 from numba import njit
 from scipy.optimize import fsolve
 
+from . import xp_numba as xp
+from .lazy import build
+
 
 
 # Row indices of the parameter matrices in `multirotor.data`. Each matrix has
@@ -164,7 +167,23 @@ def thrusts_blade_element_model(
 
 
 
-@njit
+def _voltage(i, c):
+    "Voltage of motor ``i``. ``c`` is the arguments of `motor_electrical`."
+    speed, u, max_voltage, p = c
+    return xp.minimum(xp.maximum(p[MOTOR_SPEED_VOLTAGE_SCALING, i] * u[i], 0.), max_voltage)
+
+
+
+def _current(i, c):
+    "Current of motor ``i``. ``c`` is the arguments of `motor_electrical`."
+    speed, u, max_voltage, p = c
+    back_emf = speed[i] * p[MOTOR_K_EMF, i]
+    return xp.minimum(
+        xp.maximum((_voltage(i, c) - back_emf) / p[MOTOR_RESISTANCE, i], 0.),
+        p[MOTOR_MAX_CURRENT, i])
+
+
+
 def motor_electrical(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -189,22 +208,23 @@ def motor_electrical(
     Tuple[np.ndarray, np.ndarray]
         The voltage (V) and current (A) of each motor.
     """
-    p = motor_params
+
     n = speed.shape[0]
-    voltage = np.empty(n)
-    current = np.empty(n)
-    for i in range(n):
-        voltage[i] = min(max(p[MOTOR_SPEED_VOLTAGE_SCALING, i] * u[i], 0.), max_voltage)
-        back_emf = speed[i] * p[MOTOR_K_EMF, i]
-        current[i] = min(
-            max((voltage[i] - back_emf) / p[MOTOR_RESISTANCE, i], 0.),
-            p[MOTOR_MAX_CURRENT, i]
-        )
-    return voltage, current
+    consts = (speed, u, max_voltage, motor_params)
+    return xp.map_(_voltage, n, consts), xp.map_(_current, n, consts)
 
 
 
-@njit
+def _acc(i, c):
+    "Angular acceleration of motor ``i``. ``c`` is the arguments of `motor_acc`."
+    speed, u, max_voltage, p = c
+    torque = p[MOTOR_K_TORQUE, i] * _current(i, c)
+    friction = p[MOTOR_K_DF, i] * speed[i]
+    drag = p[MOTOR_K_DRAG, i] * speed[i]**2
+    return (torque - friction - drag) / p[MOTOR_MOMENT_OF_INERTIA, i]
+
+
+
 def motor_acc(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
 ) -> np.ndarray:
@@ -228,19 +248,18 @@ def motor_acc(
     np.ndarray
         Angular acceleration (rad/s^2) of each motor, shape (n,).
     """
-    p = motor_params
-    _, current = motor_electrical(speed, u, max_voltage, motor_params)
-    acc = np.empty(speed.shape[0])
-    for i in range(speed.shape[0]):
-        torque = p[MOTOR_K_TORQUE, i] * current[i]
-        friction = p[MOTOR_K_DF, i] * speed[i]
-        drag = p[MOTOR_K_DRAG, i] * speed[i]**2
-        acc[i] = (torque - friction - drag) / p[MOTOR_MOMENT_OF_INERTIA, i]
-    return acc
+
+    n = speed.shape[0]
+    return xp.map_(_acc, n, (speed, u, max_voltage, motor_params))
 
 
 
-@njit
+def _add_power(acc, i, c):
+    "``acc`` plus the electrical power of motor ``i``."
+    return acc + _voltage(i, c) * _current(i, c)
+
+
+
 def motor_power(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
 ) -> float:
@@ -257,12 +276,21 @@ def motor_power(
     float
         The sum of each motor's voltage times its current.
     """
-    voltage, current = motor_electrical(speed, u, max_voltage, motor_params)
-    return (voltage * current).sum()
+
+    return xp.fold(_add_power, 0., speed.shape[0], (speed, u, max_voltage, motor_params))
 
 
 
-@njit
+def _empty(op):
+    return 0.
+
+
+
+def _interpolate(op):
+    return xp.interp(op[0], op[1], op[2])
+
+
+
 def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> float:
     """
     Open-circuit voltage of the battery at a state of charge, interpolated
@@ -283,13 +311,32 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
     float
         The open-circuit voltage (V).
     """
-    if soc <= 0.:
-        return 0.
-    return np.interp(soc, ocv_soc, ocv_voltage)
+
+    return xp.cond(soc <= 0., _empty, _interpolate, (soc, ocv_soc, ocv_voltage))
 
 
 
-@njit
+def _ideal(op):
+    return op[1], True
+
+
+
+def _loaded(op):
+    discriminant = op[1]**2 - 4. * op[2] * op[0]
+    return xp.cond(discriminant < 0., _overloaded, _delivering, (op[1], discriminant))
+
+
+
+def _overloaded(op):
+    return 0.5 * op[0], False
+
+
+
+def _delivering(op):
+    return 0.5 * (op[0] + xp.sqrt_nonneg(op[1])), True
+
+
+
 def battery_terminal(
     power: float, open_circuit_voltage: float, internal_resistance: float
 ) -> Tuple[float, bool]:
@@ -316,16 +363,38 @@ def battery_terminal(
     Tuple[float, bool]
         The terminal voltage (V), and whether the battery can deliver the power.
     """
-    if internal_resistance == 0.:
-        return open_circuit_voltage, True
-    discriminant = open_circuit_voltage**2 - 4. * internal_resistance * power
-    if discriminant < 0.:
-        return 0.5 * open_circuit_voltage, False
-    return 0.5 * (open_circuit_voltage + np.sqrt(discriminant)), True
+
+    return xp.cond(
+        internal_resistance == 0., _ideal, _loaded,
+        (power, open_circuit_voltage, internal_resistance))
 
 
 
-@njit
+def _unlimited(op):
+    "No motor is limited by the terminal voltage: it is as first computed."
+    return op[0], op[1], op[2]
+
+
+
+def _balance(v, op):
+    "Zero where the motors' voltage limit ``v`` equals the terminal voltage."
+    _, _, _, speed, u, v_oc, resistance, motor_params = op
+    power = motor_power(speed, u, v, motor_params)
+    terminal_voltage, _ = battery_terminal(power, v_oc, resistance)
+    return v - terminal_voltage
+
+
+
+def _limited(op):
+    "Some motors are limited by the terminal voltage, found by bisection on [0, V_oc]."
+    _, _, _, speed, u, v_oc, resistance, motor_params = op
+    terminal_voltage = xp.root(_balance, 0., v_oc, 1e-12 * v_oc, op)
+    power = motor_power(speed, u, terminal_voltage, motor_params)
+    _, ok = battery_terminal(power, v_oc, resistance)
+    return terminal_voltage, power, ok
+
+
+
 def battery_operating_point(
     speed: np.ndarray, u: np.ndarray, open_circuit_voltage: float,
     internal_resistance: float, motor_params: np.ndarray
@@ -360,32 +429,37 @@ def battery_operating_point(
         The terminal voltage (V), the power (W) the motors draw, and whether the
         battery can deliver that power.
     """
+
     v_oc = open_circuit_voltage
     requested_voltage = motor_params[MOTOR_SPEED_VOLTAGE_SCALING] * u
     # Power with motor voltages limited only by the open-circuit voltage
     power = motor_power(speed, u, v_oc, motor_params)
     terminal_voltage, ok = battery_terminal(power, v_oc, internal_resistance)
-    if requested_voltage.max() <= terminal_voltage:
-        return terminal_voltage, power, ok
-    # Some motors are limited by the terminal voltage. Find the voltage V at
-    # which V equals the terminal voltage for the power drawn at V.
-    low, high = 0., v_oc
-    while high - low > 1e-12 * v_oc:
-        middle = 0.5 * (low + high)
-        power = motor_power(speed, u, middle, motor_params)
-        terminal_voltage, ok = battery_terminal(power, v_oc, internal_resistance)
-        if middle < terminal_voltage:
-            low = middle
-        else:
-            high = middle
-    terminal_voltage = 0.5 * (low + high)
-    power = motor_power(speed, u, terminal_voltage, motor_params)
-    _, ok = battery_terminal(power, v_oc, internal_resistance)
-    return terminal_voltage, power, ok
+    return xp.cond(
+        requested_voltage.max() <= terminal_voltage, _unlimited, _limited,
+        (terminal_voltage, power, ok, speed, u, v_oc, internal_resistance, motor_params))
 
 
 
-@njit
+def _dead(op):
+    "A battery that is cut off or empty supplies nothing."
+    charge_drawn, current, open_circuit_voltage, cutoff, overload = op[:5]
+    return charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.
+
+
+
+def _live(op):
+    charge_drawn, current, open_circuit_voltage, cutoff, overload = op[:5]
+    motor_speeds, u, motor_params, battery_params = op[5:]
+    voltage, _, ok = battery_operating_point(
+        motor_speeds, u, open_circuit_voltage,
+        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
+    # The cutoff takes effect from the next step
+    cutoff = cutoff | (voltage < battery_params[BATTERY_MIN_VOLTAGE])
+    return charge_drawn, current, voltage, cutoff, xp.logical_not(ok), voltage
+
+
+
 def battery_end_step(
     charge: float, charge_drawn: float, cutoff: bool, overload: bool,
     motor_speeds: np.ndarray, u: np.ndarray, motor_params: np.ndarray,
@@ -426,26 +500,34 @@ def battery_end_step(
         terminal voltage (V), whether the battery has cut off, whether it was
         overloaded, and the motors' voltage limit (V) for the next step.
     """
+
     capacity = battery_params[BATTERY_CAPACITY]
     # The integrator can overshoot the capacity by its tolerance
-    charge = min(charge, capacity - charge_drawn)
-    charge_drawn += charge
+    charge = xp.minimum(charge, capacity - charge_drawn)
+    charge_drawn = charge_drawn + charge
     current = charge / dt
     soc = 1. - charge_drawn / capacity
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
-    if cutoff or soc <= 0.:
-        return charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.
-    voltage, _, ok = battery_operating_point(
-        motor_speeds, u, open_circuit_voltage,
-        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
-    # The cutoff takes effect from the next step
-    if voltage < battery_params[BATTERY_MIN_VOLTAGE]:
-        cutoff = True
-    return charge_drawn, current, voltage, cutoff, not ok, voltage
+    return xp.cond(
+        cutoff | (soc <= 0.), _dead, _live,
+        (charge_drawn, current, open_circuit_voltage, cutoff, overload,
+         motor_speeds, u, motor_params, battery_params))
 
 
 
-@njit
+def _add_torque(acc, i, c):
+    "``acc`` plus the torques of propeller ``i``."
+    thrusts, drag_torques, clockwise, positions = c
+    # tau = r x F. Thrust acts only along the body z-axis, F = (0, 0, thrust),
+    # so the cross product reduces to these two terms. Propellers tilted away
+    # from the z-axis would need the full cross product.
+    return (
+        acc[0] + positions[1, i] * thrusts[i],
+        acc[1] - positions[0, i] * thrusts[i],
+        acc[2] + clockwise[i] * drag_torques[i])
+
+
+
 def body_torques(
     thrusts: np.ndarray, drag_torques: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
@@ -472,23 +554,16 @@ def body_torques(
     np.ndarray
         The torque (N m) on the body, shape (3,).
     """
-    # TODO: See here
-    # https://andrew.gibiansky.com/downloads/pdf/Quadcopter%20Dynamics,%20Simulation,%20and%20Control.pdf
+
     # Angular acceleration of propellers is assumed to be negligible, so it
     # contributes no torque.
-    torque = np.zeros(3)
-    for i in range(thrusts.shape[0]):
-        # tau = r x F. Thrust acts only along the body z-axis, F = (0, 0, thrust),
-        # so the cross product reduces to these two terms. Propellers tilted away
-        # from the z-axis would need the full cross product.
-        torque[0] += positions[1, i] * thrusts[i]
-        torque[1] -= positions[0, i] * thrusts[i]
-        torque[2] += clockwise[i] * drag_torques[i]
-    return torque
+    n = thrusts.shape[0]
+    roll, pitch, yaw = xp.fold(
+        _add_torque, (0., 0., 0.), n, (thrusts, drag_torques, clockwise, positions))
+    return xp.array((roll, pitch, yaw))
 
 
 
-@njit
 def forces_torques(
     speeds: np.ndarray, prop_params: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
@@ -513,16 +588,15 @@ def forces_torques(
     Tuple[np.ndarray, np.ndarray]
         The force (N) and torque (N m) on the body, each shape (3,).
     """
+
     thrusts = prop_params[PROP_K_THRUST] * speeds**2
     drag_torques = prop_params[PROP_K_DRAG] * speeds**2
     torques = body_torques(thrusts, drag_torques, clockwise, positions)
-    forces = np.zeros(3)
-    forces[2] = thrusts.sum()
+    forces = xp.array((0., 0., thrusts.sum()))
     return forces, torques
 
 
 
-@njit
 def body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
@@ -553,9 +627,6 @@ def body_derivative(
         The rate of change of state d(state)/dt
     """
     # Store state variables in a readable format
-    xI = x[0]       # Inertial frame positions
-    yI = x[1]
-    zI = x[2]
     ub = x[3]       # linear velocity along body-frame-x-axis b1
     vb = x[4]       # linear velocity along body-frame-y-axis b2
     wb = x[5]       # linear velocity along body-frame-z-axis b3
@@ -565,43 +636,48 @@ def body_derivative(
     p = x[9]        # body-frame-x-axis rotation rate
     q = x[10]       # body-frame-y-axis rotation rate
     r = x[11]       # body-frame-z-axis rotation rate
-    
-    # Pre-calculate trig values
-    cphi = np.cos(phi);   sphi = np.sin(phi)    # roll
-    cthe = np.cos(theta); sthe = np.sin(theta)  # pitch
-    cpsi = np.cos(psi);   spsi = np.sin(psi)    # yaw
 
-    f1, f2, f3 = forces # in the body frame (b1, b2, b3)
-    t1, t2, t3 = torques
+    # Pre-calculate trig values
+    cphi = xp.cos(phi);   sphi = xp.sin(phi)    # roll
+    cthe = xp.cos(theta); sthe = xp.sin(theta)  # pitch
+    cpsi = xp.cos(psi);   spsi = xp.sin(psi)    # yaw
+
+    f1, f2, f3 = forces[0], forces[1], forces[2]    # in the body frame (b1, b2, b3)
     I = inertia_matrix
     I_inv = inertia_matrix_inverse
-    
-    # Calculate the derivative of the state matrix using EOM
-    xdot = np.zeros_like(x)
 
-    # velocity = dPosition (inertial) / dt (convert body velocity to inertial)
-    # Rotation matrix (body to inertial) x body velocity
-    # dcm = direction_cosine_matrix(roll=phi, pitch=theta, yaw=psi)
-    # xdot[0:3] = body_to_inertial(x[3:6], dcm)
-    xdot[0] = cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
-        (sphi*spsi+cphi*sthe*cpsi) * wb  # = xIdot 
-    xdot[1] = cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \
-        (-sphi*cpsi+cphi*sthe*spsi) * wb # = yIdot 
-    xdot[2] = (-sthe * ub + sphi*cthe * vb + cphi*cthe * wb) # = zIdot
-
-    #  Acceleration = dVelocity (body frame) / dt
-    #           External forces     Gravity             Coriolis effect
-    xdot[3] = 1/mass * (f1)     + g * sthe          + r * vb - q * wb  # = udot
-    xdot[4] = 1/mass * (f2)     - g * sphi * cthe   - r * ub + p * wb # = vdot
-    xdot[5] = 1/mass * (f3)     - g * cphi * cthe   + q * ub - p * vb # = wdot
-
-    # Orientation
-    xdot[6] = p + (q*sphi + r*cphi) * sthe / cthe  # = phidot
-    xdot[7] = q * cphi - r * sphi  # = thetadot
-    xdot[8] = (q * sphi + r * cphi) / cthe  # = psidot
-
+    pose_rate = xp.array([
+        # velocity = dPosition (inertial) / dt: body velocity rotated to inertial
+        cthe*cpsi*ub + (-cphi * spsi + sphi*sthe*cpsi) * vb + \
+            (sphi*spsi+cphi*sthe*cpsi) * wb,
+        cthe*spsi * ub + (cphi*cpsi+sphi*sthe*spsi) * vb + \
+            (-sphi*cpsi+cphi*sthe*spsi) * wb,
+        -sthe * ub + sphi*cthe * vb + cphi*cthe * wb,
+        # Acceleration = dVelocity (body frame) / dt
+        #           External forces     Gravity             Coriolis effect
+        1/mass * (f1)     + g * sthe          + r * vb - q * wb,
+        1/mass * (f2)     - g * sphi * cthe   - r * ub + p * wb,
+        1/mass * (f3)     - g * cphi * cthe   + q * ub - p * vb,
+        # Orientation
+        p + (q*sphi + r*cphi) * sthe / cthe,
+        q * cphi - r * sphi,
+        (q * sphi + r * cphi) / cthe,
+    ])
     # Angular rate
-    gyro = np.cross(x[9:12], I @ x[9:12])
-    xdot[9:12] = I_inv @ (torques - gyro)
-    
-    return xdot
+    gyro = xp.cross(x[9:12], I @ x[9:12])
+    return xp.concatenate((pose_rate, I_inv @ (torques - gyro)))
+
+
+
+# The equations above are plain Python against ``xp``. Compile them for numba
+# here, under their own names; `multirotor.xp_jax` builds the same source for
+# JAX with ``build(SOURCE, NAMES, 'jax', vars(physics))``.
+NAMES = (
+    '_voltage', '_current', 'motor_electrical', '_acc', 'motor_acc', '_add_power',
+    'motor_power', '_empty', '_interpolate', 'battery_ocv', '_ideal', '_loaded',
+    '_overloaded', '_delivering', 'battery_terminal', '_unlimited', '_balance',
+    '_limited', 'battery_operating_point', '_dead', '_live', 'battery_end_step',
+    '_add_torque', 'body_torques', 'forces_torques', 'body_derivative',
+)
+SOURCE = {name: globals()[name] for name in NAMES}
+globals().update(vars(build(SOURCE, NAMES, 'numba', globals())))
