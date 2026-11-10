@@ -73,8 +73,8 @@ def test_numba_rollout_matches_the_loop(kind):
     steps = 60
     state, plant, ctrl = arguments(kind)
     built = BUILT
-    _, trajectory = built.closed_loop(
-        getattr(built, 'step_' + kind), state, plant, ctrl,
+    _, trajectory = getattr(built, 'closed_loop_' + kind)(
+        state, plant, ctrl,
         np.tile(TARGET, (steps, 1)), DT, SUBSTEPS[kind])
     expected = reference(kind, steps)
     assert np.abs(trajectory - expected)[:, :3].max() < POSITION_TOLERANCE[kind]

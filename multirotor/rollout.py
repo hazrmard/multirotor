@@ -140,31 +140,62 @@ def allocate(alloc_inverse, thrust_torques):
 
 
 
-def _loop_step(carry, i, c):
+def _drive(carry, i, c):
+    "The controller's action and the propeller speeds it asks for."
     controller_x, memo, state = carry
-    plant_step, plant, ctrl, targets, dt, substeps = c
+    plant, ctrl, targets, dt = c[0], c[1], c[2], c[3]
     (cparams, alloc_inverse, steps, feedforward_weight, leashing, square_root_position,
      square_root_attitude) = ctrl
     g, mass, inertia = plant[0], plant[1], plant[2]
-    body_state = state[0][:N_BODY_STATES]
     controller_x, memo, action = cascaded_step(
-        cparams, controller_x, memo, targets[i], body_state, state[2], inertia, mass,
-        mass * g, dt, i, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
+        cparams, controller_x, memo, targets[i], state[0][:N_BODY_STATES], state[2], inertia,
+        mass, mass * g, dt, i, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
         feedforward_weight, leashing, square_root_position, square_root_attitude)
-    u = allocate(alloc_inverse, action)
-    state = plant_step(state, u, plant, i * dt, dt, substeps)
-    return (controller_x, memo, state), xp.concatenate((state[0][:N_BODY_STATES], action))
+    return controller_x, memo, action, allocate(alloc_inverse, action)
 
 
 
-def closed_loop(plant_step, state0, plant, ctrl, targets, dt, substeps):
+def _record(state, action):
+    return xp.concatenate((state[0][:N_BODY_STATES], action))
+
+
+
+def _loop_step_body(carry, i, c):
+    controller_x, memo, action, u = _drive(carry, i, c)
+    state = step_body(carry[2], u, c[0], i * c[3], c[3], c[4])
+    return (controller_x, memo, state), _record(state, action)
+
+
+
+def _loop_step_motors(carry, i, c):
+    controller_x, memo, action, u = _drive(carry, i, c)
+    state = step_motors(carry[2], u, c[0], i * c[3], c[3], c[4])
+    return (controller_x, memo, state), _record(state, action)
+
+
+
+def _loop_step_motors_battery(carry, i, c):
+    controller_x, memo, action, u = _drive(carry, i, c)
+    state = step_motors_battery(carry[2], u, c[0], i * c[3], c[3], c[4])
+    return (controller_x, memo, state), _record(state, action)
+
+
+
+def _carry0(state0):
+    return (
+        xp.array(((0.,) * 12,) * 7),
+        (xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.))), state0)
+
+
+
+def closed_loop_body(state0, plant, ctrl, targets, dt, substeps):
     """
-    Run the controller and the vehicle for ``len(targets)`` steps, from rest.
+    Run the controller and a vehicle without motors for ``len(targets)`` steps, from
+    rest. `closed_loop_motors` and `closed_loop_motors_battery` are the same for a
+    vehicle with motors, and with motors and a battery.
 
     Parameters
     ----------
-    plant_step
-        `step_body`, `step_motors` or `step_motors_battery`.
     state0 : tuple
         The vehicle's ``(x, aux, acc)`` at the start.
     plant : tuple
@@ -186,19 +217,34 @@ def closed_loop(plant_step, state0, plant, ctrl, targets, dt, substeps):
         Per step, the vehicle's 12 body states after the step and the 4 controller
         outputs (thrust and torques) that drove it, shape (n, 16).
     """
-    carry0 = (
-        xp.array(((0.,) * 12,) * 7), (xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.))),
-        state0)
     return xp.scan(
-        _loop_step, carry0, targets.shape[0], (plant_step, plant, ctrl, targets, dt, substeps))
+        _loop_step_body, _carry0(state0), targets.shape[0], (plant, ctrl, targets, dt, substeps))
+
+
+
+def closed_loop_motors(state0, plant, ctrl, targets, dt, substeps):
+    "`closed_loop_body` for a vehicle with motors."
+    return xp.scan(
+        _loop_step_motors, _carry0(state0), targets.shape[0], (plant, ctrl, targets, dt, substeps))
+
+
+
+def closed_loop_motors_battery(state0, plant, ctrl, targets, dt, substeps):
+    "`closed_loop_body` for a vehicle with motors and a battery."
+    return xp.scan(
+        _loop_step_motors_battery, _carry0(state0), targets.shape[0],
+        (plant, ctrl, targets, dt, substeps))
 
 
 
 NAMES = (
     'rk4_step', 'integrate', '_substep', '_rhs_body', '_rhs_motors', '_rhs_battery', 'step_body', 'step_motors',
-    'step_motors_battery', '_speed', 'allocate', '_loop_step', 'closed_loop')
+    'step_motors_battery', '_speed', 'allocate', '_drive', '_record', '_loop_step_body', '_loop_step_motors',
+    '_loop_step_motors_battery', '_carry0', 'closed_loop_body', 'closed_loop_motors',
+    'closed_loop_motors_battery')
 SOURCE = {name: globals()[name] for name in NAMES}
-globals().update(vars(build(SOURCE, NAMES, 'numba', globals())))
+NOT_INLINED = ('step_body', 'step_motors', 'step_motors_battery')   # large, and called once per step
+globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))
 
 
 
@@ -245,7 +291,7 @@ def plant_arguments(vehicle):
 
 
 def controller_arguments(controller, vehicle):
-    "The ``ctrl`` tuple of `closed_loop`, read from a `multirotor.controller.Controller`."
+    "The ``ctrl`` tuple of the ``closed_loop_<kind>`` functions, read from a `multirotor.controller.Controller`."
     return (
         np.array(controller._data.params, float), np.array(vehicle.alloc_inverse, float),
         (controller.steps_p, controller.steps_a, controller.steps_z),
@@ -262,15 +308,17 @@ def build_for(backend: str):
     Returns
     -------
     types.SimpleNamespace
-        `closed_loop`, `step_body`, `step_motors` and `step_motors_battery`, and
+        `closed_loop_body`, `closed_loop_motors`, `closed_loop_motors_battery`, `step_body`, `step_motors` and `step_motors_battery`, and
         the other functions of this module.
     """
     from .controller import cascade
     from . import dynamics, physics
     built_physics = build(physics.SOURCE, physics.NAMES, backend, vars(physics))
     built_cascade = build(
-        cascade.SOURCE, cascade.NAMES, backend, {**vars(cascade), **vars(built_physics)})
+        cascade.SOURCE, cascade.NAMES, backend, {**vars(cascade), **vars(built_physics)},
+        cascade.NOT_INLINED)
     built_dynamics = build(
         dynamics.SOURCE, dynamics.NAMES, backend, {**vars(dynamics), **vars(built_physics)})
     return build(SOURCE, NAMES, backend, {
-        **globals(), **vars(built_physics), **vars(built_cascade), **vars(built_dynamics)})
+        **globals(), **vars(built_physics), **vars(built_cascade), **vars(built_dynamics)},
+        NOT_INLINED)

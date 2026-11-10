@@ -5,10 +5,15 @@ The primitives of `multirotor.xp_numba`, for JAX: the same names, built on
 import jax
 import jax.numpy as jnp
 from jax import lax
+
+from . import _cache
 from jax.numpy import (
     abs, array, concatenate, cos, cross, interp, logical_not, maximum,
     minimum, sin, sqrt, stack, tan
 )
+
+
+_cache.configure_jax(jax)
 
 
 

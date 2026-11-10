@@ -346,4 +346,5 @@ NAMES = (
     '_altitude', '_climb', '_velocity', '_rate', '_attitude', '_leash', '_leashed', '_unleashed',
     '_position', '_skip', '_run_z', '_run_p', '_run_a', 'cascaded_step')
 SOURCE = {name: globals()[name] for name in NAMES}
-globals().update(vars(build(SOURCE, NAMES, 'numba', globals())))
+NOT_INLINED = ('cascaded_step',)   # large, and called once per step
+globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))

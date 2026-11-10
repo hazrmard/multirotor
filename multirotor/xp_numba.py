@@ -12,6 +12,8 @@ import math
 
 import numpy as np
 from numba import njit
+
+from . import _cache
 from numpy import (
     abs, array, concatenate, cos, cross, interp, logical_not, maximum,
     minimum, sin, sqrt, stack, tan
@@ -19,21 +21,25 @@ from numpy import (
 
 
 
-@njit(inline='always')
+CACHE = _cache.configure_numba()
+
+
+
+@njit(inline='always', cache=CACHE)
 def sqrt_nonneg(x):
     "Square root of ``x``, or 0 where ``x`` is negative."
     return math.sqrt(max(x, 0.))
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def select(pred, a, b):
     "``a`` if ``pred`` else ``b``, for scalars."
     return a if pred else b
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def map_(f, n, consts):
     "Array of ``f(i, consts)`` for ``i`` in ``range(n)``. ``f`` returns a float."
     out = np.empty(n)
@@ -43,7 +49,7 @@ def map_(f, n, consts):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def map_rows(f, n, consts):
     "Array, shape (k, n), of the k floats that ``f(i, consts)`` returns, for ``i`` in ``range(n)``."
     first = f(0, consts)
@@ -58,7 +64,7 @@ def map_rows(f, n, consts):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def with_row(x, j, row):
     "A copy of the matrix ``x`` whose row ``j`` is ``row``."
     out = x.copy()
@@ -67,7 +73,7 @@ def with_row(x, j, row):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def fold(f, init, n, consts):
     "``acc = f(acc, i, consts)`` for ``i`` in ``range(n)``, starting from ``init``."
     acc = init
@@ -77,7 +83,7 @@ def fold(f, init, n, consts):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def scan(f, init, n, consts):
     """
     ``carry, y = f(carry, i, consts)`` for ``i`` in ``range(n)``, starting from
@@ -94,7 +100,7 @@ def scan(f, init, n, consts):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def cond(pred, f, g, operand):
     "``f(operand)`` if ``pred`` else ``g(operand)``. Only the chosen one runs."
     if pred:
@@ -103,7 +109,7 @@ def cond(pred, f, g, operand):
 
 
 
-@njit(inline='always')
+@njit(inline='always', cache=CACHE)
 def root(f, low, high, tol, args):
     """
     Root of an increasing ``f(x, args)`` in ``[low, high]`` by bisection, to

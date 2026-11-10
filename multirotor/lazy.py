@@ -15,7 +15,7 @@ from numba import njit
 
 def build(
     source: Dict[str, types.FunctionType], names: Sequence[str], backend: str,
-    namespace: dict
+    namespace: dict, not_inlined: Sequence[str] = ()
 ) -> types.SimpleNamespace:
     """
     Copies of the functions ``names`` of ``source`` for a backend.
@@ -34,6 +34,9 @@ def build(
     namespace : dict
         The globals of the module the functions came from (its constants and
         helpers). It is copied, not changed.
+    not_inlined : Sequence[str]
+        Functions that numba compiles once and calls, instead of inlining into each
+        caller. Large functions that are called once are faster to compile this way.
 
     Returns
     -------
@@ -42,7 +45,11 @@ def build(
         signatures.
     """
     xp = import_module(f'.xp_{backend}', __package__)
-    jit = (lambda f: njit(inline='always')(f)) if backend == 'numba' else (lambda f: f)
+    cache = backend == 'numba' and xp.CACHE
+    never = set(not_inlined)
+    jit = (
+        lambda f: njit(inline='never' if f.__name__ in never else 'always', cache=cache)(f)
+    ) if backend == 'numba' else (lambda f: f)
     ns = dict(namespace)
     ns['xp'] = xp
     built = types.SimpleNamespace()
