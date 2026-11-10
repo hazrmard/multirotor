@@ -67,6 +67,7 @@ def arguments(kind: str):
 
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('kind', ('body', 'motors_battery'))
 def test_numba_rollout_matches_the_loop(kind):
     steps = 60

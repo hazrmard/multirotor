@@ -36,6 +36,7 @@ def test_jax_matches_numba():
 
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('steps,flags', (
     ((1, 1, 1), (False, False, False)), ((3, 2, 5), (True, True, True)),
     ((3, 2, 5), (True, False, True))))

@@ -62,6 +62,7 @@ def test_more_substeps_converge_for_motors():
 
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize('kind', ('motors', 'motors_battery'))
 def test_gradients_match_finite_differences(kind):
     """
