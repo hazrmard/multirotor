@@ -22,11 +22,11 @@ JAX = rollout.build_for('jax')
 
 
 
-def run_jax(kind, steps, substeps, ctrl=None, plant=None):
-    state, plant_, ctrl_ = arguments(kind)
+def run_jax(kind, steps, substeps, ctrl=None, vehicle_params=None):
+    state, vehicle_params_, ctrl_ = arguments(kind)
     state = jax.tree_util.tree_map(jnp.asarray, state)
     return getattr(JAX, 'closed_loop_' + kind)(
-        state, plant or plant_, ctrl or ctrl_,
+        state, vehicle_params or vehicle_params_, ctrl or ctrl_,
         jnp.tile(jnp.asarray(TARGET), (steps, 1)), DT, substeps)[1]
 
 
@@ -42,9 +42,9 @@ def test_jax_rollout_matches_the_loop(kind):
 
 def test_jax_rollout_matches_numba():
     steps = 30
-    state, plant, ctrl = arguments('motors_battery')
+    state, vehicle_params, ctrl = arguments('motors_battery')
     _, numba_trajectory = BUILT.closed_loop_motors_battery(
-        state, plant, ctrl, np.tile(TARGET, (steps, 1)), DT, 8)
+        state, vehicle_params, ctrl, np.tile(TARGET, (steps, 1)), DT, 8)
     trajectory = np.asarray(run_jax('motors_battery', steps, 8))
     np.testing.assert_allclose(trajectory, numba_trajectory, rtol=1e-9, atol=1e-9)
 
@@ -72,20 +72,20 @@ def test_gradients_match_finite_differences(kind):
     power-limited bisection (``xp.root``) inside the scan.
     """
     steps, substeps = 60, 8
-    state, plant, ctrl = arguments(kind)
+    state, vehicle_params, ctrl = arguments(kind)
     state = jax.tree_util.tree_map(jnp.asarray, state)
     targets = jnp.tile(jnp.asarray(TARGET), (steps, 1))
 
     def loss(theta):
         params = jnp.asarray(ctrl[0]).at[K.PID_K_P].multiply(theta[0])
-        plant_ = list(plant)
-        plant_[1] = plant[1] * theta[1]
-        plant_[7] = jnp.asarray(plant[7]).at[physics.MOTOR_RESISTANCE].multiply(theta[2])
+        vehicle_params_ = list(vehicle_params)
+        vehicle_params_[1] = vehicle_params[1] * theta[1]
+        vehicle_params_[7] = jnp.asarray(vehicle_params[7]).at[physics.MOTOR_RESISTANCE].multiply(theta[2])
         if kind == 'motors_battery':
-            plant_[10] = jnp.asarray(plant[10]).at[
+            vehicle_params_[10] = jnp.asarray(vehicle_params[10]).at[
                 physics.BATTERY_INTERNAL_RESISTANCE].multiply(theta[3])
         trajectory = getattr(JAX, 'closed_loop_' + kind)(
-            state, tuple(plant_), (params,) + ctrl[1:], targets, DT, substeps)[1]
+            state, tuple(vehicle_params_), (params,) + ctrl[1:], targets, DT, substeps)[1]
         return jnp.mean((trajectory[:, :3] - targets[:, :3])**2)
 
     value, gradient = jax.jit(jax.value_and_grad(loss))(jnp.ones(4))

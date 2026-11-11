@@ -61,9 +61,9 @@ def reference(kind: str, steps: int, integrator=odeint_integrator) -> np.ndarray
 def arguments(kind: str):
     "The rollout's arguments from a fresh vehicle and controller."
     vehicle = make_vehicle(kind)
-    found, state, plant = rollout.plant_arguments(vehicle)
+    found, state, vehicle_params = rollout.vehicle_arguments(vehicle)
     assert found == kind
-    return state, plant, rollout.controller_arguments(make_controller(pid, vehicle), vehicle)
+    return state, vehicle_params, rollout.controller_arguments(make_controller(pid, vehicle), vehicle)
 
 
 
@@ -71,10 +71,10 @@ def arguments(kind: str):
 @pytest.mark.parametrize('kind', ('body', 'motors_battery'))
 def test_numba_rollout_matches_the_loop(kind):
     steps = 60
-    state, plant, ctrl = arguments(kind)
+    state, vehicle_params, ctrl = arguments(kind)
     built = BUILT
     _, trajectory = getattr(built, 'closed_loop_' + kind)(
-        state, plant, ctrl,
+        state, vehicle_params, ctrl,
         np.tile(TARGET, (steps, 1)), DT, SUBSTEPS[kind])
     expected = reference(kind, steps)
     assert np.abs(trajectory - expected)[:, :3].max() < POSITION_TOLERANCE[kind]

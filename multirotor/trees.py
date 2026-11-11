@@ -4,16 +4,16 @@ functional rollout (`multirotor.rollout`).
 
 The rollout takes plain tuples and matrices. A *tree* is the same values with names:
 nested dicts of arrays. JAX differentiates with respect to a tree, so one can write
-``grad(loss)(gains)`` and read ``gains['ctrl_r']['k_p']`` in the result. The functions
+``grad(loss)(params)`` and read ``params['ctrl_r']['k_p']`` in the result. The functions
 come in pairs: one reads a tree out of the rollout's arguments or the imperative
 objects, the other builds the arguments, or writes the objects, from a tree.
 
-* Controller gains: `gains` and `with_gains` map a controller's parameter matrix to
-  ``{stage: {name: array}}`` and back, and `set_gains` writes a tree into a
+* Controller parameters: `controller_params` and `with_controller_params` map a controller's parameter matrix to
+  ``{stage: {name: array}}`` and back, and `set_controller_params` writes a tree into a
   `multirotor.controller.Controller`. The names are those of the stage classes
   (``k_p``, ``max_velocity``, ...), and each name's row in the matrix comes from the
   class, so the two cannot disagree.
-* Vehicle parameters: `plant_tree` and `plant_tuple`.
+* Vehicle parameters: `vehicle_params` and `vehicle_tuple`.
 * State: `get_state`, `rollout_state`, `advance_state` and `set_state` take the state of
   a vehicle and its controller out of the objects, into a rollout, and back, so that a
   simulation can alternate between the imperative classes and the rollout.
@@ -28,7 +28,7 @@ from . import physics
 from .controller import data as controller_data
 from .controller.pid import _Row, AltController, AltRateController, AttController
 from .controller.pid import PosController, RateController, VelController
-from .rollout import PLANT_FIELDS, plant_arguments
+from .rollout import VEHICLE_FIELDS, vehicle_arguments
 
 
 
@@ -56,7 +56,7 @@ def _stack(rows):
 
 
 # ---------------------------------------------------------------------------
-# Controller gains
+# Controller parameters
 
 _STAGES = {
     'ctrl_p': (PosController, controller_data.CASCADE_POSITION, controller_data.CASCADE_VELOCITY),
@@ -82,9 +82,9 @@ def _rows(stage_class) -> Dict[str, int]:
 
 
 
-def gains(params: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
+def controller_params(params: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
     """
-    The named gains and limits of a controller's parameter matrix.
+    The named gains and limits (the parameters) of a controller's parameter matrix.
 
     Parameters
     ----------
@@ -107,18 +107,18 @@ def gains(params: np.ndarray) -> Dict[str, Dict[str, np.ndarray]]:
 
 
 
-def with_gains(params, tree: Dict[str, Dict[str, np.ndarray]]):
+def with_controller_params(params, tree: Dict[str, Dict[str, np.ndarray]]):
     """
-    A copy of a parameter matrix with the gains of ``tree`` in place of its own.
+    A copy of a parameter matrix with the parameters of ``tree`` in place of its own.
     Differentiable: the copy is made with JAX if any value in the tree or the matrix
     is a JAX array.
 
     Parameters
     ----------
     params
-        The matrix, as in `gains`.
+        The matrix, as in `controller_params`.
     tree : Dict[str, Dict[str, np.ndarray]]
-        ``{stage: {name: value}}``, as `gains` returns. Only the entries present are
+        ``{stage: {name: value}}``, as `controller_params` returns. Only the entries present are
         replaced. A value is one number for all channels of the stage, or one per channel.
 
     Returns
@@ -149,9 +149,9 @@ def with_gains(params, tree: Dict[str, Dict[str, np.ndarray]]):
 
 
 
-def set_gains(controller, tree: Dict[str, Dict[str, np.ndarray]]) -> None:
+def set_controller_params(controller, tree: Dict[str, Dict[str, np.ndarray]]) -> None:
     """
-    Write gains into a `multirotor.controller.Controller`, as `Controller.set_params`
+    Write controller parameters into a `multirotor.controller.Controller`, as `Controller.set_params`
     does. Use it to apply the result of an optimization to the controller that the
     imperative classes run.
     """
@@ -177,15 +177,15 @@ _FIELDS_OF_KIND = {'body': 7, 'motors': 10, 'motors_battery': 13}
 
 
 
-def plant_tree(plant: Tuple, kind: str) -> dict:
+def vehicle_params(vehicle: Tuple, kind: str) -> dict:
     """
     The vehicle's parameters, by name.
 
     Parameters
     ----------
-    plant : tuple
-        The ``plant`` argument of a ``closed_loop_<kind>`` function, from
-        `multirotor.rollout.plant_arguments`.
+    vehicle : tuple
+        The ``vehicle`` argument of a ``closed_loop_<kind>`` function, from
+        `multirotor.rollout.vehicle_arguments`.
     kind : str
         ``'body'``, ``'motors'`` or ``'motors_battery'``.
 
@@ -201,12 +201,12 @@ def plant_tree(plant: Tuple, kind: str) -> dict:
 
     Notes
     -----
-    The inertia matrix's inverse is not in the tree: `plant_tuple` computes it, so it
+    The inertia matrix's inverse is not in the tree: `vehicle_tuple` computes it, so it
     cannot disagree with ``inertia``. The control allocation matrix is not part of the
     vehicle's parameters here: it is in the ``ctrl`` argument of a rollout, and keeps the
     model that the controller was built with when ``positions`` or ``k_thrust`` change.
     """
-    values = dict(zip(PLANT_FIELDS, plant))
+    values = dict(zip(VEHICLE_FIELDS, vehicle))
     tree = {key: values[key] for key in ('g', 'mass', 'inertia', 'clockwise', 'positions')}
     tree['propeller'] = {name: values['prop_params'][row] for name, row in _PROPELLER.items()
                          if row < len(values['prop_params'])}
@@ -227,10 +227,10 @@ def _matrix(tree: Dict[str, np.ndarray], names: Dict[str, int]):
 
 
 
-def plant_tuple(tree: dict, kind: str) -> Tuple:
+def vehicle_tuple(tree: dict, kind: str) -> Tuple:
     """
-    The ``plant`` argument of a ``closed_loop_<kind>`` function, from a tree as
-    `plant_tree` returns it. Differentiable with respect to the tree's values.
+    The ``vehicle`` argument of a ``closed_loop_<kind>`` function, from a tree as
+    `vehicle_params` returns it. Differentiable with respect to the tree's values.
     """
     values = {key: tree[key] for key in ('g', 'mass', 'inertia', 'clockwise', 'positions')}
     if _any_jax(tree['inertia']):
@@ -246,7 +246,7 @@ def plant_tuple(tree: dict, kind: str) -> Tuple:
         values['battery_params'] = _stack([tree['battery'][name] for name, _ in sorted(
             _BATTERY.items(), key=lambda item: item[1])])
         values['ocv_soc'], values['ocv_voltage'] = tree['ocv_soc'], tree['ocv_voltage']
-    return tuple(values[field] for field in PLANT_FIELDS[:_FIELDS_OF_KIND[kind]])
+    return tuple(values[field] for field in VEHICLE_FIELDS[:_FIELDS_OF_KIND[kind]])
 
 
 
@@ -266,7 +266,7 @@ def get_state(vehicle, controller) -> dict:
         ``controller``: ``n`` (steps taken), ``x`` (the state matrix) and the memo of the
         stages that run at their own rate: ``ref_vel``, ``thrust`` and ``torques``.
     """
-    _, (x, aux, acceleration), _ = plant_arguments(vehicle)
+    _, (x, aux, acceleration), _ = vehicle_arguments(vehicle)
     return {
         'vehicle': {'t': float(vehicle.t), 'x': x, 'aux': aux, 'acceleration': acceleration},
         'controller': {
@@ -327,7 +327,7 @@ def set_state(vehicle, controller, state: dict) -> None:
         If the state is not that of this kind of vehicle.
     """
     v, c = state['vehicle'], state['controller']
-    kind, (x0, _, _), _ = plant_arguments(vehicle)
+    kind, (x0, _, _), _ = vehicle_arguments(vehicle)
     x = np.asarray(v['x'], float)
     if x.shape != x0.shape:
         raise ValueError(f'The vehicle state has shape {x.shape}; expected {x0.shape}.')

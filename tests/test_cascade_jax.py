@@ -57,7 +57,7 @@ def test_gradient_through_a_rollout_matches_finite_differences(steps, flags):
             x, memo, action = JAX.cascaded_step(
                 p, x, memo, reference, state, jnp.zeros(3), INERTIA, MASS, WEIGHT,
                 SIM_DT, n, *steps, jnp.zeros(2), False, 0., leashing, sqrt_pos, sqrt_att)
-            # a toy plant that closes the loop
+            # a toy vehicle that closes the loop
             state = state.at[2].add(1e-3 * (action[0] - WEIGHT) / MASS)
             return (x, memo, state.at[6:9].add(1e-3 * action[1:])), action
         carry = (jnp.zeros((K.N_PID_STATES, 12)),

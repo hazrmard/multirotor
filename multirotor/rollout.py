@@ -23,13 +23,13 @@ The state of a vehicle is a tuple ``(x, aux, acc)``:
 
 A rollout starts from rest, or from the state of a vehicle and a controller that have
 been running: `multirotor.trees` reads that state out of the imperative classes and writes
-it back, and names the gains and parameters that a rollout is differentiated with
+it back, and names the controller and vehicle parameters that a rollout is differentiated with
 respect to.
 
 Three step functions share the signature
-``step(state, u, plant, t, dt, substeps)``: `step_body` (no motors),
-`step_motors` and `step_motors_battery`. The ``plant`` tuple is built by
-`plant_arguments`, which reads a `Multirotor`.
+``step(state, u, vehicle, t, dt, substeps)``: `step_body` (no motors),
+`step_motors` and `step_motors_battery`. The ``vehicle`` tuple is built by
+`vehicle_arguments`, which reads a `Multirotor`.
 """
 import numpy as np
 
@@ -89,9 +89,9 @@ def _rhs_battery(t, x, a):
 
 
 
-def step_body(state, u, plant, t, dt, substeps):
+def step_body(state, u, vehicle, t, dt, substeps):
     "A vehicle without motors: the speed signals are the propeller speeds."
-    g, mass, inertia, inertia_inverse, prop_params, clockwise, positions = plant[:7]
+    g, mass, inertia, inertia_inverse, prop_params, clockwise, positions = vehicle[:7]
     forces, torques = forces_torques(u, prop_params, clockwise, positions)
     x, dxdt = integrate(
         _rhs_body, t, state[0], dt, substeps,
@@ -100,10 +100,10 @@ def step_body(state, u, plant, t, dt, substeps):
 
 
 
-def step_motors(state, u, plant, t, dt, substeps):
+def step_motors(state, u, vehicle, t, dt, substeps):
     "A vehicle with motors and no battery model; the motors see ``max_voltage``."
     (g, mass, inertia, inertia_inverse, prop_params, clockwise, positions,
-     motor_params, max_voltage, disturbance) = plant[:10]
+     motor_params, max_voltage, disturbance) = vehicle[:10]
     x, dxdt = integrate(
         _rhs_motors, t, state[0], dt, substeps,
         (u, max_voltage, disturbance, g, mass, inertia, inertia_inverse,
@@ -112,11 +112,11 @@ def step_motors(state, u, plant, t, dt, substeps):
 
 
 
-def step_motors_battery(state, u, plant, t, dt, substeps):
+def step_motors_battery(state, u, vehicle, t, dt, substeps):
     "A vehicle with motors and a battery model, which sags and can cut the motors off."
     (g, mass, inertia, inertia_inverse, prop_params, clockwise, positions,
      motor_params, max_voltage, disturbance, battery_params, ocv_soc,
-     ocv_voltage) = plant[:13]
+     ocv_voltage) = vehicle[:13]
     x, aux = state[0], state[1]
     charge_drawn, cutoff, overload = aux[0], aux[1] > .5, aux[2] > .5
     x_ext = xp.concatenate((x, xp.array((0.,))))
@@ -148,10 +148,10 @@ def allocate(alloc_inverse, thrust_torques):
 def _drive(carry, i, c):
     "The controller's action and the propeller speeds it asks for."
     controller_x, memo, state = carry
-    plant, ctrl, targets, dt, n0 = c[0], c[1], c[2], c[3], c[5]
+    vehicle, ctrl, targets, dt, n0 = c[0], c[1], c[2], c[3], c[5]
     (cparams, alloc_inverse, steps, feedforward_weight, leashing, square_root_position,
      square_root_attitude) = ctrl
-    g, mass, inertia = plant[0], plant[1], plant[2]
+    g, mass, inertia = vehicle[0], vehicle[1], vehicle[2]
     controller_x, memo, action = cascaded_step(
         cparams, controller_x, memo, targets[i], state[0][:N_BODY_STATES], state[2], inertia,
         mass, mass * g, dt, i + n0, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
@@ -195,7 +195,7 @@ def _carry0(state0, start):
 
 
 
-def closed_loop_body(state0, plant, ctrl, targets, dt, substeps, start=None):
+def closed_loop_body(state0, vehicle, ctrl, targets, dt, substeps, start=None):
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
     rest or from a given controller state. `closed_loop_motors` and `closed_loop_motors_battery` are the same for a
@@ -205,8 +205,8 @@ def closed_loop_body(state0, plant, ctrl, targets, dt, substeps, start=None):
     ----------
     state0 : tuple
         The vehicle's ``(x, aux, acc)`` at the start.
-    plant : tuple
-        The vehicle's arguments, from `plant_arguments`.
+    vehicle : tuple
+        The vehicle's arguments, from `vehicle_arguments`.
     ctrl : tuple
         The controller's arguments, from `controller_arguments`.
     targets : np.ndarray
@@ -230,24 +230,24 @@ def closed_loop_body(state0, plant, ctrl, targets, dt, substeps, start=None):
     """
     carry0, n0 = _carry0(state0, start)
     return xp.scan(
-        _loop_step_body, carry0, targets.shape[0], (plant, ctrl, targets, dt, substeps, n0))
+        _loop_step_body, carry0, targets.shape[0], (vehicle, ctrl, targets, dt, substeps, n0))
 
 
 
-def closed_loop_motors(state0, plant, ctrl, targets, dt, substeps, start=None):
+def closed_loop_motors(state0, vehicle, ctrl, targets, dt, substeps, start=None):
     "`closed_loop_body` for a vehicle with motors."
     carry0, n0 = _carry0(state0, start)
     return xp.scan(
-        _loop_step_motors, carry0, targets.shape[0], (plant, ctrl, targets, dt, substeps, n0))
+        _loop_step_motors, carry0, targets.shape[0], (vehicle, ctrl, targets, dt, substeps, n0))
 
 
 
-def closed_loop_motors_battery(state0, plant, ctrl, targets, dt, substeps, start=None):
+def closed_loop_motors_battery(state0, vehicle, ctrl, targets, dt, substeps, start=None):
     "`closed_loop_body` for a vehicle with motors and a battery."
     carry0, n0 = _carry0(state0, start)
     return xp.scan(
         _loop_step_motors_battery, carry0, targets.shape[0],
-        (plant, ctrl, targets, dt, substeps, n0))
+        (vehicle, ctrl, targets, dt, substeps, n0))
 
 
 
@@ -262,20 +262,20 @@ globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))
 
 
 
-PLANT_FIELDS = (
+VEHICLE_FIELDS = (
     'g', 'mass', 'inertia', 'inertia_inverse', 'prop_params', 'clockwise', 'positions',
     'motor_params', 'max_voltage', 'disturbance',
     'battery_params', 'ocv_soc', 'ocv_voltage')
 """
-The elements of the ``plant`` tuple, in order. A vehicle without motors has the first 7,
+The elements of the ``vehicle`` tuple, in order. A vehicle without motors has the first 7,
 with motors the first 10, and with motors and a battery all 13.
 """
 
 
 
-def plant_arguments(vehicle):
+def vehicle_arguments(vehicle):
     """
-    The step function's name, the vehicle's state and its ``plant`` tuple, read
+    The step function's name, the vehicle's state and its ``params`` tuple, read
     from a `multirotor.simulation.Multirotor`. Arrays are float64 copies.
 
     Returns
@@ -285,7 +285,7 @@ def plant_arguments(vehicle):
         ``step_<kind>`` function.
     state : tuple
         ``(x, aux, acc)`` from the vehicle's current state.
-    plant : tuple
+    params : tuple
         The arguments of the step function.
 
     Raises
@@ -296,23 +296,23 @@ def plant_arguments(vehicle):
     if not vehicle._data.use_thrust_constant:
         raise ValueError('Blade-element thrust is not supported.')
     p = vehicle._kernel_params
-    plant = (
+    params = (
         p.g, p.mass, np.array(p.inertia_matrix, float), np.array(p.inertia_matrix_inverse, float),
         np.array(p.prop_params, float), np.array(p.clockwise, float), np.array(p.positions, float))
     x = np.array(vehicle.state, float)
     aux = np.zeros(3)
     acceleration = np.array(vehicle.acceleration, float)
     if vehicle._data.motors is None:
-        return 'body', (x, aux, acceleration), plant
-    plant += (
+        return 'body', (x, aux, acceleration), params
+    params += (
         np.array(p.motor_params, float), float(vehicle.battery.motor_voltage_limit), np.zeros(6))
     x = np.concatenate((x, vehicle._data.motors.speed.astype(float)))
     if not vehicle.battery.has_model:
-        return 'motors', (x, aux, acceleration), plant
+        return 'motors', (x, aux, acceleration), params
     b = vehicle.battery
-    plant += (np.array(b._params_vector, float), np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
+    params += (np.array(b._params_vector, float), np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
     aux = np.array((b.charge_drawn, float(b.cutoff), float(b.overload)))
-    return 'motors_battery', (x, aux, acceleration), plant
+    return 'motors_battery', (x, aux, acceleration), params
 
 
 

@@ -136,6 +136,6 @@ docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
 functions call which, and how the integrated state is laid out. Those of
 `multirotor/controller/pid.py` and `multirotor/controller/cascade.py` do the same
 for the controller. `multirotor/rollout.py` is the functional closed loop that JAX differentiates, and
-`multirotor/trees.py` converts a vehicle's and a controller's gains, parameters and state
+`multirotor/trees.py` converts a vehicle's and a controller's parameters and state
 between the imperative classes and named trees of arrays for it. `multirotor/fleet.py` and `multirotor/fleet_kernels.py` show how a fleet's arrays are laid out and which kernels its loops call. The compiled reward of the environments is in
 `multirotor/env_kernels.py`.
