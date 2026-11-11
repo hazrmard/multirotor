@@ -108,19 +108,9 @@ def thrustEqn(vi: float, *prop_params: float) -> float:
     Residual of the blade-element momentum equation, which ``fsolve`` drives to zero to find
     the induced velocity.
 
-    Parameters
-    ----------
-    vi : float
-        The induced velocity (m/s).
-    *prop_params : float
-        The propeller's constants and inputs, in order: radius, disc area, air density, lift
-        slope, number of blades, chord, efficiency, ``theta0``, ``theta1``, the airstream
-        velocity ``u``, ``v``, ``w``, and the speed ``Omega``.
-
-    Returns
-    -------
-    float
-        Efficiency-scaled mass flow times velocity change, minus the blade-element thrust (N).
+    ``vi``: The induced velocity (m/s).
+    Returns: Efficiency-scaled mass flow times velocity change, minus the blade-element
+      thrust (N).
     """
     R,A,rho,a,b,c,eta,theta0,theta1,u,v,w,Omega = prop_params
     
@@ -146,31 +136,13 @@ def thrust_blade_element_model(
     Thrust of one propeller from the blade-element model: the induced velocity is found
     numerically, then the thrust follows from momentum theory. Not compiled.
 
-    Parameters
-    ----------
-    prop_speed : float
-        The propeller's speed (rad/s).
-    airstream_velocity : np.ndarray
-        The airstream velocity at the propeller, shape (3,).
-    R, A : float
-        The propeller's radius (m) and disc area (m^2).
-    rho : float
-        Air density (kg/m^3).
-    a : float
-        Lift slope of the blades.
-    b : float
-        Number of blades.
-    c : float
-        Chord of the blades (m).
-    eta : float
-        Efficiency.
-    theta0, theta1 : float
-        Pitch of the blades at the root and its twist (rad).
-
-    Returns
-    -------
-    float
-        The thrust (N).
+    ``prop_speed``: The propeller's speed (rad/s).
+    ``airstream_velocity``: The airstream velocity at the propeller, shape (3,).
+    ``R``, ``A``: The propeller's radius (m) and disc area (m^2).
+    ``rho``: Air density (kg/m^3).
+    ``c``: Chord of the blades (m).
+    ``theta0``, ``theta1``: Pitch of the blades at the root and its twist (rad).
+    Returns: The thrust (N).
     """
     u, v, w = airstream_velocity
     # Convert commanded RPM to rad/s
@@ -201,21 +173,11 @@ def thrusts_blade_element_model(
     Thrust of each propeller from the blade-element model, by solving
     `thrust_blade_element_model` for each propeller in turn.
 
-    Parameters
-    ----------
-    speeds : np.ndarray
-        Propeller speeds (rad/s), shape (n,).
-    airstream_velocities : np.ndarray
-        Airstream velocity at each propeller, shape (3, n).
-    prop_params : np.ndarray
-        The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
-    rho : float
-        Air density (kg/m^3).
-
-    Returns
-    -------
-    np.ndarray
-        The thrust (N) of each propeller, shape (n,).
+    ``speeds``: Propeller speeds (rad/s), shape (n,).
+    ``airstream_velocities``: Airstream velocity at each propeller, shape (3, n).
+    ``prop_params``: The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    ``rho``: Air density (kg/m^3).
+    Returns: The thrust (N) of each propeller, shape (n,).
     """
     p = prop_params
     thrusts = np.zeros(len(speeds))
@@ -331,17 +293,7 @@ def _voltage(i: int, c: MotorInputs) -> float:
     """
     Voltage of motor ``i``.
 
-    Parameters
-    ----------
-    i : int
-        The motor.
-    c : MotorInputs
-        The arguments of `motor_electrical`.
-
-    Returns
-    -------
-    float
-        The voltage (V).
+    Returns: The voltage (V).
     """
     return xp.minimum(
         xp.maximum(c.motor_params[MOTOR_SPEED_VOLTAGE_SCALING, i] * c.u[i], 0.), c.max_voltage)
@@ -352,10 +304,7 @@ def _current(i: int, c: MotorInputs) -> float:
     """
     Current of motor ``i``. The arguments are those of `_voltage`.
 
-    Returns
-    -------
-    float
-        The current (A).
+    Returns: The current (A).
     """
     p = c.motor_params
     back_emf = c.speed[i] * p[MOTOR_K_EMF, i]
@@ -372,22 +321,11 @@ def motor_electrical(
     Voltage and current of each motor. The current responds instantly to the
     voltage and back-EMF; the motors' inductance is neglected.
 
-    Parameters
-    ----------
-    speed : np.ndarray
-        Motor speeds (rad/s), shape (n,).
-    u : np.ndarray
-        Speed signals, shape (n,). The voltage is
-        ``speed_voltage_scaling * u``, clipped to ``[0, max_voltage]``.
-    max_voltage : float
-        The maximum voltage the power source can supply.
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray]
-        The voltage (V) and current (A) of each motor.
+    ``speed``: Motor speeds (rad/s), shape (n,).
+    ``u``: Speed signals, shape (n,). The voltage is ``speed_voltage_scaling * u``, clipped
+      to ``[0, max_voltage]``.
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    Returns: The voltage (V) and current (A) of each motor.
     """
 
     n = speed.shape[0]
@@ -400,10 +338,7 @@ def _acc(i: int, c: MotorInputs) -> float:
     """
     Angular acceleration of motor ``i``. The arguments are those of `_voltage`.
 
-    Returns
-    -------
-    float
-        The angular acceleration (rad/s^2).
+    Returns: The angular acceleration (rad/s^2).
     """
     p, speed = c.motor_params, c.speed
     torque = p[MOTOR_K_TORQUE, i] * _current(i, c)
@@ -420,21 +355,10 @@ def motor_acc(
     Angular acceleration of each motor: electrical torque minus viscous friction
     and propeller drag, divided by the moment of inertia.
 
-    Parameters
-    ----------
-    speed : np.ndarray
-        Motor speeds (rad/s), shape (n,).
-    u : np.ndarray
-        Speed signals, shape (n,).
-    max_voltage : float
-        The maximum voltage the power source can supply.
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-
-    Returns
-    -------
-    np.ndarray
-        Angular acceleration (rad/s^2) of each motor, shape (n,).
+    ``speed``: Motor speeds (rad/s), shape (n,).
+    ``u``: Speed signals, shape (n,).
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    Returns: Angular acceleration (rad/s^2) of each motor, shape (n,).
     """
 
     n = speed.shape[0]
@@ -446,19 +370,7 @@ def _add_power(acc: float, i: int, c: MotorInputs) -> float:
     """
     ``acc`` plus the electrical power of motor ``i``.
 
-    Parameters
-    ----------
-    acc : float
-        The power of the motors before ``i``.
-    i : int
-        The motor.
-    c : MotorInputs
-        The arguments of `motor_electrical`.
-
-    Returns
-    -------
-    float
-        The power (W) of the motors up to ``i``.
+    Returns: The power (W) of the motors up to ``i``.
     """
     return acc + _voltage(i, c) * _current(i, c)
 
@@ -467,19 +379,7 @@ def _add_power(acc: float, i: int, c: MotorInputs) -> float:
 def motor_power(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
 ) -> float:
-    """
-    Total electrical power (W) drawn by the motors.
-
-    Parameters
-    ----------
-    speed, u, max_voltage, motor_params
-        As in `motor_electrical`.
-
-    Returns
-    -------
-    float
-        The sum of each motor's voltage times its current.
-    """
+    """Total electrical power (W) drawn by the motors."""
 
     return xp.fold(
         _add_power, 0., speed.shape[0], MotorInputs(speed, u, max_voltage, motor_params))
@@ -487,19 +387,7 @@ def motor_power(
 
 
 def _empty(op: OcvTable) -> float:
-    """
-    The voltage of an empty battery: none.
-
-    Parameters
-    ----------
-    op : OcvTable
-        The state of charge and the table, which this ignores.
-
-    Returns
-    -------
-    float
-        0.
-    """
+    """The voltage of an empty battery: none."""
     return 0.
 
 
@@ -508,15 +396,7 @@ def _interpolate(op: OcvTable) -> float:
     """
     The open-circuit voltage, interpolated from the table.
 
-    Parameters
-    ----------
-    op : OcvTable
-        The state of charge and the table.
-
-    Returns
-    -------
-    float
-        The voltage (V).
+    Returns: The voltage (V).
     """
     return xp.interp(op.soc, op.ocv_soc, op.ocv_voltage)
 
@@ -528,19 +408,8 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
     linearly from a table. Outside the table, the nearest end's voltage is used.
     An empty battery (``soc <= 0``) has no voltage.
 
-    Parameters
-    ----------
-    soc : float
-        State of charge, from 0 (empty) to 1 (full).
-    ocv_soc : np.ndarray
-        States of charge of the table, increasing.
-    ocv_voltage : np.ndarray
-        Open-circuit voltage (V) at each ``ocv_soc``.
-
-    Returns
-    -------
-    float
-        The open-circuit voltage (V).
+    ``ocv_voltage``: Open-circuit voltage (V) at each ``ocv_soc``.
+    Returns: The open-circuit voltage (V).
     """
 
     return xp.cond(soc <= 0., _empty, _interpolate, OcvTable(soc, ocv_soc, ocv_voltage))
@@ -548,37 +417,13 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
 
 
 def _ideal(op: Load) -> Terminal:
-    """
-    A battery without resistance: the terminal voltage is the source voltage.
-
-    Parameters
-    ----------
-    op : Load
-        The power drawn and the battery's source voltage and resistance.
-
-    Returns
-    -------
-    Terminal
-        The source voltage, and that the battery can deliver the power.
-    """
+    """A battery without resistance: the terminal voltage is the source voltage."""
     return Terminal(op.open_circuit_voltage, True)
 
 
 
 def _loaded(op: Load) -> Terminal:
-    """
-    A battery with resistance: the larger root of the quadratic, if there is one.
-
-    Parameters
-    ----------
-    op : Load
-        The power drawn and the battery's source voltage and resistance.
-
-    Returns
-    -------
-    Terminal
-        The terminal voltage, and whether the battery can deliver the power.
-    """
+    """A battery with resistance: the larger root of the quadratic, if there is one."""
     discriminant = op.open_circuit_voltage**2 - 4. * op.internal_resistance * op.power
     return xp.cond(
         discriminant < 0., _overloaded, _delivering,
@@ -587,37 +432,13 @@ def _loaded(op: Load) -> Terminal:
 
 
 def _overloaded(op: Delivery) -> Terminal:
-    """
-    The battery can't deliver the power: the voltage at its maximum power.
-
-    Parameters
-    ----------
-    op : Delivery
-        The source voltage and the discriminant.
-
-    Returns
-    -------
-    Terminal
-        Half the source voltage, and False.
-    """
+    """The battery can't deliver the power: the voltage at its maximum power."""
     return Terminal(0.5 * op.open_circuit_voltage, False)
 
 
 
 def _delivering(op: Delivery) -> Terminal:
-    """
-    The battery delivers the power, at the larger root of the quadratic.
-
-    Parameters
-    ----------
-    op : Delivery
-        The source voltage and the discriminant.
-
-    Returns
-    -------
-    Terminal
-        The terminal voltage, and True.
-    """
+    """The battery delivers the power, at the larger root of the quadratic."""
     return Terminal(0.5 * (op.open_circuit_voltage + xp.sqrt_nonneg(op.discriminant)), True)
 
 
@@ -634,19 +455,10 @@ def battery_terminal(
     the power (``V_oc**2 < 4 R P``), the voltage is clamped at ``V_oc / 2``,
     where the battery delivers its maximum power.
 
-    Parameters
-    ----------
-    power : float
-        The power (W) drawn from the battery.
-    open_circuit_voltage : float
-        The open-circuit voltage (V).
-    internal_resistance : float
-        The battery's series resistance (ohm).
-
-    Returns
-    -------
-    Terminal
-        The terminal voltage (V), and whether the battery can deliver the power.
+    ``power``: The power (W) drawn from the battery.
+    ``open_circuit_voltage``: The open-circuit voltage (V).
+    ``internal_resistance``: The battery's series resistance (ohm).
+    Returns: The terminal voltage (V), and whether the battery can deliver the power.
     """
 
     return xp.cond(
@@ -656,19 +468,7 @@ def battery_terminal(
 
 
 def _unlimited(op: Candidate) -> OperatingPoint:
-    """
-    No motor is limited by the terminal voltage: it is as first computed.
-
-    Parameters
-    ----------
-    op : Candidate
-        The operating point as first computed, with the motors and the battery.
-
-    Returns
-    -------
-    OperatingPoint
-        The first operating point.
-    """
+    """No motor is limited by the terminal voltage: it is as first computed."""
     return op.point
 
 
@@ -677,17 +477,7 @@ def _balance(v: float, op: Candidate) -> float:
     """
     Zero where the motors' voltage limit equals the terminal voltage.
 
-    Parameters
-    ----------
-    v : float
-        The motors' voltage limit (V).
-    op : Candidate
-        The motors and the battery.
-
-    Returns
-    -------
-    float
-        ``v`` minus the terminal voltage at which the motors drawing power at ``v`` leave the battery.
+    ``v``: The motors' voltage limit (V).
     """
     power = motor_power(op.speed, op.u, v, op.motor_params)
     terminal = battery_terminal(power, op.open_circuit_voltage, op.internal_resistance)
@@ -696,19 +486,7 @@ def _balance(v: float, op: Candidate) -> float:
 
 
 def _limited(op: Candidate) -> OperatingPoint:
-    """
-    Some motors are limited by the terminal voltage, found by bisection on [0, V_oc].
-
-    Parameters
-    ----------
-    op : Candidate
-        The operating point as first computed, with the motors and the battery.
-
-    Returns
-    -------
-    OperatingPoint
-        The operating point with the motors limited.
-    """
+    """Some motors are limited by the terminal voltage, found by bisection on [0, V_oc]."""
     v_oc = op.open_circuit_voltage
     terminal_voltage = xp.root(_balance, 0., v_oc, 1e-12 * v_oc, op)
     power = motor_power(op.speed, op.u, terminal_voltage, op.motor_params)
@@ -732,24 +510,13 @@ def battery_operating_point(
     always converges: a higher terminal voltage lets the motors draw more power,
     which lowers the terminal voltage, so there is exactly one solution.
 
-    Parameters
-    ----------
-    speed : np.ndarray
-        Motor speeds (rad/s), shape (n,).
-    u : np.ndarray
-        Speed signals, shape (n,).
-    open_circuit_voltage : float
-        The open-circuit voltage (V).
-    internal_resistance : float
-        The battery's series resistance (ohm).
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-
-    Returns
-    -------
-    OperatingPoint
-        The terminal voltage (V), the power (W) the motors draw, and whether the
-        battery can deliver that power.
+    ``speed``: Motor speeds (rad/s), shape (n,).
+    ``u``: Speed signals, shape (n,).
+    ``open_circuit_voltage``: The open-circuit voltage (V).
+    ``internal_resistance``: The battery's series resistance (ohm).
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    Returns: The terminal voltage (V), the power (W) the motors draw, and whether the
+      battery can deliver that power.
     """
 
     v_oc = open_circuit_voltage
@@ -766,19 +533,7 @@ def battery_operating_point(
 
 
 def _dead(op: Discharge) -> BatteryEnd:
-    """
-    A battery that is cut off or empty supplies nothing.
-
-    Parameters
-    ----------
-    op : Discharge
-        The battery's state after the step, and the motors.
-
-    Returns
-    -------
-    BatteryEnd
-        The state as it is, with a voltage limit of 0 for the motors.
-    """
+    """A battery that is cut off or empty supplies nothing."""
     return op.end
 
 
@@ -786,16 +541,6 @@ def _dead(op: Discharge) -> BatteryEnd:
 def _live(op: Discharge) -> BatteryEnd:
     """
     A battery that supplies the motors: its voltage, and whether it cuts off or is overloaded.
-
-    Parameters
-    ----------
-    op : Discharge
-        The battery's state after the step, and the motors.
-
-    Returns
-    -------
-    BatteryEnd
-        The state with the terminal voltage, the cutoff and the overload updated.
     """
     end = op.end
     point = battery_operating_point(
@@ -821,33 +566,15 @@ def battery_end_step(
     off or empty supplies no current from then on. Otherwise the cutoff latches
     if the terminal voltage falls below the minimum.
 
-    Parameters
-    ----------
-    charge : float
-        Charge (C) drawn during the step, as integrated.
-    charge_drawn : float
-        Charge (C) drawn before the step.
-    cutoff : bool
-        Whether the battery had cut off the motors before the step.
-    overload : bool
-        Whether the previous step demanded more power than the battery can deliver.
-    motor_speeds : np.ndarray
-        Motor speeds (rad/s) at the end of the step, shape (n,).
-    u : np.ndarray
-        Speed signals during the step, shape (n,).
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-    battery_params, ocv_soc, ocv_voltage
-        As in `multirotor.dynamics.battery_state`.
-    dt : float
-        The time step (s).
-
-    Returns
-    -------
-    BatteryEnd
-        The charge drawn, the battery current (A, averaged over the step), the
-        terminal voltage (V), whether the battery has cut off, whether it was
-        overloaded, and the motors' voltage limit (V) for the next step.
+    ``charge``: Charge (C) drawn during the step, as integrated.
+    ``charge_drawn``: Charge (C) drawn before the step.
+    ``motor_speeds``: Motor speeds (rad/s) at the end of the step, shape (n,).
+    ``u``: Speed signals during the step, shape (n,).
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    ``dt``: The time step (s).
+    Returns: The charge drawn, the battery current (A, averaged over the step), the terminal
+      voltage (V), whether the battery has cut off, whether it was overloaded, and the
+      motors' voltage limit (V) for the next step.
     """
 
     capacity = battery_params[BATTERY_CAPACITY]
@@ -871,19 +598,7 @@ def _add_torque(
     """
     ``acc`` plus the torques of propeller ``i``.
 
-    Parameters
-    ----------
-    acc : Tuple[float, float, float]
-        The roll, pitch and yaw torques of the propellers before ``i``.
-    i : int
-        The propeller.
-    c : TorqueInputs
-        The propellers' thrusts, drag torques, directions of spin and positions.
-
-    Returns
-    -------
-    Tuple[float, float, float]
-        The torques (N m) of the propellers up to ``i``.
+    Returns: The torques (N m) of the propellers up to ``i``.
     """
     thrusts, positions = c.thrusts, c.positions
     # tau = r x F. Thrust acts only along the body z-axis, F = (0, 0, thrust),
@@ -905,22 +620,12 @@ def body_torques(
     propellers' loads. Thrust acts along the body z-axis. Each propeller's drag
     torque acts about the z-axis, opposite to its direction of rotation.
 
-    Parameters
-    ----------
-    thrusts : np.ndarray
-        Thrust (N) of each propeller, shape (n,).
-    drag_torques : np.ndarray
-        Magnitude of the drag torque (N m) of each propeller, shape (n,). For a
-        propeller, ``k_drag * speed**2``.
-    clockwise : np.ndarray
-        1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
-    positions : np.ndarray
-        Position of each propeller relative to the center of mass, shape (3, n).
-
-    Returns
-    -------
-    np.ndarray
-        The torque (N m) on the body, shape (3,).
+    ``thrusts``: Thrust (N) of each propeller, shape (n,).
+    ``drag_torques``: Magnitude of the drag torque (N m) of each propeller, shape (n,). For
+      a propeller, ``k_drag * speed**2``.
+    ``clockwise``: 1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
+    ``positions``: Position of each propeller relative to the center of mass, shape (3, n).
+    Returns: The torque (N m) on the body, shape (3,).
     """
 
     # Angular acceleration of propellers is assumed to be negligible, so it
@@ -940,21 +645,11 @@ def forces_torques(
     Total force and torque on the body from propellers whose thrust is
     ``k_thrust * speed**2`` and drag torque is ``k_drag * speed**2``.
 
-    Parameters
-    ----------
-    speeds : np.ndarray
-        Propeller speeds (rad/s), shape (n,).
-    prop_params : np.ndarray
-        The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
-    clockwise : np.ndarray
-        1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
-    positions : np.ndarray
-        Position of each propeller relative to the center of mass, shape (3, n).
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray]
-        The force (N) and torque (N m) on the body, each shape (3,).
+    ``speeds``: Propeller speeds (rad/s), shape (n,).
+    ``prop_params``: The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    ``clockwise``: 1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
+    ``positions``: Position of each propeller relative to the center of mass, shape (3, n).
+    Returns: The force (N) and torque (N m) on the body, each shape (3,).
     """
 
     thrusts = prop_params[PROP_K_THRUST] * speeds**2
@@ -969,31 +664,7 @@ def body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
 ) -> np.ndarray:
-    """
-    Given forces and torqes, return the rate of change of state.
-
-    Parameters
-    ----------
-    forces : np.ndarray
-        Forces acting in the body frame.
-    torques : np.ndarray
-        Torques acting in the body frame.
-    x : np.ndarray
-        State of the vehicle.
-    g : float
-        Gravitational acceleration.
-    mass : float
-        Mass of the vehicle.
-    inertia_matrix : np.matrix
-        Inertial matrix.
-    inertia_matrix_inverse : np.matrix
-        Inverse of inertial matrix.
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of state d(state)/dt
-    """
+    """Given forces and torqes, return the rate of change of state."""
     # Store state variables in a readable format
     ub = x[3]       # linear velocity along body-frame-x-axis b1
     vb = x[4]       # linear velocity along body-frame-y-axis b2

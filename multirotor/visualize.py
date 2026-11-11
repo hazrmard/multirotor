@@ -248,10 +248,6 @@ class VehicleDrawing:
         """
         Add vehicle and trajectory lines to plot by initializing the Artist objects
         in `self.axis`.
-
-        Returns
-        -------
-        Tuple[Line3d]
         """
         for l in self.arm_lines:
             self.axis.add_line(l)

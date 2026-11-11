@@ -62,55 +62,17 @@ Gain = Union[float, np.ndarray]
 
 
 def _vector(x: Union[float, np.ndarray]) -> np.ndarray:
-    """
-    A number or array as a float64 vector, without a copy if it already is one.
-
-    Parameters
-    ----------
-    x : float or np.ndarray
-        The value.
-
-    Returns
-    -------
-    np.ndarray
-        ``x`` as a 1-D float64 array.
-    """
+    """A number or array as a float64 vector, without a copy if it already is one."""
     return np.asarray(x, dtype=np.float64).reshape(-1)
 
 
 def _state64(vehicle: Multirotor) -> np.ndarray:
-    """
-    The state of a vehicle as float64, without a copy if it already is.
-
-    Parameters
-    ----------
-    vehicle : Multirotor
-        The vehicle.
-
-    Returns
-    -------
-    np.ndarray
-        Its 12 body states.
-    """
+    """The state of a vehicle as float64, without a copy if it already is."""
     return np.asarray(vehicle.state, dtype=np.float64)
 
 
 def _param(row: int, doc: str) -> property:
-    """
-    A property that views one row of the parameter matrix, over a stage's columns.
-
-    Parameters
-    ----------
-    row : int
-        The row, one of the ``PID_*`` constants.
-    doc : str
-        The property's docstring.
-
-    Returns
-    -------
-    property
-        The property.
-    """
+    """A property that views one row of the parameter matrix, over a stage's columns."""
     def get(self: PIDStage) -> np.ndarray:
         "The row, over the stage's columns."
         return self._data.params[row, self._start:self._stop]
@@ -121,21 +83,7 @@ def _param(row: int, doc: str) -> property:
 
 
 def _state(row: int, doc: str) -> property:
-    """
-    A property that views one row of the state matrix, over a stage's columns.
-
-    Parameters
-    ----------
-    row : int
-        The row, one of the ``PID_*`` constants.
-    doc : str
-        The property's docstring.
-
-    Returns
-    -------
-    property
-        The property.
-    """
+    """A property that views one row of the state matrix, over a stage's columns."""
     def get(self: PIDStage) -> np.ndarray:
         "The row, over the stage's columns."
         return self._data.state[row, self._start:self._stop]
@@ -146,21 +94,7 @@ def _state(row: int, doc: str) -> property:
 
 
 def _scalar_param(row: int, doc: str) -> property:
-    """
-    A property for a parameter of a stage that has one value for all its channels.
-
-    Parameters
-    ----------
-    row : int
-        The row, one of the ``PID_*`` constants.
-    doc : str
-        The property's docstring.
-
-    Returns
-    -------
-    property
-        The property, which reads the first channel's value.
-    """
+    """A property for a parameter of a stage that has one value for all its channels."""
     def get(self: PIDStage) -> float:
         "The value of the first channel."
         return float(self._data.params[row, self._start])
@@ -220,18 +154,7 @@ class PIDStage:
 
 
     def _bind(self, data: ControllerData, start: int, n: int) -> None:
-        """
-        Make this controller a view of ``n`` columns of ``data``, from ``start``.
-
-        Parameters
-        ----------
-        data : ControllerData
-            The matrices to view.
-        start : int
-            The first column.
-        n : int
-            The number of columns.
-        """
+        """Make this controller a view of ``n`` columns of ``data``, from ``start``."""
         self._data: ControllerData = data
         self._start: int = start
         self._stop: int = start + n
@@ -239,16 +162,7 @@ class PIDStage:
 
 
     def _adopt(self, data: ControllerData, start: int) -> None:
-        """
-        Move this controller, with its values, to columns of ``data`` from ``start``.
-
-        Parameters
-        ----------
-        data : ControllerData
-            The matrices to move into.
-        start : int
-            The first column.
-        """
+        """Move this controller, with its values, to columns of ``data`` from ``start``."""
         self._adopted = True
         stop = start + self.n
         data.params[:, start:stop] = self._data.params[:, self._start:self._stop]
@@ -500,14 +414,7 @@ class RateController(PIDStage):
         return float(limit[0]) if np.all(limit == limit[0]) else limit.copy()
 
     def _set_max_acceleration(self, value: Gain) -> None:
-        """
-        Set the acceleration limit.
-
-        Parameters
-        ----------
-        value : float or np.ndarray
-            The limit, for all axes or one per axis.
-        """
+        """Set the acceleration limit."""
         self._data.params[PID_LIMIT, self._start:self._stop] = value
 
     max_acceleration = property(

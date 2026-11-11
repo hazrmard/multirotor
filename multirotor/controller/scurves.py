@@ -242,19 +242,7 @@ def acc_1d(
 
 # @njit
 def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float) -> float:
-    """
-    Solve a 1d kinematics problem, without a time step.
-
-    Parameters
-    ----------
-    amax, vmax, v0, v1, disp : float
-        As in `acc_1d`.
-
-    Returns
-    -------
-    float
-        The acceleration to apply, at most ``amax`` in magnitude.
-    """
+    """Solve a 1d kinematics problem, without a time step."""
     sign = np.sign(disp)
     dist = np.abs(disp)
     relvel = v1 - v0 # desired change in velocity

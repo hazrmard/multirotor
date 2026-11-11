@@ -109,36 +109,12 @@ class FleetController:
 
     @staticmethod
     def _copy(controller: Controller) -> Controller:
-        """
-        A copy of a controller that shares its vehicle, which is not part of its gains.
-
-        Parameters
-        ----------
-        controller : Controller
-            The controller to copy.
-
-        Returns
-        -------
-        Controller
-            The copy.
-        """
+        """A copy of a controller that shares its vehicle, which is not part of its gains."""
         return deepcopy(controller, {id(controller.vehicle): controller.vehicle})
 
 
     def _controller_of(self, index: int) -> Controller:
-        """
-        A new `Controller` with the parameters of one vehicle's controller.
-
-        Parameters
-        ----------
-        index : int
-            The index of the vehicle in the fleet.
-
-        Returns
-        -------
-        Controller
-            The new controller.
-        """
+        """A new `Controller` with the parameters of one vehicle's controller."""
         controller = self._copy(self._template)
         controller._data.params[:] = self.params[index]
         controller.feedforward_weight = self.feedforward_weight[index]

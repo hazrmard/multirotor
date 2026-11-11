@@ -100,29 +100,10 @@ def rhs_body(
     `Multirotor.step_dynamics`, and for `Multirotor.step_speeds` on vehicles
     without motors whose thrust is ``k_thrust * speed**2``.
 
-    Parameters
-    ----------
-    t : float
-        Time. The equations are time invariant.
-    x : np.ndarray
-        The body state: position, velocity, orientation, angular rate.
-    forces : np.ndarray
-        Forces (N) in the body frame, shape (3,).
-    torques : np.ndarray
-        Torques (N m) in the body frame, shape (3,).
-    g : float
-        Gravitational acceleration.
-    mass : float
-        Mass of the vehicle.
-    inertia_matrix : np.ndarray
-        Inertia matrix, shape (3, 3).
-    inertia_matrix_inverse : np.ndarray
-        Inverse of the inertia matrix, shape (3, 3).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of the body state.
+    ``forces``: Forces (N) in the body frame, shape (3,).
+    ``torques``: Torques (N m) in the body frame, shape (3,).
+    ``inertia_matrix``: Inertia matrix, shape (3, 3).
+    ``inertia_matrix_inverse``: Inverse of the inertia matrix, shape (3, 3).
     """
     return body_derivative(
         forces, torques, x, g, mass, inertia_matrix, inertia_matrix_inverse)
@@ -137,23 +118,10 @@ def rhs_motor_only(
     Rate of change of motor speeds, for motors stepped on their own (outside a
     vehicle). The integrated state is the ``n`` motor speeds.
 
-    Parameters
-    ----------
-    t : float
-        Time. The equations are time invariant.
-    speed : np.ndarray
-        Motor speeds (rad/s), shape (n,).
-    u : np.ndarray
-        Speed signals, shape (n,).
-    max_voltage : float
-        The maximum voltage the power source can supply.
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-
-    Returns
-    -------
-    np.ndarray
-        Angular acceleration of each motor, shape (n,).
+    ``speed``: Motor speeds (rad/s), shape (n,).
+    ``u``: Speed signals, shape (n,).
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    Returns: Angular acceleration of each motor, shape (n,).
     """
     return motor_acc(speed, u, max_voltage, motor_params)
 
@@ -173,39 +141,15 @@ def rhs_body_with_motors(
     The integrated state ``x`` is the 12 body states followed by the ``n``
     motor speeds.
 
-    Parameters
-    ----------
-    t : float
-        Time. The equations are time invariant.
-    x : np.ndarray
-        The integrated state, shape (12 + n,).
-    u : np.ndarray
-        Speed signals, shape (n,).
-    max_voltage : float
-        The maximum voltage the power source can supply.
-    disturbance : np.ndarray
-        External forces (N) and torques (N m) in the body frame, shape (6,).
-    g : float
-        Gravitational acceleration.
-    mass : float
-        Mass of the vehicle.
-    inertia_matrix : np.ndarray
-        Inertia matrix, shape (3, 3).
-    inertia_matrix_inverse : np.ndarray
-        Inverse of the inertia matrix, shape (3, 3).
-    prop_params : np.ndarray
-        The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-    clockwise : np.ndarray
-        1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
-    positions : np.ndarray
-        Position of each propeller relative to the center of mass, shape (3, n).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
+    ``x``: The integrated state, shape (12 + n,).
+    ``u``: Speed signals, shape (n,).
+    ``disturbance``: External forces (N) and torques (N m) in the body frame, shape (6,).
+    ``inertia_matrix``: Inertia matrix, shape (3, 3).
+    ``inertia_matrix_inverse``: Inverse of the inertia matrix, shape (3, 3).
+    ``prop_params``: The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    ``clockwise``: 1 if a propeller spins clockwise, -1 if anti-clockwise, shape (n,).
+    ``positions``: Position of each propeller relative to the center of mass, shape (3, n).
     """
     body_state = x[:N_BODY_STATES]
     speeds = x[N_BODY_STATES:]
@@ -219,37 +163,13 @@ def rhs_body_with_motors(
 
 
 def _no_current(op: Supply) -> BatteryState:
-    """
-    A battery that is cut off or empty supplies no current, and the motors get no voltage.
-
-    Parameters
-    ----------
-    op : Supply
-        The battery's source voltage and the motors.
-
-    Returns
-    -------
-    BatteryState
-        The source voltage, and no current or voltage limit.
-    """
+    """A battery that is cut off or empty supplies no current, and the motors get no voltage."""
     return BatteryState(op.open_circuit_voltage, 0., 0.)
 
 
 
 def _supplying(op: Supply) -> BatteryState:
-    """
-    A battery that supplies the motors: its voltage, and the current at the power they draw.
-
-    Parameters
-    ----------
-    op : Supply
-        The battery's source voltage and the motors.
-
-    Returns
-    -------
-    BatteryState
-        The terminal voltage, the current and the motors' voltage limit.
-    """
+    """A battery that supplies the motors: its voltage, and the current at the power they draw."""
     point = battery_operating_point(
         op.speeds, op.u, op.open_circuit_voltage,
         op.battery_params[BATTERY_INTERNAL_RESISTANCE], op.motor_params)
@@ -268,31 +188,15 @@ def battery_state(
     on the motors. A battery that is cut off or empty supplies no current, and
     the motors get no voltage.
 
-    Parameters
-    ----------
-    speeds : np.ndarray
-        Motor speeds (rad/s), shape (n,).
-    u : np.ndarray
-        Speed signals, shape (n,).
-    charge : float
-        Total charge (C) drawn from the battery since it was full.
-    cutoff : bool
-        Whether the battery has cut off the motors.
-    motor_params : np.ndarray
-        The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
-    battery_params : np.ndarray
-        Battery parameters, shape (N_BATTERY_PARAMS,), indexed by the
-        ``BATTERY_*`` constants in `multirotor.physics`.
-    ocv_soc : np.ndarray
-        States of charge of the open-circuit voltage table.
-    ocv_voltage : np.ndarray
-        Open-circuit voltage (V) at each ``ocv_soc``.
-
-    Returns
-    -------
-    BatteryState
-        The terminal voltage (V), the battery current (A), and the motors'
-        voltage limit (V).
+    ``speeds``: Motor speeds (rad/s), shape (n,).
+    ``u``: Speed signals, shape (n,).
+    ``charge``: Total charge (C) drawn from the battery since it was full.
+    ``motor_params``: The `MotorData.params` matrix, shape (N_MOTOR_PARAMS, n).
+    ``battery_params``: Battery parameters, shape (N_BATTERY_PARAMS,), indexed by the
+      ``BATTERY_*`` constants in `multirotor.physics`.
+    ``ocv_voltage``: Open-circuit voltage (V) at each ``ocv_soc``.
+    Returns: The terminal voltage (V), the battery current (A), and the motors' voltage
+      limit (V).
     """
     soc = 1. - charge / battery_params[BATTERY_CAPACITY]
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
@@ -318,22 +222,7 @@ def rhs_body_with_motors_and_battery(
     The integrated state ``x`` is the 12 body states, the ``n`` motor speeds,
     and the charge (C) drawn from the battery during the current time step.
 
-    Parameters
-    ----------
-    t, x, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `rhs_body_with_motors`. ``x`` has one more element: the charge
-        drawn during the step.
-    cutoff : bool
-        Whether the battery has cut off the motors (their voltage is zero).
-    battery_params, ocv_soc, ocv_voltage
-        As in `battery_state`.
-    charge_drawn : float
-        Charge (C) drawn from the battery before the current time step.
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
+    ``charge_drawn``: Charge (C) drawn from the battery before the current time step.
     """
     n = u.shape[0]
     body_state = x[:N_BODY_STATES]
@@ -376,17 +265,7 @@ def rhs_body_with_motors_blade_element(
     it is solved numerically at each evaluation. Plain Python, and much slower
     than `rhs_body_with_motors`.
 
-    Parameters
-    ----------
-    t, x, u, max_voltage, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `rhs_body_with_motors`.
-    rho : float
-        Air density (kg/m^3).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
+    ``rho``: Air density (kg/m^3).
     """
     body_state = x[:N_BODY_STATES]
     speeds = x[N_BODY_STATES:]

@@ -122,19 +122,6 @@ class BaseMultirotorEnv(gym.Env):
         The return value of `step()`, from the flags that `reward()` has set. The
         episode terminates when the vehicle reaches the origin, leaves the
         bounding box or tips over. It is truncated when it runs out of time.
-
-        Parameters
-        ----------
-        nstate : np.ndarray
-            The state after the step.
-        reward : float
-            The reward of the step.
-
-        Returns
-        -------
-        tuple
-            The state, the reward, whether the episode terminated, whether it was truncated,
-            and an info dict of the flags.
         """
         terminated = self._reached or self._outofbounds or self._tipped
         info = dict(

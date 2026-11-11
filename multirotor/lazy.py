@@ -17,33 +17,7 @@ def build(
     source: Dict[str, types.FunctionType], names: Sequence[str], backend: str,
     namespace: dict, not_inlined: Sequence[str] = ()
 ) -> types.SimpleNamespace:
-    """
-    Copies of the functions ``names`` of ``source`` for a backend.
-
-    Parameters
-    ----------
-    source : Dict[str, FunctionType]
-        The plain functions by name.
-    names : Sequence[str]
-        Which of them to build. Functions that call each other must all be
-        built, and find each other in the same namespace.
-    backend : str
-        ``'numba'``: compiled by `numba.njit`, with `multirotor.xp_numba`.
-        ``'jax'``: left to be traced by the caller's ``jax.jit``, with
-        `multirotor.xp_jax`.
-    namespace : dict
-        The globals of the module the functions came from (its constants and
-        helpers). It is copied, not changed.
-    not_inlined : Sequence[str]
-        Functions that numba compiles once and calls, instead of inlining into each
-        caller. Large functions that are called once are faster to compile this way.
-
-    Returns
-    -------
-    types.SimpleNamespace
-        The built functions as attributes, with the source's docstrings and
-        signatures.
-    """
+    """Copies of the functions ``names`` of ``source`` for a backend."""
     xp = import_module(f'.xp_{backend}', __package__)
     cache = backend == 'numba' and xp.CACHE
     never = set(not_inlined)

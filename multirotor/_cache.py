@@ -18,27 +18,13 @@ from types import ModuleType
 
 
 def enabled() -> bool:
-    """
-    Whether the caches are on.
-
-    Returns
-    -------
-    bool
-        False if ``MULTIROTOR_CACHE=0``.
-    """
+    """Whether the caches are on."""
     return os.environ.get('MULTIROTOR_CACHE', '1') != '0'
 
 
 
 def root() -> Path:
-    """
-    The directory of the caches.
-
-    Returns
-    -------
-    Path
-        ``$MULTIROTOR_CACHE_DIR`` if set, else ``multirotor`` in the user cache directory.
-    """
+    """The directory of the caches."""
     given = os.environ.get('MULTIROTOR_CACHE_DIR')
     if given:
         return Path(given)
@@ -47,14 +33,7 @@ def root() -> Path:
 
 
 def _source_hash() -> str:
-    """
-    A hash of every source file of the package, so that an edit starts a fresh cache.
-
-    Returns
-    -------
-    str
-        The first 16 hex digits of the SHA-1 of the files' names and contents.
-    """
+    """A hash of every source file of the package, so that an edit starts a fresh cache."""
     digest = hashlib.sha1()
     package = Path(__file__).parent
     for path in sorted(package.rglob('*.py')):
@@ -65,14 +44,7 @@ def _source_hash() -> str:
 
 
 def configure_numba() -> bool:
-    """
-    Point numba's cache at this source's directory.
-
-    Returns
-    -------
-    bool
-        Whether caching is on.
-    """
+    """Point numba's cache at this source's directory."""
     if not enabled():
         return False
     from numba import config
@@ -82,14 +54,7 @@ def configure_numba() -> bool:
 
 
 def configure_jax(jax: ModuleType) -> None:
-    """
-    Turn on JAX's persistent compilation cache, for programs that took over a second.
-
-    Parameters
-    ----------
-    jax : ModuleType
-        The ``jax`` module.
-    """
+    """Turn on JAX's persistent compilation cache, for programs that took over a second."""
     if enabled():
         jax.config.update('jax_compilation_cache_dir', str(root() / 'jax'))
         jax.config.update('jax_persistent_cache_min_compile_time_secs', 1.)

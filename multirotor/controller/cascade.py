@@ -195,21 +195,7 @@ class Operand(NamedTuple):
 
 
 def _clip(value: float, limit: float) -> float:
-    """
-    Limit a value to a symmetric range.
-
-    Parameters
-    ----------
-    value : float
-        The value.
-    limit : float
-        The bound.
-
-    Returns
-    -------
-    float
-        ``value`` limited to ``[-limit, limit]``.
-    """
+    """Limit a value to a symmetric range."""
     return xp.minimum(xp.maximum(value, -limit), limit)
 
 
@@ -218,15 +204,7 @@ def _length2(v: np.ndarray) -> float:
     """
     Length of the first two elements of a vector.
 
-    Parameters
-    ----------
-    v : np.ndarray
-        The vector, with at least two elements.
-
-    Returns
-    -------
-    float
-        ``sqrt(v[0]**2 + v[1]**2)``, with a finite gradient at zero.
+    Returns: ``sqrt(v[0]**2 + v[1]**2)``, with a finite gradient at zero.
     """
     return xp.sqrt_nonneg(v[0]**2 + v[1]**2)
 
@@ -244,22 +222,6 @@ def _pid_scalar(
     The PID law of channel ``i``, given its reference and measurement. The integral
     is the trapezoid rule over the last two errors, and is limited before it is
     scaled by the integral gain.
-
-    Parameters
-    ----------
-    params, x : np.ndarray
-        The stage's parameter and state matrices.
-    i : int
-        The channel, a column of ``params`` and ``x``.
-    reference, measurement : float
-        The channel's reference and measurement. The error is reference minus measurement.
-    dt : float
-        The time since the last step.
-
-    Returns
-    -------
-    PidLaw
-        The action, and the new error, P, I and D terms and integral.
     """
     err = reference - measurement
     previous = x[PID_ERR, i]
@@ -273,21 +235,7 @@ def _pid_scalar(
 
 
 def _pid_channel(i: int, c: Channel) -> ChannelState:
-    """
-    The PID law, unchanged.
-
-    Parameters
-    ----------
-    i : int
-        The channel.
-    c : Channel
-        The stage's parameters, state, reference and measurement, and the time step.
-
-    Returns
-    -------
-    ChannelState
-        The new state of the channel.
-    """
+    """The PID law, unchanged."""
     law = _pid_scalar(c.params, c.x, i, c.reference[i], c.measurement[i], c.dt)
     return ChannelState(
         law.err, law.err_p, law.err_i, law.err_d, c.reference[i], law.action, law.integral)
@@ -321,21 +269,7 @@ def _velocity_channel(i: int, c: Channel) -> ChannelState:
 
 
 def _climb_channel(i: int, c: ClimbChannel) -> ChannelState:
-    """
-    The PID law as a thrust force, tilted to compensate for roll and pitch.
-
-    Parameters
-    ----------
-    i : int
-        The channel.
-    c : ClimbChannel
-        As for `_pid_channel`, with the vehicle's orientation, mass and weight.
-
-    Returns
-    -------
-    ChannelState
-        The new state of the channel. Its action is the thrust.
-    """
+    """The PID law as a thrust force, tilted to compensate for roll and pitch."""
     ch = c.channel
     law = _pid_scalar(ch.params, ch.x, i, ch.reference[i], ch.measurement[i], ch.dt)
     tilt_compensation = xp.cos(c.orientation[0]) * xp.cos(c.orientation[1])
@@ -346,21 +280,7 @@ def _climb_channel(i: int, c: ClimbChannel) -> ChannelState:
 
 
 def _sqrt_rate(derr_dt2_lim: float, distance: float) -> float:
-    """
-    The speed that stops within a distance at the acceleration limit.
-
-    Parameters
-    ----------
-    derr_dt2_lim : float
-        The acceleration limit.
-    distance : float
-        The distance to stop within.
-
-    Returns
-    -------
-    float
-        The speed, or 0 for a negative distance.
-    """
+    """The speed that stops within a distance at the acceleration limit."""
     return xp.sqrt_nonneg(2. * derr_dt2_lim * distance)
 
 
@@ -369,31 +289,6 @@ def sqrt_control(err: float, k_p: float, derr_dt2_lim: float, dt: float) -> floa
     """
     Piece-wise P-controller, linear near zero and square root further away. It
     acts as the P-term of a channel, and gives the correction rate.
-
-    Parameters
-    ----------
-    err : float
-        The error.
-    k_p : float
-        The proportional gain, which sets the linear region: ``|err|`` below
-        ``derr_dt2_lim / k_p**2``. With ``k_p=0`` there is no linear region.
-    derr_dt2_lim : float
-        The limit on the rate at which the correction rate may change, so on
-        acceleration. With no limit (0 or less) the controller is linear.
-    dt : float
-        The time since the last step. The correction is limited to the error
-        divided by ``dt``: the controller does not overshoot the target within
-        one step. Not limited if ``dt`` is 0.
-
-    Returns
-    -------
-    float
-        The correction rate.
-
-    Notes
-    -----
-    It is written with `xp.select`, not ``if``, so that JAX can differentiate it.
-    See: https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Math/control.cpp#L387
     """
     # Without a gain the linear region has no width; divide by 1 instead of by 0, and
     # let the zero-gain branch be selected below.
@@ -418,18 +313,6 @@ def _sqrt_channel(i: int, c: Terms) -> ChannelState:
     The square-root controller as the P-term of a channel. The integral and
     derivative terms are left as they were. The acceleration limit is the stage's, in its
     first column.
-
-    Parameters
-    ----------
-    i : int
-        The channel.
-    c : Terms
-        The stage's `Channel` and the error, which this uses in place of the measurement.
-
-    Returns
-    -------
-    ChannelState
-        The new state of the channel.
     """
     ch = c.channel
     action = sqrt_control(
@@ -444,15 +327,7 @@ def _pid_terms(op: Terms) -> np.ndarray:
     """
     The PID law on every channel, when no square root. Same operand as `_sqrt_terms`.
 
-    Parameters
-    ----------
-    op : Terms
-        The stage's channel, and the error, which this ignores.
-
-    Returns
-    -------
-    np.ndarray
-        The new state of the stage, shape (N_PID_STATES, n).
+    Returns: The new state of the stage, shape (N_PID_STATES, n).
     """
     return xp.map_rows(_pid_channel, op.channel.reference.shape[0], op.channel)
 
@@ -479,22 +354,12 @@ def pid_stage(
     The plain PID law on every channel of a stage, as a bare
     `multirotor.controller.pid.PIDController` uses it.
 
-    Parameters
-    ----------
-    params, x : np.ndarray
-        The stage's columns of the parameter and state matrices, shape
-        (N_PID_PARAMS, n) and (N_PID_STATES, n).
-    reference, measurement : np.ndarray
-        One value per channel, shape (n,). The error is reference minus measurement.
-    dt : float
-        The time since the last step.
-
-    Returns
-    -------
-    action : np.ndarray
-        Shape (n,).
-    x : np.ndarray
-        The stage's new state, shape (N_PID_STATES, n).
+    ``params``, ``x``: The stage's columns of the parameter and state matrices, shape
+      (N_PID_PARAMS, n) and (N_PID_STATES, n).
+    ``reference``, ``measurement``: One value per channel, shape (n,). The error is
+      reference minus measurement.
+    Returns: Shape (n,).
+    Returns: The stage's new state, shape (N_PID_STATES, n).
     """
     rows = xp.map_rows(
         _pid_channel, reference.shape[0], Channel(params, x, reference, measurement, dt))
@@ -524,21 +389,9 @@ def climb_stage(
     Climb rate stage (1 channel): vertical velocity error to thrust force. The thrust is
     tilted to compensate for roll and pitch.
 
-    Parameters
-    ----------
-    params, x, reference, measurement, dt
-        As in `pid_stage`. The reference and measurement are inertial vertical velocities.
-    orientation : np.ndarray
-        The vehicle's roll, pitch and yaw, shape (3,).
-    mass, weight : float
-        The vehicle's mass and weight. The thrust that holds it up at a zero error is its weight.
-
-    Returns
-    -------
-    action : np.ndarray
-        The thrust, shape (1,).
-    x : np.ndarray
-        The stage's new state, shape (N_PID_STATES, 1).
+    ``orientation``: The vehicle's roll, pitch and yaw, shape (3,).
+    Returns: The thrust, shape (1,).
+    Returns: The stage's new state, shape (N_PID_STATES, 1).
     """
     rows = xp.map_rows(
         _climb_channel, 1,
@@ -569,21 +422,10 @@ def attitude_stage(
     Attitude stage (3 channels): orientation error to Euler rates. Optionally replaces
     the P-term with the square-root controller, where there is an error.
 
-    Parameters
-    ----------
-    params, x, dt
-        As in `pid_stage`.
-    reference, measurement : np.ndarray
-        The vehicle's target and measured roll, pitch and yaw, shape (3,).
-    square_root_scaling : bool
-        Whether to replace the P-term with `sqrt_control`.
-
-    Returns
-    -------
-    action : np.ndarray
-        The Euler rate references, shape (3,).
-    x : np.ndarray
-        The stage's new state, shape (N_PID_STATES, 3).
+    ``reference``, ``measurement``: The vehicle's target and measured roll, pitch and yaw,
+      shape (3,).
+    Returns: The Euler rate references, shape (3,).
+    Returns: The stage's new state, shape (N_PID_STATES, 3).
     """
     err = reference - measurement
     err_len = xp.sqrt_nonneg(err[0]**2 + err[1]**2 + err[2]**2)
@@ -601,24 +443,12 @@ def rate_stage(
     """
     Rate stage (3 channels): Euler rate error to body torques.
 
-    Parameters
-    ----------
-    params, x, dt
-        As in `pid_stage`.
-    reference, measurement : np.ndarray
-        Reference and measured Euler rates, shape (3,).
-    orientation : np.ndarray
-        The vehicle's roll, pitch and yaw, shape (3,).
-    inertia : np.ndarray
-        The vehicle's inertia matrix, shape (3, 3). The PID law gives an angular
-        acceleration, limited, and the inertia turns it into a torque.
-
-    Returns
-    -------
-    action : np.ndarray
-        The body torques, shape (3,).
-    x : np.ndarray
-        The stage's new state, shape (N_PID_STATES, 3), with the torques as its action.
+    ``reference``, ``measurement``: Reference and measured Euler rates, shape (3,).
+    ``orientation``: The vehicle's roll, pitch and yaw, shape (3,).
+    ``inertia``: The vehicle's inertia matrix, shape (3, 3). The PID law gives an angular
+      acceleration, limited, and the inertia turns it into a torque.
+    Returns: The body torques, shape (3,).
+    Returns: The stage's new state, shape (N_PID_STATES, 3), with the torques as its action.
     """
     body_reference = euler_to_angular_rate(reference, orientation)
     body_measurement = euler_to_angular_rate(measurement, orientation)
@@ -637,21 +467,8 @@ def leash_distance(
     given the vehicle's speed and acceleration. Infinite if the vehicle would
     cover it in one simulation step anyway.
 
-    Parameters
-    ----------
-    k_p : float
-        The position controller's proportional gain.
-    body_state : np.ndarray
-        The vehicle's 12 body state variables.
-    acceleration : np.ndarray
-        The vehicle's body-frame acceleration, shape (3,).
-    sim_dt : float
-        The simulation time step.
-
-    Returns
-    -------
-    float
-        The distance (m).
+    ``acceleration``: The vehicle's body-frame acceleration, shape (3,).
+    Returns: The distance (m).
     """
     # https://nrotella.github.io/journal/arducopter-flight-controllers.html
     dcm = direction_cosine_matrix(body_state[6], body_state[7], body_state[8])
@@ -670,17 +487,7 @@ def _leashed(op: Leash) -> Tuple[np.ndarray, float]:
     """
     The position error shortened to the leash.
 
-    Parameters
-    ----------
-    op : Leash
-        The position stage's parameters, the error, and the vehicle's motion.
-
-    Returns
-    -------
-    err : np.ndarray
-        The shortened error, shape (2,).
-    length : float
-        Its length.
+    Returns: The shortened error, shape (2,).
     """
     err_len = _length2(op.err)
     leash = leash_distance(op.params[PID_K_P, 0], op.body_state, op.acceleration, op.sim_dt)
@@ -703,32 +510,10 @@ def position_stage(
     """
     Position stage (2 channels): inertial xy-position error to body-frame xy-velocity.
 
-    Parameters
-    ----------
-    params, x, dt
-        As in `pid_stage`.
-    reference, measurement : np.ndarray
-        Reference and measured xy-position, shape (2,).
-    body_state : np.ndarray
-        The vehicle's 12 body state variables.
-    acceleration : np.ndarray
-        The vehicle's body-frame acceleration, shape (3,).
-    sim_dt : float
-        The simulation time step. ``dt`` is the time since the last step of this
-        stage.
-    leashing : bool
-        Whether to limit the position error with the leash (`leash_distance`).
-    square_root_scaling : bool
-        Whether to replace the P-term with the square-root controller (`sqrt_control`),
-        which acts on the leashed error. Otherwise the plain PID law acts on the
-        error without the leash.
-
-    Returns
-    -------
-    action : np.ndarray
-        The body-frame xy-velocity reference, limited in speed, shape (2,).
-    x : np.ndarray
-        The stage's new state, shape (N_PID_STATES, 2).
+    ``reference``, ``measurement``: Reference and measured xy-position, shape (2,).
+    ``acceleration``: The vehicle's body-frame acceleration, shape (3,).
+    Returns: The body-frame xy-velocity reference, limited in speed, shape (2,).
+    Returns: The stage's new state, shape (N_PID_STATES, 2).
     """
     err, err_len = xp.cond(
         leashing, _leashed, _unleashed,
@@ -756,17 +541,7 @@ def _skip(op: Operand) -> Tuple[np.ndarray, Memo]:
     """
     A stage that does not run at this step keeps its state and repeats its output.
 
-    Parameters
-    ----------
-    op : Operand
-        The state, the memo and the inputs of the step.
-
-    Returns
-    -------
-    x : np.ndarray
-        The state, unchanged, shape (N_PID_STATES, 12).
-    memo : Memo
-        The memo, unchanged.
+    Returns: The state, unchanged, shape (N_PID_STATES, 12).
     """
     return op.x, op.memo
 
@@ -851,28 +626,11 @@ def cascaded_step(
     every ``inputs.steps.position``, and velocity, attitude and rate every
     ``inputs.steps.attitude``. In between, the last outputs are repeated.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        State of the stages, shape (N_PID_STATES, 12). The ``CASCADE_*`` constants name
-        the first column of each stage.
-    memo : Memo
-        The outputs of three stages, as returned by the last step, or zeros for the first.
-    inputs : Inputs
-        The parameters of the stages, the target, the vehicle's state and properties,
-        the periods of the stages, and the options.
-    n : int
-        The number of steps taken before this one.
-
-    Returns
-    -------
-    x : np.ndarray
-        The state after the step, shape (N_PID_STATES, 12). Keep it for the next step,
-        or drop it to leave the controller as it was.
-    memo : Memo
-        The memo after the step.
-    action : np.ndarray
-        Thrust and the three torques, shape (4,).
+    ``x``: State of the stages, shape (N_PID_STATES, 12). The ``CASCADE_*`` constants name
+      the first column of each stage.
+    Returns: The state after the step, shape (N_PID_STATES, 12). Keep it for the next step,
+      or drop it to leave the controller as it was.
+    Returns: Thrust and the three torques, shape (4,).
     """
     steps = inputs.steps
     x, memo = xp.cond(n % steps.altitude == 0, _run_altitude, _skip, Operand(x, memo, inputs))
@@ -913,14 +671,8 @@ def fleet_step(
     have shape (K,), and the action has shape (K, 4). The step counter, the periods and
     the options are the same for all vehicles.
 
-    Returns
-    -------
-    x : np.ndarray
-        The state of every vehicle after the step, shape (K, N_PID_STATES, 12).
-    memo : Memo
-        The memo of every vehicle after the step.
-    action : np.ndarray
-        Thrust and torques of every vehicle, shape (K, 4).
+    Returns: The state of every vehicle after the step, shape (K, N_PID_STATES, 12).
+    Returns: Thrust and torques of every vehicle, shape (K, 4).
     """
     x_new = np.empty_like(x)
     ref_vel, thrust, torques = (

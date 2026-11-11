@@ -133,29 +133,7 @@ class Drive(NamedTuple):
 def rk4_step(
     f: Rhs, t: float, x: np.ndarray, dt: float, args: tuple
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    One RK4 step of ``dx/dt = f(t, x, args)``.
-
-    Parameters
-    ----------
-    f : callable
-        The right-hand side.
-    t : float
-        The time at the start of the step.
-    x : np.ndarray
-        The state at the start of the step.
-    dt : float
-        The step length.
-    args : tuple
-        The arguments that ``f`` takes after ``t`` and ``x``.
-
-    Returns
-    -------
-    x : np.ndarray
-        The new state.
-    dxdt : np.ndarray
-        ``f(t, x, args)``, the rate of change at the start.
-    """
+    """One RK4 step of ``dx/dt = f(t, x, args)``."""
     k1 = f(t, x, args)
     k2 = f(t + dt / 2., x + dt / 2. * k1, args)
     k3 = f(t + dt / 2., x + dt / 2. * k2, args)
@@ -167,26 +145,7 @@ def rk4_step(
 def integrate(
     f: Rhs, t: float, x: np.ndarray, dt: float, substeps: int, args: tuple
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Advance ``x`` by ``dt`` in ``substeps`` RK4 steps.
-
-    Parameters
-    ----------
-    f, t, x, args
-        As in `rk4_step`.
-    dt : float
-        The length of the whole step.
-    substeps : int
-        The number of RK4 steps, a positive integer. With JAX it must be static (close
-        over it rather than tracing it).
-
-    Returns
-    -------
-    x : np.ndarray
-        The state after ``dt``.
-    dxdt : np.ndarray
-        ``f(t, x, args)`` at the start.
-    """
+    """Advance ``x`` by ``dt`` in ``substeps`` RK4 steps."""
     h = dt / substeps
     x1, dxdt = rk4_step(f, t, x, h, args)
     return xp.fold(_substep, x1, substeps - 1, Substep(f, t, h, args)), dxdt
@@ -194,67 +153,19 @@ def integrate(
 
 
 def _substep(x: np.ndarray, i: int, c: Substep) -> np.ndarray:
-    """
-    The substep after the first, ``i + 1``.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        The state before the substep.
-    i : int
-        The index of the substep minus one.
-    c : Substep
-        The right-hand side, the start time, the substep length and the arguments.
-
-    Returns
-    -------
-    np.ndarray
-        The state after the substep.
-    """
+    """The substep after the first, ``i + 1``."""
     return rk4_step(c.f, c.t + (i + 1) * c.h, x, c.h, c.args)[0]
 
 
 
 def _rhs_body(t: float, x: np.ndarray, a: BodyArgs) -> np.ndarray:
-    """
-    `rhs_body` with its arguments after ``t`` and ``x`` as one `BodyArgs`.
-
-    Parameters
-    ----------
-    t : float
-        The time.
-    x : np.ndarray
-        The 12 body states.
-    a : BodyArgs
-        The arguments of `rhs_body`.
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
-    """
+    """`rhs_body` with its arguments after ``t`` and ``x`` as one `BodyArgs`."""
     return rhs_body(t, x, a.forces, a.torques, a.g, a.mass, a.inertia, a.inertia_inverse)
 
 
 
 def _rhs_motors(t: float, x: np.ndarray, a: MotorsArgs) -> np.ndarray:
-    """
-    `rhs_body_with_motors` with its arguments after ``t`` and ``x`` as one `MotorsArgs`.
-
-    Parameters
-    ----------
-    t : float
-        The time.
-    x : np.ndarray
-        The body states and the motor speeds.
-    a : MotorsArgs
-        The arguments of `rhs_body_with_motors`.
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
-    """
+    """`rhs_body_with_motors` with its arguments after ``t`` and ``x`` as one `MotorsArgs`."""
     return rhs_body_with_motors(
         t, x, a.u, a.max_voltage, a.disturbance, a.g, a.mass, a.inertia, a.inertia_inverse,
         a.prop_params, a.motor_params, a.clockwise, a.positions)
@@ -265,20 +176,6 @@ def _rhs_battery(t: float, x: np.ndarray, a: BatteryArgs) -> np.ndarray:
     """
     `rhs_body_with_motors_and_battery` with its arguments after ``t`` and ``x`` as one
     `BatteryArgs`.
-
-    Parameters
-    ----------
-    t : float
-        The time.
-    x : np.ndarray
-        The body states, the motor speeds and the charge drawn during the step.
-    a : BatteryArgs
-        The arguments of `rhs_body_with_motors_and_battery`.
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``.
     """
     return rhs_body_with_motors_and_battery(
         t, x, a.u, a.cutoff, a.disturbance, a.g, a.mass, a.inertia, a.inertia_inverse,
@@ -294,23 +191,7 @@ def step_body(
     Advance a vehicle without motors by one step: the speed signals are the propeller
     speeds. The three step functions have this signature.
 
-    Parameters
-    ----------
-    state : VehicleState
-        The state at the start of the step.
-    u : np.ndarray
-        The speed signals, shape (n,).
-    vehicle : BodyVehicle
-        The vehicle's parameters.
-    dt : float
-        The time step.
-    substeps : int
-        RK4 steps per time step.
-
-    Returns
-    -------
-    VehicleState
-        The state at the end of the step.
+    ``u``: The speed signals, shape (n,).
     """
     forces, torques = forces_torques(
         u, vehicle.prop_params, vehicle.clockwise, vehicle.positions)
@@ -370,17 +251,7 @@ def _speed(i: int, c: tuple) -> float:
     """
     The propeller speed that a squared speed asks for.
 
-    Parameters
-    ----------
-    i : int
-        The propeller.
-    c : tuple
-        The squared speeds, in a tuple of one array.
-
-    Returns
-    -------
-    float
-        The speed (rad/s), or 0 if the square is negative.
+    Returns: The speed (rad/s), or 0 if the square is negative.
     """
     return xp.sqrt_nonneg(c[0][i])
 
@@ -390,17 +261,9 @@ def allocate(alloc_inverse: np.ndarray, thrust_torques: np.ndarray) -> np.ndarra
     """
     Propeller speeds that produce a thrust and three torques (`Multirotor.allocate_control`).
 
-    Parameters
-    ----------
-    alloc_inverse : np.ndarray
-        The inverse of the vehicle's control allocation matrix, shape (n, 4).
-    thrust_torques : np.ndarray
-        The thrust and the three torques, shape (4,).
-
-    Returns
-    -------
-    np.ndarray
-        The propeller speeds (rad/s), shape (n,).
+    ``alloc_inverse``: The inverse of the vehicle's control allocation matrix, shape (n, 4).
+    ``thrust_torques``: The thrust and the three torques, shape (4,).
+    Returns: The propeller speeds (rad/s), shape (n,).
     """
     wanted = alloc_inverse @ thrust_torques
     return xp.map_(_speed, wanted.shape[0], (wanted,))
@@ -408,24 +271,7 @@ def allocate(alloc_inverse: np.ndarray, thrust_torques: np.ndarray) -> np.ndarra
 
 
 def _drive(carry: Carry, i: int, c: Rollout) -> Drive:
-    """
-    The controller's action and the propeller speeds it asks for.
-
-    Parameters
-    ----------
-    carry : Carry
-        The controller's state and the vehicle's state before step ``i``.
-    i : int
-        The step.
-    c : Rollout
-        The parameters, the targets and the time step.
-
-    Returns
-    -------
-    Drive
-        The controller's new state and memo, its action (thrust and torques), and the
-        propeller speeds.
-    """
+    """The controller's action and the propeller speeds it asks for."""
     vehicle, ctrl = c.vehicle, c.ctrl
     inputs = Inputs(
         ctrl.params, c.targets[i], carry.state.x[:N_BODY_STATES], carry.state.acceleration,
@@ -441,17 +287,8 @@ def _record(state: VehicleState, action: np.ndarray) -> np.ndarray:
     """
     One row of the trajectory.
 
-    Parameters
-    ----------
-    state : VehicleState
-        The vehicle's state after the step.
-    action : np.ndarray
-        The controller's thrust and torques, shape (4,).
-
-    Returns
-    -------
-    np.ndarray
-        The 12 body states and the action, shape (16,).
+    ``action``: The controller's thrust and torques, shape (4,).
+    Returns: The 12 body states and the action, shape (16,).
     """
     return xp.concatenate((state.x[:N_BODY_STATES], action))
 
@@ -462,21 +299,7 @@ def _loop_step_body(carry: Carry, i: int, c: Rollout) -> Tuple[Carry, np.ndarray
     One step of a rollout of a vehicle without motors, as `multirotor.xp_numba.scan` takes
     it: the controller drives, then the vehicle steps.
 
-    Parameters
-    ----------
-    carry : Carry
-        The controller's and the vehicle's state before the step.
-    i : int
-        The step.
-    c : Rollout
-        The parameters, the targets and the time step.
-
-    Returns
-    -------
-    carry : Carry
-        The states after the step.
-    row : np.ndarray
-        The row of the trajectory, shape (16,).
+    Returns: The row of the trajectory, shape (16,).
     """
     drive = _drive(carry, i, c)
     state = step_body(carry.state, drive.u, c.vehicle, c.dt, c.substeps)
@@ -501,23 +324,7 @@ def _loop_step_motors_battery(carry: Carry, i: int, c: Rollout) -> Tuple[Carry, 
 
 
 def _carry0(state0: VehicleState, start: Optional[ControllerState]) -> Tuple[Carry, int]:
-    """
-    The carry that a rollout starts from.
-
-    Parameters
-    ----------
-    state0 : VehicleState
-        The vehicle's state at the start.
-    start : ControllerState or None
-        The controller's state, or None for a controller at rest.
-
-    Returns
-    -------
-    carry : Carry
-        The initial carry.
-    n0 : int
-        The number of controller steps taken before it.
-    """
+    """The carry that a rollout starts from."""
     if start is None:
         memo = Memo(xp.zeros(2), xp.zeros(1), xp.zeros(3))
         return Carry(xp.zeros((N_PID_STATES, N_CASCADE_CHANNELS)), memo, state0), 0
@@ -526,25 +333,7 @@ def _carry0(state0: VehicleState, start: Optional[ControllerState]) -> Tuple[Car
 
 
 def _result(carry: Carry, n0: int, steps: int) -> Tuple[ControllerState, VehicleState]:
-    """
-    The final controller and vehicle states, as the tuples that a rollout starts from.
-
-    Parameters
-    ----------
-    carry : Carry
-        The carry after the last step.
-    n0 : int
-        The number of controller steps taken before the rollout.
-    steps : int
-        The number of steps of the rollout.
-
-    Returns
-    -------
-    ControllerState
-        The controller's state, with the step count ``n0 + steps``.
-    VehicleState
-        The vehicle's state.
-    """
+    """The final controller and vehicle states, as the tuples that a rollout starts from."""
     return ControllerState(carry.x, carry.memo, n0 + steps), carry.state
 
 

@@ -29,19 +29,7 @@ from . import physics
 
 
 def _value(x: float) -> float:
-    """
-    Missing (None) parameters are stored as NaN.
-
-    Parameters
-    ----------
-    x : float or None
-        The parameter.
-
-    Returns
-    -------
-    float
-        ``x``, or NaN if it is None.
-    """
+    """Missing (None) parameters are stored as NaN."""
     return np.nan if x is None else float(x)
 
 

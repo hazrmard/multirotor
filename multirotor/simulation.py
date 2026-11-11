@@ -91,26 +91,7 @@ class Propeller:
         cls, data: PropellerData, i: int, params: PropellerParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> 'Propeller':
-        """
-        Create a propeller over an existing data object, at index ``i``.
-
-        Parameters
-        ----------
-        data : PropellerData
-            The shared data object.
-        i : int
-            The index of this propeller in ``data``.
-        params : PropellerParams
-            The parameters of this propeller.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The solver used to advance the motor, if any.
-
-        Returns
-        -------
-        Propeller
-        """
+        """Create a propeller over an existing data object, at index ``i``."""
         propeller = cls.__new__(cls)
         propeller._attach(data, i, params, simulation, integrator)
         return propeller
@@ -120,22 +101,7 @@ class Propeller:
         self, data: PropellerData, i: int, params: PropellerParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
-        """
-        Make this propeller a view of column ``i`` of ``data``.
-
-        Parameters
-        ----------
-        data : PropellerData
-            The data object that holds the propeller's parameters and state.
-        i : int
-            The propeller's index in ``data``.
-        params : PropellerParams
-            The propeller's parameters.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The integrator for the propeller's motor.
-        """
+        """Make this propeller a view of column ``i`` of ``data``."""
         self.params: PropellerParams = params
         self.simulation: SimulationParams = simulation
         self._data: PropellerData = data
@@ -224,17 +190,8 @@ class Propeller:
         """
         Thrust that is ``k_thrust * speed**2``.
 
-        Parameters
-        ----------
-        speed : float
-            The propeller's speed (rad/s).
-        airstream_velocity : np.ndarray
-            Ignored by this model.
-
-        Returns
-        -------
-        float
-            The thrust (N).
+        ``speed``: The propeller's speed (rad/s).
+        Returns: The thrust (N).
         """
         return self.params.k_thrust * speed**2
 
@@ -245,17 +202,9 @@ class Propeller:
         """
         Thrust from the blade-element model.
 
-        Parameters
-        ----------
-        speed : float
-            The propeller's speed (rad/s).
-        airstream_velocity : np.ndarray
-            The airstream velocity at the propeller, shape (3,).
-
-        Returns
-        -------
-        float
-            The thrust (N).
+        ``speed``: The propeller's speed (rad/s).
+        ``airstream_velocity``: The airstream velocity at the propeller, shape (3,).
+        Returns: The thrust (N).
         """
         p = self.params
         return thrust_blade_element_model(
@@ -311,26 +260,7 @@ class Motor:
         cls, data: MotorData, i: int, params: MotorParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> 'Motor':
-        """
-        Create a motor over an existing data object, at index ``i``.
-
-        Parameters
-        ----------
-        data : MotorData
-            The shared data object.
-        i : int
-            The index of this motor in ``data``.
-        params : MotorParams
-            The parameters of this motor.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The solver used to advance the motor speed.
-
-        Returns
-        -------
-        Motor
-        """
+        """Create a motor over an existing data object, at index ``i``."""
         motor = cls.__new__(cls)
         motor._attach(data, i, params, simulation, integrator)
         return motor
@@ -340,22 +270,7 @@ class Motor:
         self, data: MotorData, i: int, params: MotorParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
-        """
-        Make this motor a view of column ``i`` of ``data``.
-
-        Parameters
-        ----------
-        data : MotorData
-            The data object that holds the motor's parameters and state.
-        i : int
-            The motor's index in ``data``.
-        params : MotorParams
-            The motor's parameters.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The integrator for the motor's speed.
-        """
+        """Make this motor a view of column ``i`` of ``data``."""
         self.params: MotorParams = params
         self.simulation: SimulationParams = simulation
         self.integrator: Integrator = integrator
@@ -477,17 +392,8 @@ class Motor:
         """
         Speed of this motor after one time step, without changing its state.
 
-        Parameters
-        ----------
-        u : float
-            The speed signal.
-        max_voltage : float
-            The voltage limit (V).
-
-        Returns
-        -------
-        np.ndarray
-            The speed (rad/s), shape (1,).
+        ``max_voltage``: The voltage limit (V).
+        Returns: The speed (rad/s), shape (1,).
         """
         speed = self._data.speed[self._i:self._i + 1].copy()
         args = (np.asarray([u], dtype=float), float(max_voltage), self._params_column())
@@ -654,21 +560,7 @@ class Battery:
         """
         Update the battery after `Multirotor` integrated one time step.
 
-        Parameters
-        ----------
-        charge : float
-            Charge (C) drawn during the step.
-        motor_speeds : np.ndarray
-            Motor speeds at the end of the step.
-        u : np.ndarray
-            Speed signals during the step.
-        motor_params : np.ndarray
-            The `MotorData.params` matrix.
-
-        Returns
-        -------
-        float
-            The motors' voltage limit at the end of the step.
+        ``charge``: Charge (C) drawn during the step.
         """
         (self.charge_drawn, self.current, self.voltage, self.cutoff, self.overload,
          motor_voltage_limit) = battery_end_step(
@@ -993,15 +885,8 @@ class Multirotor:
         Speeds of all motors after one time step under speed signals ``u``,
         integrating the motors on their own, without changing their state.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            The speed signals, shape (n,).
-
-        Returns
-        -------
-        np.ndarray
-            The motor speeds (rad/s), shape (n,).
+        ``u``: The speed signals, shape (n,).
+        Returns: The motor speeds (rad/s), shape (n,).
         """
         motors = self._data.motors
         args = (
@@ -1018,15 +903,8 @@ class Multirotor:
         changing the state of the propellers. Without motors, speed signals take
         effect instantaneously.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            The speed signals, shape (n,).
-
-        Returns
-        -------
-        np.ndarray
-            The propeller speeds (rad/s), shape (n,).
+        ``u``: The speed signals, shape (n,).
+        Returns: The propeller speeds (rad/s), shape (n,).
         """
         if self._data.motors is None:
             return np.asarray(u)
@@ -1040,14 +918,9 @@ class Multirotor:
         Set motor speeds, and the voltages and currents at those speeds under
         speed signals ``u`` and voltage limit ``max_voltage``.
 
-        Parameters
-        ----------
-        speed : np.ndarray
-            The motor speeds (rad/s), shape (n,).
-        u : np.ndarray
-            The speed signals, shape (n,).
-        max_voltage : float
-            The voltage limit (V).
+        ``speed``: The motor speeds (rad/s), shape (n,).
+        ``u``: The speed signals, shape (n,).
+        ``max_voltage``: The voltage limit (V).
         """
         motors = self._data.motors
         motors.speed[:] = speed
@@ -1061,10 +934,7 @@ class Multirotor:
         Advance all propellers (and motors) by one time step under speed signals
         ``u``, on their own.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            The speed signals, shape (n,).
+        ``u``: The speed signals, shape (n,).
         """
         if self._data.motors is None:
             self._data.speed[:] = u
@@ -1077,18 +947,10 @@ class Multirotor:
         """
         Thrust (N) of each propeller.
 
-        Parameters
-        ----------
-        speeds : np.ndarray
-            Propeller speeds (rad/s), shape (n,).
-        airstream_velocities : np.ndarray
-            Airstream velocity at each propeller, shape (3, n). Only used by the
-            blade-element thrust model.
-
-        Returns
-        -------
-        np.ndarray
-            Thrust of each propeller, shape (n,).
+        ``speeds``: Propeller speeds (rad/s), shape (n,).
+        ``airstream_velocities``: Airstream velocity at each propeller, shape (3, n). Only used
+          by the blade-element thrust model.
+        Returns: Thrust of each propeller, shape (n,).
         """
         if self._data.use_thrust_constant:
             return self._data.params[PROP_K_THRUST] * speeds**2
@@ -1289,14 +1151,7 @@ class Multirotor:
         fixed over the step, so they are calculated once instead of at every
         evaluation of the derivative.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals (rad/s).
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
+        ``u``: Speed signals (rad/s).
         """
         forces, torques = self.get_forces_torques(u, self.state)
         forces = forces.astype(float) + disturb_forces
@@ -1319,14 +1174,7 @@ class Multirotor:
         time step. Thrust depends on the airstream, so forces are recalculated
         at every evaluation of the derivative.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals (rad/s).
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
+        ``u``: Speed signals (rad/s).
         """
         x0 = self.state.astype(float)
         self._dxdt = self.dxdt_speeds(
@@ -1347,15 +1195,6 @@ class Multirotor:
         """
         Advance the body and the motors by one time step, integrating them
         together.
-
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals.
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
         """
         motors = self._data.motors
         battery = self.battery

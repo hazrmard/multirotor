@@ -529,11 +529,6 @@ class DataLog:
         Convert python list to array and put up a flag that all arrays are up
         to date.
         If there was no controller, then `actions` remains `None`.
-
-        Parameters
-        ----------
-        relative_to : np.ndarray, optional
-            Not used.
         """
         if not self._arrayed:
             self.states = np.asarray(self._states, self.vehicle.dtype)
