@@ -13,6 +13,7 @@ from multirotor.dynamics import rhs_body_with_motors, rhs_body_with_motors_and_b
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import battery_operating_point, battery_terminal, motor_power
 from multirotor.simulation import Battery, Multirotor
+from multirotor.tuples import rhs_arguments
 from multirotor.vehicle import BatteryParams, SimulationParams
 
 from common import N_SCHEDULE, hover_signals, make_params, nominal_speed, schedule, settle_at_hover
@@ -294,10 +295,9 @@ def test_empty_battery_draws_no_charge_within_a_step():
     u = hover(vehicle)
     n = len(u)
     x = np.concatenate((vehicle.state, vehicle._data.motors.speed, [0.]))
-    battery_args = vehicle.battery._kernel_params()
     for charge_drawn, drawing in ((capacity - 0.1, True), (capacity, False), (capacity + 0.1, False)):
         dxdt = rhs_body_with_motors_and_battery(
-            0., x, u, False, np.zeros(6), *vehicle._kernel_params, *battery_args, charge_drawn)
+            0., x, *rhs_arguments(vehicle._vehicle, u, False, np.zeros(6)), charge_drawn)
         assert (dxdt[-1] > 0.) == drawing
         assert (dxdt[12:12 + n] > -1e-9).all() == drawing, 'motors spin down when empty'
 

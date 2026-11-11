@@ -88,11 +88,11 @@ class Fleet:
         self.n_propellers: int = n
         self._motors: bool = first._data.motors is not None
         self._battery: bool = first.battery.has_model
-        kernel = [v._kernel_params for v in vehicles]
+        kernel = [v._vehicle for v in vehicles]
         self._g = float(simulation.g)
         self._mass = np.asarray([k.mass for k in kernel])
-        self._inertia = np.stack([k.inertia_matrix for k in kernel])
-        self._inertia_inverse = np.stack([k.inertia_matrix_inverse for k in kernel])
+        self._inertia = np.stack([k.inertia for k in kernel])
+        self._inertia_inverse = np.stack([k.inertia_inverse for k in kernel])
         self._prop_params = np.stack([k.prop_params for k in kernel])
         self._motor_params = np.stack([k.motor_params for k in kernel]) \
             if self._motors else None

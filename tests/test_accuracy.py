@@ -18,6 +18,7 @@ from multirotor.dynamics import N_BODY_STATES, rhs_body
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import motor_acc
 from multirotor.simulation import Motor, Multirotor
+from multirotor.tuples import rhs_arguments
 from multirotor.vehicle import BatteryParams, SimulationParams
 
 from common import (
@@ -43,8 +44,8 @@ def reference_trajectory(vehicle: Multirotor, us: np.ndarray) -> np.ndarray:
     x = np.concatenate((vehicle.state.astype(float), vehicle._data.motors.speed))
     out = []
     for u in us:
-        args = (np.asarray(u, float), float(vehicle.battery.voltage), np.zeros(6)) \
-               + vehicle._kernel_params
+        args = rhs_arguments(
+            vehicle._vehicle, np.asarray(u, float), float(vehicle.battery.voltage), np.zeros(6))
         x = odeint(vehicle._rhs, x, (0, vehicle.simulation.dt), args=args,
                    rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
         out.append(x)
@@ -96,7 +97,7 @@ def test_body_equations_match_oracle(thrust_model):
         body_state = rng.uniform(-0.5, 0.5, 12)
         speeds = nominal_speed(vp, sp) * rng.uniform(0.8, 1.2, 8)
         x = np.concatenate((body_state, speeds))
-        args = (speeds, np.inf, np.zeros(6)) + vehicle._kernel_params
+        args = rhs_arguments(vehicle._vehicle, speeds, np.inf, np.zeros(6))
         if thrust_model == 'fsolve':
             args += (float(sp.rho),)
         dxdt = vehicle._rhs(0., x, *args)
@@ -211,7 +212,7 @@ def test_small_time_steps_converge(monkeypatch):
     x, reference = np.zeros(12), []
     for u in us:
         forces, torques = vehicle.get_forces_torques(u, x)
-        args = (forces, torques) + vehicle._body_kernel_params()
+        args = (forces, torques) + tuple(vehicle._vehicle[:4])
         x = odeint(rhs_body, x, (0, hold_time), args=args,
                    rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
         reference.append(x[:3])

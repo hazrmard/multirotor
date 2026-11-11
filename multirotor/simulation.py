@@ -1,4 +1,4 @@
-from typing import Callable, List, NamedTuple, Tuple
+from typing import Callable, List, Tuple
 from copy import deepcopy
 
 import numpy as np
@@ -18,7 +18,7 @@ from .dynamics import (
     rhs_body_with_motors_blade_element, rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
-from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState
+from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState, rhs_arguments
 
 
 Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
@@ -53,25 +53,6 @@ def odeint_integrator(
         The state at the end of the step.
     """
     return odeint(fun, x0, (0, dt), args=args, rtol=1e-4, atol=1e-4, tfirst=True)[-1]
-
-
-
-class KernelParams(NamedTuple):
-    """
-    float64 copies of a vehicle's parameters, in the order the right-hand sides
-    in `multirotor.dynamics` take them after their per-step arguments.
-    """
-    g: float
-    mass: float
-    inertia_matrix: np.ndarray
-    inertia_matrix_inverse: np.ndarray
-    prop_params: np.ndarray
-    "The `PropellerData.params` matrix."
-    motor_params: np.ndarray
-    "The `MotorData.params` matrix, or None without motors."
-    clockwise: np.ndarray
-    positions: np.ndarray
-    "Position of each propeller relative to the center of mass, shape (3, n)."
 
 
 
@@ -554,11 +535,6 @@ class Battery:
         return self._params_vector[BATTERY_CAPACITY] - self.charge_drawn
 
 
-    def _kernel_params(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The battery's arguments for `dynamics.rhs_body_with_motors_and_battery`."""
-        return self._params_vector, self._ocv_soc, self._ocv_voltage
-
-
     def _end_step(
         self, charge: float, motor_speeds: np.ndarray, u: np.ndarray,
         motor_params: np.ndarray
@@ -664,17 +640,26 @@ class Multirotor:
             self._rhs = rhs_body_with_motors
         else:
             self._rhs = rhs_body_with_motors_blade_element
-        # Copied before reset() casts the parameters to the vehicle's dtype
-        self._kernel_params = KernelParams(
-            g=float(self.simulation.g),
-            mass=float(self.params.mass),
-            inertia_matrix=self.params.inertia_matrix.astype(float),
-            inertia_matrix_inverse=self.params.inertia_matrix_inverse.astype(float),
-            prop_params=self._data.params,
-            motor_params=None if self._data.motors is None else self._data.motors.params,
-            clockwise=np.asarray(self.params.clockwise, dtype=float),
-            positions=self.params.propeller_vectors.astype(float),
-        )
+        # float64 copies of the parameters, made before reset() casts them to the vehicle's
+        # dtype. The arrays of the propellers, motors and battery are the live ones. The
+        # voltage limit and the disturbance are placeholders: a step passes the current ones.
+        body = (
+            float(self.simulation.g), float(self.params.mass),
+            self.params.inertia_matrix.astype(float),
+            self.params.inertia_matrix_inverse.astype(float), self._data.params)
+        shape = (np.asarray(self.params.clockwise, dtype=float),
+                 self.params.propeller_vectors.astype(float))
+        if self._data.motors is None:
+            self._vehicle = BodyVehicle(*body, *shape)
+        else:
+            motors = body + (self._data.motors.params,) + shape
+            placeholders = (float(self.battery.motor_voltage_limit), np.zeros(6))
+            if self.battery.has_model:
+                b = self.battery
+                self._vehicle = BatteryVehicle(
+                    *motors, b._params_vector, b._ocv_soc, b._ocv_voltage, *placeholders)
+            else:
+                self._vehicle = MotorsVehicle(*motors, *placeholders)
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
@@ -755,20 +740,11 @@ class Multirotor:
         """
         if not self._data.use_thrust_constant:
             raise ValueError('Blade-element thrust is not supported.')
-        p = self._kernel_params
-        body = (
-            p.g, p.mass, np.array(p.inertia_matrix, float), np.array(p.inertia_matrix_inverse, float),
-            np.array(p.prop_params, float), np.array(p.clockwise, float),
-            np.array(p.positions, float))
-        if self._data.motors is None:
-            return BodyVehicle(*body)
-        motors = body + (
-            np.array(p.motor_params, float), float(self.battery.motor_voltage_limit), np.zeros(6))
-        if not self.battery.has_model:
-            return MotorsVehicle(*motors)
-        b = self.battery
-        return BatteryVehicle(*motors, np.array(b._params_vector, float),
-                              np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
+        v = self._vehicle
+        copies = [float(f) if np.ndim(f) == 0 else np.array(f, float) for f in v]
+        if self._data.motors is not None:
+            copies[-2] = float(self.battery.motor_voltage_limit)
+        return type(v)(*copies)
 
 
     def rollout_state(self):
@@ -954,12 +930,6 @@ class Multirotor:
             speeds, airstream_velocities, self._data.params, self.simulation.rho)
 
 
-    def _body_kernel_params(self) -> Tuple[float, float, np.ndarray, np.ndarray]:
-        """Gravity, mass, inertia matrix and its inverse: the parameters `rhs_body` takes."""
-        p = self._kernel_params
-        return p.g, p.mass, p.inertia_matrix, p.inertia_matrix_inverse
-
-
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate the forces and torques acting on the vehicle's center of gravity
@@ -1022,7 +992,7 @@ class Multirotor:
         # forces, torques = self.get_forces_torques(u, x)
         u = np.asarray(u, dtype=float)
         return rhs_body(
-            t, np.asarray(x, dtype=float), u[:3], u[3:], *self._body_kernel_params())
+            t, np.asarray(x, dtype=float), u[:3], u[3:], *self._vehicle[:4])
 
 
     def dxdt_speeds(
@@ -1066,7 +1036,7 @@ class Multirotor:
             t, np.asarray(x, dtype=float),
             forces.astype(float) + disturb_forces,
             torques.astype(float) + disturb_torques,
-            *self._body_kernel_params())
+            *self._vehicle[:4])
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -1087,7 +1057,7 @@ class Multirotor:
         """
         self.t += self.simulation.dt
         u = np.asarray(u, dtype=float)
-        args = (u[:3], u[3:]) + self._body_kernel_params()
+        args = (u[:3], u[3:]) + tuple(self._vehicle[:4])
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
@@ -1156,7 +1126,7 @@ class Multirotor:
         forces, torques = self.get_forces_torques(u, self.state)
         forces = forces.astype(float) + disturb_forces
         torques = torques.astype(float) + disturb_torques
-        args = (forces, torques) + self._body_kernel_params()
+        args = (forces, torques) + tuple(self._vehicle[:4])
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
@@ -1222,15 +1192,16 @@ class Multirotor:
         if battery.has_model:
             # One more state: the charge drawn during this step
             x0 = np.append(x0, 0.)
-            args = (u, battery.cutoff, disturbance) + self._kernel_params \
-                   + battery._kernel_params() + (battery.charge_drawn,)
+            args = rhs_arguments(self._vehicle, u, battery.cutoff, disturbance) \
+                   + (battery.charge_drawn,)
         elif self._data.use_thrust_constant:
-            args = (u, float(battery.motor_voltage_limit), disturbance) \
-                   + self._kernel_params
+            args = rhs_arguments(
+                self._vehicle, u, float(battery.motor_voltage_limit), disturbance)
         else:
             # Blade-element thrust also needs the air density
-            args = (u, float(battery.motor_voltage_limit), disturbance) \
-                   + self._kernel_params + (float(self.simulation.rho),)
+            args = rhs_arguments(
+                self._vehicle, u, float(battery.motor_voltage_limit), disturbance) \
+                   + (float(self.simulation.rho),)
         self._dxdt = self._rhs(self.t, x0, *args)[:N_BODY_STATES].astype(self.dtype)
         x = self.integrator(self._rhs, x0, self.simulation.dt, args)
 

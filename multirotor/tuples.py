@@ -33,13 +33,24 @@ The parameters of a vehicle without motors. ``prop_params`` is the propeller mat
 relative to the center of mass, shape (3, n).
 """
 
-MotorsVehicle = namedtuple('MotorsVehicle', BodyVehicle._fields + (
-    'motor_params', 'max_voltage', 'disturbance'))
-"The parameters of a vehicle with motors: those of `BodyVehicle` and the motor matrix."
+MotorsVehicle = namedtuple('MotorsVehicle', (
+    'g mass inertia inertia_inverse prop_params motor_params clockwise positions '
+    'max_voltage disturbance'))
+"""
+The parameters of a vehicle with motors: those of `BodyVehicle` and the motor matrix,
+then the motors' voltage limit and the disturbance (force, torque) on the body.
+"""
 
-BatteryVehicle = namedtuple('BatteryVehicle', MotorsVehicle._fields + (
-    'battery_params', 'ocv_soc', 'ocv_voltage'))
+BatteryVehicle = namedtuple('BatteryVehicle', (
+    'g mass inertia inertia_inverse prop_params motor_params clockwise positions '
+    'battery_params ocv_soc ocv_voltage max_voltage disturbance'))
 "The parameters of a vehicle with motors and a battery model."
+
+# The fields before ``max_voltage`` are the parameters, in the order that the right-hand
+# sides in `multirotor.dynamics` take them after their per-step arguments, so that
+# ``vehicle[:-2]`` can be splatted into them. ``max_voltage`` and ``disturbance`` are the
+# last two fields of the types with motors, and a right-hand side takes them before the
+# parameters. See `rhs_arguments`.
 
 KINDS = {BodyVehicle: 'body', MotorsVehicle: 'motors', BatteryVehicle: 'motors_battery'}
 "The ``closed_loop_<kind>`` function that takes each type of vehicle."
@@ -74,6 +85,15 @@ outputs that the stages running at their own period hold between their runs
 (``(ref_vel, thrust, torques)``), and the number of steps ``n`` taken. ``n`` sets the phase
 of those stages.
 """
+
+
+def rhs_arguments(vehicle, u, limit, disturbance) -> tuple:
+    """
+    The arguments, after ``t`` and ``x``, of the right-hand side in `multirotor.dynamics` for a
+    vehicle with motors: ``u``, the voltage limit (or the battery's cutoff flag), the
+    disturbance, then the vehicle's parameters.
+    """
+    return (u, limit, disturbance) + tuple(vehicle[:-2])
 
 
 def kind_of(vehicle) -> str:
