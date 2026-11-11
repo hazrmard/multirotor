@@ -31,7 +31,8 @@ from typing import Callable, NamedTuple, Optional, Tuple, Union
 import numpy as np
 
 from . import xp_numba as xp
-from .controller.cascade import cascaded_step
+from .controller.cascade import Inputs, cascaded_step
+from .controller.data import N_CASCADE_CHANNELS, N_PID_STATES
 from .dynamics import (
     N_BODY_STATES, rhs_body, rhs_body_with_motors, rhs_body_with_motors_and_battery)
 from .lazy import build
@@ -131,8 +132,6 @@ class Drive(NamedTuple):
 
 def rk4_step(
     f: Rhs, t: float, x: np.ndarray, dt: float, args: tuple
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     One RK4 step of ``dx/dt = f(t, x, args)``.
@@ -167,8 +166,6 @@ def rk4_step(
 
 def integrate(
     f: Rhs, t: float, x: np.ndarray, dt: float, substeps: int, args: tuple
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Advance ``x`` by ``dt`` in ``substeps`` RK4 steps.
@@ -292,8 +289,6 @@ def _rhs_battery(t: float, x: np.ndarray, a: BatteryArgs) -> np.ndarray:
 
 def step_body(
     state: VehicleState, u: np.ndarray, vehicle: BodyVehicle, dt: float, substeps: int
-
-
 ) -> VehicleState:
     """
     Advance a vehicle without motors by one step: the speed signals are the propeller
@@ -329,8 +324,6 @@ def step_body(
 
 def step_motors(
     state: VehicleState, u: np.ndarray, vehicle: MotorsVehicle, dt: float, substeps: int
-
-
 ) -> VehicleState:
     """
     Advance a vehicle with motors and no battery model by one step; the motors see
@@ -348,8 +341,6 @@ def step_motors(
 
 def step_motors_battery(
     state: VehicleState, u: np.ndarray, vehicle: BatteryVehicle, dt: float, substeps: int
-
-
 ) -> VehicleState:
     """
     Advance a vehicle with motors and a battery model by one step. The battery sags and can
@@ -436,12 +427,12 @@ def _drive(carry: Carry, i: int, c: Rollout) -> Drive:
         propeller speeds.
     """
     vehicle, ctrl = c.vehicle, c.ctrl
-    x, memo, action = cascaded_step(
-        ctrl.params, carry.x, carry.memo, c.targets[i], carry.state.x[:N_BODY_STATES],
-        carry.state.acceleration, vehicle.inertia, vehicle.mass, vehicle.mass * vehicle.g,
-        c.dt, i + c.n0, ctrl.steps.position, ctrl.steps.attitude, ctrl.steps.altitude,
-        xp.array((0., 0.)), False, ctrl.feedforward_weight, ctrl.leashing,
+    inputs = Inputs(
+        ctrl.params, c.targets[i], carry.state.x[:N_BODY_STATES], carry.state.acceleration,
+        vehicle.inertia, vehicle.mass, vehicle.mass * vehicle.g, c.dt, ctrl.steps,
+        xp.zeros(2), False, ctrl.feedforward_weight, ctrl.leashing,
         ctrl.square_root_position, ctrl.square_root_attitude)
+    x, memo, action = cascaded_step(carry.x, carry.memo, inputs, i + c.n0)
     return Drive(x, memo, action, allocate(ctrl.alloc_inverse, action))
 
 
@@ -528,8 +519,8 @@ def _carry0(state0: VehicleState, start: Optional[ControllerState]) -> Tuple[Car
         The number of controller steps taken before it.
     """
     if start is None:
-        zeros = Memo(xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.)))
-        return Carry(xp.array(((0.,) * 12,) * 7), zeros, state0), 0
+        memo = Memo(xp.zeros(2), xp.zeros(1), xp.zeros(3))
+        return Carry(xp.zeros((N_PID_STATES, N_CASCADE_CHANNELS)), memo, state0), 0
     return Carry(start.x, start.memo, state0), start.n
 
 
@@ -561,8 +552,6 @@ def _result(carry: Carry, n0: int, steps: int) -> Tuple[ControllerState, Vehicle
 def closed_loop_body(
     state0: VehicleState, vehicle: BodyVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
-
-
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
@@ -609,8 +598,6 @@ def closed_loop_body(
 def closed_loop_motors(
     state0: VehicleState, vehicle: MotorsVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
-
-
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     `closed_loop_body` for a vehicle with motors (`MotorsVehicle`).
@@ -639,8 +626,6 @@ def closed_loop_motors(
 def closed_loop_motors_battery(
     state0: VehicleState, vehicle: BatteryVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
-
-
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     `closed_loop_body` for a vehicle with motors and a battery (`BatteryVehicle`).

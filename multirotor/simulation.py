@@ -18,7 +18,8 @@ from .dynamics import (
     rhs_body_with_motors_blade_element, rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
-from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState, rhs_arguments
+from .tuples import (
+    BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState, body_arguments, rhs_arguments)
 
 
 Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
@@ -679,7 +680,7 @@ class Battery:
 
     def _check_cutoff(self) -> None:
         """Cut off the motors if the terminal voltage is below min_voltage."""
-        if self.voltage < self.params.min_voltage:
+        if self.voltage < self._params_vector[BATTERY_MIN_VOLTAGE]:
             self.cutoff = True
 
 
@@ -753,24 +754,28 @@ class Multirotor:
             self._rhs = rhs_body_with_motors_blade_element
         # float64 copies of the parameters, made before reset() casts them to the vehicle's
         # dtype. The arrays of the propellers, motors and battery are the live ones. The
-        # voltage limit and the disturbance are placeholders: a step passes the current ones.
-        body = (
-            float(self.simulation.g), float(self.params.mass),
-            self.params.inertia_matrix.astype(float),
-            self.params.inertia_matrix_inverse.astype(float), self._data.params)
-        shape = (np.asarray(self.params.clockwise, dtype=float),
-                 self.params.propeller_vectors.astype(float))
+        # voltage limit and the disturbance of a vehicle with motors are placeholders: a step
+        # passes the current ones, and `rollout_params` fills in the voltage limit.
+        fields = dict(
+            g=float(self.simulation.g), mass=float(self.params.mass),
+            inertia=self.params.inertia_matrix.astype(float),
+            inertia_inverse=self.params.inertia_matrix_inverse.astype(float),
+            prop_params=self._data.params,
+            clockwise=np.asarray(self.params.clockwise, dtype=float),
+            positions=self.params.propeller_vectors.astype(float))
         if self._data.motors is None:
-            self._vehicle = BodyVehicle(*body, *shape)
+            self._vehicle = BodyVehicle(**fields)
         else:
-            motors = body + (self._data.motors.params,) + shape
-            placeholders = (float(self.battery.motor_voltage_limit), np.zeros(6))
+            fields.update(
+                motor_params=self._data.motors.params,
+                max_voltage=float(self.battery.motor_voltage_limit), disturbance=np.zeros(6))
             if self.battery.has_model:
                 b = self.battery
                 self._vehicle = BatteryVehicle(
-                    *motors, b._params_vector, b._ocv_soc, b._ocv_voltage, *placeholders)
+                    **fields, battery_params=b._params_vector, ocv_soc=b._ocv_soc,
+                    ocv_voltage=b._ocv_voltage)
             else:
-                self._vehicle = MotorsVehicle(*motors, *placeholders)
+                self._vehicle = MotorsVehicle(**fields)
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
@@ -857,10 +862,10 @@ class Multirotor:
         if not self._data.use_thrust_constant:
             raise ValueError('Blade-element thrust is not supported.')
         v = self._vehicle
-        copies = [float(f) if np.ndim(f) == 0 else np.array(f, float) for f in v]
+        copy = type(v)(*(float(f) if np.ndim(f) == 0 else np.array(f, float) for f in v))
         if self._data.motors is not None:
-            copies[-2] = float(self.battery.motor_voltage_limit)
-        return type(v)(*copies)
+            copy = copy._replace(max_voltage=float(self.battery.motor_voltage_limit))
+        return copy
 
 
     def rollout_state(self) -> VehicleState:
@@ -1158,7 +1163,7 @@ class Multirotor:
         # forces, torques = self.get_forces_torques(u, x)
         u = np.asarray(u, dtype=float)
         return rhs_body(
-            t, np.asarray(x, dtype=float), u[:3], u[3:], *self._vehicle[:4])
+            t, np.asarray(x, dtype=float), u[:3], u[3:], *body_arguments(self._vehicle))
 
 
     def dxdt_speeds(
@@ -1206,7 +1211,7 @@ class Multirotor:
             t, np.asarray(x, dtype=float),
             forces.astype(float) + disturb_forces,
             torques.astype(float) + disturb_torques,
-            *self._vehicle[:4])
+            *body_arguments(self._vehicle))
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -1227,7 +1232,7 @@ class Multirotor:
         """
         self.t += self.simulation.dt
         u = np.asarray(u, dtype=float)
-        args = (u[:3], u[3:]) + tuple(self._vehicle[:4])
+        args = (u[:3], u[3:]) + body_arguments(self._vehicle)
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
@@ -1296,7 +1301,7 @@ class Multirotor:
         forces, torques = self.get_forces_torques(u, self.state)
         forces = forces.astype(float) + disturb_forces
         torques = torques.astype(float) + disturb_torques
-        args = (forces, torques) + tuple(self._vehicle[:4])
+        args = (forces, torques) + body_arguments(self._vehicle)
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(

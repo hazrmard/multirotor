@@ -76,12 +76,6 @@ class BatteryVehicle(NamedTuple):
     disturbance: np.ndarray
 
 
-# The fields before ``max_voltage`` are the parameters, in the order that the right-hand
-# sides in `multirotor.dynamics` take them after their per-step arguments, so that
-# ``vehicle[:-2]`` can be splatted into them. ``max_voltage`` and ``disturbance`` are the
-# last two fields of the types with motors, and a right-hand side takes them before the
-# parameters. See `rhs_arguments`.
-
 KINDS = {BodyVehicle: 'body', MotorsVehicle: 'motors', BatteryVehicle: 'motors_battery'}
 "The ``closed_loop_<kind>`` function that takes each type of vehicle."
 
@@ -152,15 +146,30 @@ class ControllerState(NamedTuple):
     n: int
 
 
+def body_arguments(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> tuple:
+    """
+    The parameters that `multirotor.dynamics.rhs_body` takes.
+
+    Parameters
+    ----------
+    vehicle : BodyVehicle, MotorsVehicle or BatteryVehicle
+        The vehicle's parameters.
+
+    Returns
+    -------
+    tuple
+        Gravity, mass, inertia matrix and its inverse.
+    """
+    return vehicle.g, vehicle.mass, vehicle.inertia, vehicle.inertia_inverse
+
+
 def rhs_arguments(
     vehicle: Union[MotorsVehicle, BatteryVehicle], u: np.ndarray, limit: Union[float, bool],
     disturbance: np.ndarray
-
-
 ) -> tuple:
     """
     The arguments, after ``t`` and ``x``, of the right-hand side in `multirotor.dynamics` for a
-    vehicle with motors.
+    vehicle with motors, in the order that it takes them.
 
     Parameters
     ----------
@@ -176,9 +185,16 @@ def rhs_arguments(
     Returns
     -------
     tuple
-        ``u``, ``limit``, ``disturbance``, then the vehicle's parameters.
+        The arguments of `rhs_body_with_motors`, or with a battery model of
+        `rhs_body_with_motors_and_battery` up to its last one, the charge drawn before the step,
+        which varies from step to step.
     """
-    return (u, limit, disturbance) + tuple(vehicle[:-2])
+    arguments = (
+        u, limit, disturbance, *body_arguments(vehicle), vehicle.prop_params,
+        vehicle.motor_params, vehicle.clockwise, vehicle.positions)
+    if isinstance(vehicle, BatteryVehicle):
+        arguments += (vehicle.battery_params, vehicle.ocv_soc, vehicle.ocv_voltage)
+    return arguments
 
 
 def kind_of(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> str:

@@ -18,7 +18,7 @@ from multirotor.dynamics import N_BODY_STATES, rhs_body
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import motor_acc
 from multirotor.simulation import Motor, Multirotor
-from multirotor.tuples import rhs_arguments
+from multirotor.tuples import body_arguments, rhs_arguments
 from multirotor.vehicle import BatteryParams, SimulationParams
 
 from common import (
@@ -212,7 +212,7 @@ def test_small_time_steps_converge(monkeypatch):
     x, reference = np.zeros(12), []
     for u in us:
         forces, torques = vehicle.get_forces_torques(u, x)
-        args = (forces, torques) + tuple(vehicle._vehicle[:4])
+        args = (forces, torques) + body_arguments(vehicle._vehicle)
         x = odeint(rhs_body, x, (0, hold_time), args=args,
                    rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
         reference.append(x[:3])

@@ -11,7 +11,7 @@ from jax import lax
 from . import _cache
 from jax.numpy import (
     abs, array, concatenate, cos, cross, interp, logical_not, maximum,
-    minimum, sin, sqrt, stack, tan
+    minimum, sin, sqrt, stack, tan, zeros
 )
 
 

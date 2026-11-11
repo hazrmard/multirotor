@@ -14,7 +14,7 @@ import multirotor.coords as coords
 from multirotor.controller import data as K
 from multirotor.tuples import Memo
 from multirotor.lazy import build
-from test_cascade import INERTIA, MASS, OPTIONS, SIM_DT, WEIGHT, inputs, make_params
+from test_cascade import INERTIA, MASS, OPTIONS, SIM_DT, WEIGHT, inputs, make_inputs, make_params
 
 JAX_COORDS = build(coords.SOURCE, coords.NAMES, 'jax', vars(coords))
 JAX = build(cascade.SOURCE, cascade.NAMES, 'jax', {**vars(cascade), **vars(JAX_COORDS)})
@@ -25,15 +25,17 @@ def test_jax_matches_numba():
     rng = np.random.default_rng(1)
     for leashing, sqrt_pos, sqrt_att, feed_forward, steps in OPTIONS[::3]:
         params = make_params(rng)
-        step = jax.jit(JAX.cascaded_step, static_argnums=(11, 12, 13, 15, 17, 18, 19))
+        step = jax.jit(
+            lambda x, memo, params, args, n: JAX.cascaded_step(x, memo, make_inputs(
+                params, args, steps, feed_forward, leashing, sqrt_pos, sqrt_att), n))
         x_n = x_j = np.zeros((K.N_PID_STATES, 12))
         memo_n = memo_j = Memo(np.zeros(2), np.zeros(1), np.zeros(3))
         for n in range(20):
-            reference, body_state, acceleration, velocity = inputs(rng)
-            args = (reference, body_state, acceleration, INERTIA, MASS, WEIGHT, SIM_DT, n,
-                    *steps, velocity, feed_forward, .4, leashing, sqrt_pos, sqrt_att)
-            x_n, memo_n, a_n = cascade.cascaded_step(params, x_n, memo_n, *args)
-            x_j, memo_j, a_j = step(params, x_j, memo_j, *args)
+            args = inputs(rng)
+            inputs_n = make_inputs(
+                params, args, steps, feed_forward, leashing, sqrt_pos, sqrt_att)
+            x_n, memo_n, a_n = cascade.cascaded_step(x_n, memo_n, inputs_n, n)
+            x_j, memo_j, a_j = step(x_j, memo_j, params, args, n)
             np.testing.assert_allclose(x_j, x_n, rtol=1e-10, atol=1e-10)
             np.testing.assert_allclose(a_j, a_n, rtol=1e-10, atol=1e-10)
 
@@ -55,9 +57,9 @@ def test_gradient_through_a_rollout_matches_finite_differences(steps, flags):
         def body(carry, n_ref):
             x, memo, state = carry
             n, reference = n_ref
-            x, memo, action = JAX.cascaded_step(
-                p, x, memo, reference, state, jnp.zeros(3), INERTIA, MASS, WEIGHT,
-                SIM_DT, n, *steps, jnp.zeros(2), False, 0., leashing, sqrt_pos, sqrt_att)
+            x, memo, action = JAX.cascaded_step(x, memo, make_inputs(
+                p, (reference, state, jnp.zeros(3), jnp.zeros(2)), steps, False, leashing,
+                sqrt_pos, sqrt_att, feedforward_weight=0.), n)
             # a toy vehicle that closes the loop
             state = state.at[2].add(1e-3 * (action[0] - WEIGHT) / MASS)
             return (x, memo, state.at[6:9].add(1e-3 * action[1:])), action

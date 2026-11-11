@@ -17,7 +17,7 @@ from numba import njit
 from . import _cache
 from numpy import (
     abs, array, concatenate, cos, cross, interp, logical_not, maximum,
-    minimum, sin, sqrt, stack, tan
+    minimum, sin, sqrt, stack, tan, zeros
 )
 
 

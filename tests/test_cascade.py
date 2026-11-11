@@ -13,7 +13,7 @@ import pytest
 
 import multirotor.controller.cascade as cascade
 from multirotor.controller import data as K
-from multirotor.tuples import Memo
+from multirotor.tuples import Memo, Steps
 
 OPTIONS = list(itertools.product(
     (False, True), (False, True), (False, True), (False, True),
@@ -57,12 +57,22 @@ def zero_memo():
 
 
 
+def make_inputs(params, args, steps, feed_forward, leashing, sqrt_pos, sqrt_att,
+                feedforward_weight=.4):
+    "`cascade.Inputs` from the random arguments of `inputs`."
+    reference, body_state, acceleration, velocity = args
+    return cascade.Inputs(
+        params, reference, body_state, acceleration, INERTIA, MASS, WEIGHT, SIM_DT,
+        Steps(*steps), velocity, feed_forward, feedforward_weight, leashing, sqrt_pos, sqrt_att)
+
+
+
 def step(params, x, memo, rng, n, steps=(1, 1, 1), leashing=True, sqrt_pos=True,
          sqrt_att=True, feed_forward=True, inputs_=None):
     reference, body_state, acceleration, velocity = inputs_ or inputs(rng)
-    return cascade.cascaded_step(
-        params, x, memo, reference, body_state, acceleration, INERTIA, MASS, WEIGHT,
-        SIM_DT, n, *steps, velocity, feed_forward, .4, leashing, sqrt_pos, sqrt_att)
+    return cascade.cascaded_step(x, memo, make_inputs(
+        params, (reference, body_state, acceleration, velocity), steps, feed_forward,
+        leashing, sqrt_pos, sqrt_att), n)
 
 
 

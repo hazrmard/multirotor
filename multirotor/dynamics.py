@@ -87,8 +87,6 @@ class Supply(NamedTuple):
 def rhs_body(
     t: float, x: np.ndarray, forces: np.ndarray, torques: np.ndarray, g: float,
     mass: float, inertia_matrix: np.ndarray, inertia_matrix_inverse: np.ndarray
-
-
 ) -> np.ndarray:
     """
     Rate of change of the vehicle's 12 body states under forces and torques that
@@ -130,8 +128,6 @@ def rhs_body(
 def rhs_motor_only(
     t: float, speed: np.ndarray, u: np.ndarray, max_voltage: float,
     motor_params: np.ndarray
-
-
 ) -> np.ndarray:
     """
     Rate of change of motor speeds, for motors stepped on their own (outside a
@@ -164,8 +160,6 @@ def rhs_body_with_motors(
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray
-
-
 ) -> np.ndarray:
     """
     Rate of change of the body and its motors, for vehicles with motors whose
@@ -264,8 +258,6 @@ def battery_state(
     speeds: np.ndarray, u: np.ndarray, charge: float, cutoff: bool,
     motor_params: np.ndarray, battery_params: np.ndarray, ocv_soc: np.ndarray,
     ocv_voltage: np.ndarray
-
-
 ) -> BatteryState:
     """
     The battery's terminal voltage and current, and the voltage limit it puts
@@ -313,8 +305,6 @@ def rhs_body_with_motors_and_battery(
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
     battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
     charge_drawn: float
-
-
 ) -> np.ndarray:
     """
     Like `rhs_body_with_motors`, with a battery model. The battery's terminal
@@ -375,8 +365,6 @@ def rhs_body_with_motors_blade_element(
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
     rho: float
-
-
 ) -> np.ndarray:
     """
     Like `rhs_body_with_motors`, for vehicles whose thrust comes from the

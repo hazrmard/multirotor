@@ -39,10 +39,10 @@ after it::
 
 Call chain::
 
-    cascaded_step ---> _run_z ---> altitude_stage, climb_stage
-                  +--> _run_p ---> position_stage ---> leash_distance
+    cascaded_step ---> _run_altitude ---> altitude_stage, climb_stage
+                  +--> _run_position ---> position_stage ---> leash_distance
                   |                                +-> sqrt_control or the PID law
-                  +--> _run_a ---> velocity_stage, attitude_stage, rate_stage
+                  +--> _run_attitude ---> velocity_stage, attitude_stage, rate_stage
     fleet_step -----> cascaded_step, for each vehicle of a fleet (numba only)
     pid_stage ------> the PID law (a bare `multirotor.controller.pid.PIDController`)
 
@@ -84,6 +84,8 @@ from .data import (
     PID_MAX_ACCELERATION, PID_MAX_ERR_I, PID_REFERENCE)
 
 INF = float('inf')
+EPS = 1e-6
+"Added to a length that is divided by, so that a zero length gives zero."
 
 
 # ---------------------------------------------------------------------------
@@ -129,37 +131,21 @@ class Channel(NamedTuple):
 
 
 class ClimbChannel(NamedTuple):
-    "The `Channel` of the climb stage, with the vehicle's roll, pitch, yaw, mass and weight."
-    params: np.ndarray
-    x: np.ndarray
-    reference: np.ndarray
-    measurement: np.ndarray
-    dt: float
+    "The climb stage's operand: a `Channel`, with the vehicle's roll, pitch, yaw, mass and weight."
+    channel: Channel
     orientation: np.ndarray
     mass: float
     weight: float
 
 
-class SqrtChannel(NamedTuple):
-    "The `Channel` of the square-root controller: it takes the error, not the measurement."
-    params: np.ndarray
-    x: np.ndarray
-    reference: np.ndarray
-    err: np.ndarray
-    dt: float
-
-
 class Terms(NamedTuple):
     """
-    The operand of `_pid_terms` and `_sqrt_terms`, which `xp.cond` chooses between. Both take
-    every field, whether they use it or not.
+    The operand of `_pid_terms` and `_sqrt_terms`, which `xp.cond` chooses between: a `Channel`
+    and the error, already computed. The square-root controller takes the error, the PID law
+    the measurement.
     """
-    params: np.ndarray
-    x: np.ndarray
-    reference: np.ndarray
-    measurement: np.ndarray
+    channel: Channel
     err: np.ndarray
-    dt: float
 
 
 class Leash(NamedTuple):
@@ -173,8 +159,13 @@ class Leash(NamedTuple):
 
 class Inputs(NamedTuple):
     """
-    Everything besides the state and the memo that `cascaded_step` was given, with the same
-    names as its arguments, except that ``steps`` is a `multirotor.tuples.Steps`.
+    Everything that `cascaded_step` takes besides the state, the memo and the step count.
+
+    ``params`` and ``steps`` are the parameters of the stages and their periods in whole
+    simulation steps (`multirotor.tuples.Steps`). ``reference`` is the target: x, y, z and
+    yaw. ``body_state``, ``acceleration``, ``inertia``, ``mass`` and ``weight`` are the
+    vehicle's. ``feed_forward`` is a velocity reference, blended into the position stage
+    by ``feedforward_weight`` if ``use_feed_forward``.
     """
     params: np.ndarray
     reference: np.ndarray
@@ -223,6 +214,24 @@ def _clip(value: float, limit: float) -> float:
 
 
 
+def _length2(v: np.ndarray) -> float:
+    """
+    Length of the first two elements of a vector.
+
+    Parameters
+    ----------
+    v : np.ndarray
+        The vector, with at least two elements.
+
+    Returns
+    -------
+    float
+        ``sqrt(v[0]**2 + v[1]**2)``, with a finite gradient at zero.
+    """
+    return xp.sqrt_nonneg(v[0]**2 + v[1]**2)
+
+
+
 # ---------------------------------------------------------------------------
 # Control laws. A channel function returns the new state of one channel, as a
 # `ChannelState`.
@@ -230,8 +239,6 @@ def _clip(value: float, limit: float) -> float:
 def _pid_scalar(
     params: np.ndarray, x: np.ndarray, i: int, reference: float, measurement: float,
     dt: float
-
-
 ) -> PidLaw:
     """
     The PID law of channel ``i``, given its reference and measurement. The integral
@@ -329,11 +336,12 @@ def _climb_channel(i: int, c: ClimbChannel) -> ChannelState:
     ChannelState
         The new state of the channel. Its action is the thrust.
     """
-    law = _pid_scalar(c.params, c.x, i, c.reference[i], c.measurement[i], c.dt)
+    ch = c.channel
+    law = _pid_scalar(ch.params, ch.x, i, ch.reference[i], ch.measurement[i], ch.dt)
     tilt_compensation = xp.cos(c.orientation[0]) * xp.cos(c.orientation[1])
     thrust = c.mass * (law.action / tilt_compensation) + c.weight
     return ChannelState(
-        law.err, law.err_p, law.err_i, law.err_d, c.reference[i], thrust, law.integral)
+        law.err, law.err_p, law.err_i, law.err_d, ch.reference[i], thrust, law.integral)
 
 
 
@@ -405,7 +413,7 @@ def sqrt_control(err: float, k_p: float, derr_dt2_lim: float, dt: float) -> floa
 
 
 
-def _sqrt_channel(i: int, c: SqrtChannel) -> ChannelState:
+def _sqrt_channel(i: int, c: Terms) -> ChannelState:
     """
     The square-root controller as the P-term of a channel. The integral and
     derivative terms are left as they were. The acceleration limit is the stage's, in its
@@ -415,20 +423,20 @@ def _sqrt_channel(i: int, c: SqrtChannel) -> ChannelState:
     ----------
     i : int
         The channel.
-    c : SqrtChannel
-        The stage's parameters and state, its reference, the error (already computed), and
-        the time step.
+    c : Terms
+        The stage's `Channel` and the error, which this uses in place of the measurement.
 
     Returns
     -------
     ChannelState
         The new state of the channel.
     """
+    ch = c.channel
     action = sqrt_control(
-        c.err[i], c.params[PID_K_P, i], c.params[PID_MAX_ACCELERATION, 0], c.dt)
+        c.err[i], ch.params[PID_K_P, i], ch.params[PID_MAX_ACCELERATION, 0], ch.dt)
     return ChannelState(
-        c.err[i], action, c.x[PID_ERR_I, i], c.x[PID_ERR_D, i], c.reference[i], action,
-        c.x[PID_INTEGRAL, i])
+        c.err[i], action, ch.x[PID_ERR_I, i], ch.x[PID_ERR_D, i], ch.reference[i], action,
+        ch.x[PID_INTEGRAL, i])
 
 
 
@@ -439,16 +447,14 @@ def _pid_terms(op: Terms) -> np.ndarray:
     Parameters
     ----------
     op : Terms
-        The stage's parameters, state, reference, measurement, error and time step.
+        The stage's channel, and the error, which this ignores.
 
     Returns
     -------
     np.ndarray
         The new state of the stage, shape (N_PID_STATES, n).
     """
-    return xp.map_rows(
-        _pid_channel, op.reference.shape[0],
-        Channel(op.params, op.x, op.reference, op.measurement, op.dt))
+    return xp.map_rows(_pid_channel, op.channel.reference.shape[0], op.channel)
 
 
 
@@ -457,9 +463,7 @@ def _sqrt_terms(op: Terms) -> np.ndarray:
     The square-root controller on every channel. The operand and the result are those of
     `_pid_terms`.
     """
-    return xp.map_rows(
-        _sqrt_channel, op.reference.shape[0],
-        SqrtChannel(op.params, op.x, op.reference, op.err, op.dt))
+    return xp.map_rows(_sqrt_channel, op.channel.reference.shape[0], op)
 
 
 
@@ -470,8 +474,6 @@ def _sqrt_terms(op: Terms) -> np.ndarray:
 def pid_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     The plain PID law on every channel of a stage, as a bare
@@ -503,8 +505,6 @@ def pid_stage(
 def altitude_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Altitude stage (1 channel): z-position error to climb rate, limited. The arguments
@@ -519,8 +519,6 @@ def altitude_stage(
 def climb_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     orientation: np.ndarray, mass: float, weight: float, dt: float
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Climb rate stage (1 channel): vertical velocity error to thrust force. The thrust is
@@ -544,7 +542,7 @@ def climb_stage(
     """
     rows = xp.map_rows(
         _climb_channel, 1,
-        ClimbChannel(params, x, reference, measurement, dt, orientation, mass, weight))
+        ClimbChannel(Channel(params, x, reference, measurement, dt), orientation, mass, weight))
     return rows[PID_ACTION], rows
 
 
@@ -552,8 +550,6 @@ def climb_stage(
 def velocity_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Velocity stage (2 channels): body-frame xy-velocity error to pitch and roll,
@@ -568,8 +564,6 @@ def velocity_stage(
 def attitude_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float, square_root_scaling: bool
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Attitude stage (3 channels): orientation error to Euler rates. Optionally replaces
@@ -595,7 +589,7 @@ def attitude_stage(
     err_len = xp.sqrt_nonneg(err[0]**2 + err[1]**2 + err[2]**2)
     rows = xp.cond(
         square_root_scaling & (err_len > 0.), _sqrt_terms, _pid_terms,
-        Terms(params, x, reference, measurement, err, dt))
+        Terms(Channel(params, x, reference, measurement, dt), err))
     return rows[PID_ACTION], rows
 
 
@@ -603,8 +597,6 @@ def attitude_stage(
 def rate_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     orientation: np.ndarray, inertia: np.ndarray, dt: float
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Rate stage (3 channels): Euler rate error to body torques.
@@ -639,8 +631,6 @@ def rate_stage(
 
 def leash_distance(
     k_p: float, body_state: np.ndarray, acceleration: np.ndarray, sim_dt: float
-
-
 ) -> float:
     """
     The largest horizontal position error that the position controller acts on,
@@ -667,9 +657,9 @@ def leash_distance(
     dcm = direction_cosine_matrix(body_state[6], body_state[7], body_state[8])
     acc = body_to_inertial(acceleration, dcm)
     vel = body_to_inertial(body_state[3:6], dcm)
-    acc_mag = xp.sqrt_nonneg(acc[0]**2 + acc[1]**2)
-    vel_mag = xp.sqrt_nonneg(vel[0]**2 + vel[1]**2)
-    leash = xp.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + 1e-6))
+    acc_mag = _length2(acc)
+    vel_mag = _length2(vel)
+    leash = xp.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + EPS))
     # Skip the leash when the vehicle covers it within one time step at its
     # current speed. The leash matters for large errors and high speeds.
     return xp.select(leash <= vel_mag * sim_dt, INF, leash)
@@ -692,16 +682,16 @@ def _leashed(op: Leash) -> Tuple[np.ndarray, float]:
     length : float
         Its length.
     """
-    err_len = xp.sqrt_nonneg(op.err[0]**2 + op.err[1]**2)
+    err_len = _length2(op.err)
     leash = leash_distance(op.params[PID_K_P, 0], op.body_state, op.acceleration, op.sim_dt)
     shortened_len = xp.minimum(err_len, leash)
-    return op.err / (err_len + 1e-6) * shortened_len, shortened_len
+    return op.err / (err_len + EPS) * shortened_len, shortened_len
 
 
 
 def _unleashed(op: Leash) -> Tuple[np.ndarray, float]:
     "The position error as it is, and its length. The operand and results are those of `_leashed`."
-    return op.err, xp.sqrt_nonneg(op.err[0]**2 + op.err[1]**2)
+    return op.err, _length2(op.err)
 
 
 
@@ -709,8 +699,6 @@ def position_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     body_state: np.ndarray, acceleration: np.ndarray, sim_dt: float, dt: float,
     leashing: bool, square_root_scaling: bool
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Position stage (2 channels): inertial xy-position error to body-frame xy-velocity.
@@ -747,7 +735,7 @@ def position_stage(
         Leash(params, reference - measurement, body_state, acceleration, sim_dt))
     rows = xp.cond(
         square_root_scaling & (err_len > 0.), _sqrt_terms, _pid_terms,
-        Terms(params, x, reference, measurement, err, dt))
+        Terms(Channel(params, x, reference, measurement, dt), err))
     # Rotate the inertial velocity into the body frame (by yaw), and limit its speed
     velocity = rows[PID_ACTION]
     cos, sin = xp.cos(body_state[8]), xp.sin(body_state[8])
@@ -755,8 +743,8 @@ def position_stage(
     body_y = -sin * velocity[0] + cos * velocity[1]
     magnitude = xp.sqrt_nonneg(body_x**2 + body_y**2)
     speed = xp.minimum(magnitude, params[PID_LIMIT, 0])
-    body_velocity = xp.array((
-        body_x / (magnitude + 1e-6) * speed, body_y / (magnitude + 1e-6) * speed))
+    denominator = magnitude + EPS
+    body_velocity = xp.array((body_x / denominator * speed, body_y / denominator * speed))
     return body_velocity, xp.with_row(rows, PID_ACTION, body_velocity)
 
 
@@ -784,7 +772,7 @@ def _skip(op: Operand) -> Tuple[np.ndarray, Memo]:
 
 
 
-def _run_z(op: Operand) -> Tuple[np.ndarray, Memo]:
+def _run_altitude(op: Operand) -> Tuple[np.ndarray, Memo]:
     """
     Altitude and climb stages: target z -> thrust. The operand and the results are those
     of `_skip`, with the new state of the two stages and the new thrust.
@@ -805,7 +793,7 @@ def _run_z(op: Operand) -> Tuple[np.ndarray, Memo]:
 
 
 
-def _run_p(op: Operand) -> Tuple[np.ndarray, Memo]:
+def _run_position(op: Operand) -> Tuple[np.ndarray, Memo]:
     """
     Position stage: target x, y -> velocity reference. The operand and the results are
     those of `_skip`, with the new state of the stage and the new velocity reference.
@@ -825,7 +813,7 @@ def _run_p(op: Operand) -> Tuple[np.ndarray, Memo]:
 
 
 
-def _run_a(op: Operand) -> Tuple[np.ndarray, Memo]:
+def _run_attitude(op: Operand) -> Tuple[np.ndarray, Memo]:
     """
     Velocity, attitude and rate stages: velocity and yaw targets -> torques. The operand
     and the results are those of `_skip`, with the new state of the three stages and the
@@ -855,54 +843,26 @@ def _run_a(op: Operand) -> Tuple[np.ndarray, Memo]:
 
 
 def cascaded_step(
-    params: np.ndarray, x: np.ndarray, memo: Memo, reference: np.ndarray,
-    body_state: np.ndarray, acceleration: np.ndarray, inertia: np.ndarray, mass: float,
-    weight: float, sim_dt: float, n: int, steps_p: int, steps_a: int, steps_z: int,
-    feed_forward: np.ndarray, use_feed_forward: bool, feedforward_weight: float,
-    leashing: bool, square_root_position: bool, square_root_attitude: bool
-
-
+    x: np.ndarray, memo: Memo, inputs: Inputs, n: int
 ) -> Tuple[np.ndarray, Memo, np.ndarray]:
     """
     One step of the whole cascade of a `Controller`: the six stages in order, each at
-    its own rate. Altitude and climb run every ``steps_z`` steps, position every
-    ``steps_p``, and velocity, attitude and rate every ``steps_a``. In between, the
-    last outputs are repeated.
+    its own rate. Altitude and climb run every ``inputs.steps.altitude`` steps, position
+    every ``inputs.steps.position``, and velocity, attitude and rate every
+    ``inputs.steps.attitude``. In between, the last outputs are repeated.
 
     Parameters
     ----------
-    params, x : np.ndarray
-        Parameters and state of the stages, shape (N_PID_PARAMS, 12) and
-        (N_PID_STATES, 12). The ``CASCADE_*`` constants name the first column of
-        each stage.
+    x : np.ndarray
+        State of the stages, shape (N_PID_STATES, 12). The ``CASCADE_*`` constants name
+        the first column of each stage.
     memo : Memo
         The outputs of three stages, as returned by the last step, or zeros for the first.
-    reference : np.ndarray
-        The target: x, y, z and yaw, shape (4,).
-    body_state : np.ndarray
-        The vehicle's 12 body state variables.
-    acceleration : np.ndarray
-        The vehicle's body-frame acceleration, shape (3,).
-    inertia : np.ndarray
-        The vehicle's inertia matrix, shape (3, 3).
-    mass, weight : float
-        The vehicle's mass and weight.
-    sim_dt : float
-        The simulation time step.
+    inputs : Inputs
+        The parameters of the stages, the target, the vehicle's state and properties,
+        the periods of the stages, and the options.
     n : int
         The number of steps taken before this one.
-    steps_p, steps_a, steps_z : int
-        Whole simulation steps per period of the position, attitude and altitude
-        stages.
-    feed_forward : np.ndarray
-        Velocity reference that is blended into the position stage's output, shape
-        (2,). Used if ``use_feed_forward``.
-    use_feed_forward : bool
-        Whether ``feed_forward`` is given.
-    feedforward_weight : float
-        The weight of ``feed_forward`` in the blend.
-    leashing, square_root_position, square_root_attitude : bool
-        Options of the position and attitude stages.
 
     Returns
     -------
@@ -914,23 +874,20 @@ def cascaded_step(
     action : np.ndarray
         Thrust and the three torques, shape (4,).
     """
-    inputs = Inputs(
-        params, reference, body_state, acceleration, inertia, mass, weight, sim_dt,
-        Steps(steps_p, steps_a, steps_z), feed_forward, use_feed_forward, feedforward_weight,
-        leashing, square_root_position, square_root_attitude)
-    x, memo = xp.cond(n % steps_z == 0, _run_z, _skip, Operand(x, memo, inputs))
-    x, memo = xp.cond(n % steps_p == 0, _run_p, _skip, Operand(x, memo, inputs))
-    x, memo = xp.cond(n % steps_a == 0, _run_a, _skip, Operand(x, memo, inputs))
+    steps = inputs.steps
+    x, memo = xp.cond(n % steps.altitude == 0, _run_altitude, _skip, Operand(x, memo, inputs))
+    x, memo = xp.cond(n % steps.position == 0, _run_position, _skip, Operand(x, memo, inputs))
+    x, memo = xp.cond(n % steps.attitude == 0, _run_attitude, _skip, Operand(x, memo, inputs))
     return x, memo, xp.concatenate((memo.thrust, memo.torques))
 
 
 
 NAMES = (
     '_clip', '_pid_scalar', '_pid_channel', '_altitude_channel', '_velocity_channel',
-    '_climb_channel', '_sqrt_rate', 'sqrt_control', '_sqrt_channel', '_pid_terms', '_sqrt_terms',
+    '_climb_channel', '_length2', '_sqrt_rate', 'sqrt_control', '_sqrt_channel', '_pid_terms', '_sqrt_terms',
     'pid_stage', 'altitude_stage', 'climb_stage', 'velocity_stage', 'attitude_stage',
     'rate_stage', 'leash_distance', '_leashed', '_unleashed', 'position_stage', '_skip',
-    '_run_z', '_run_p', '_run_a', 'cascaded_step')
+    '_run_altitude', '_run_position', '_run_attitude', 'cascaded_step')
 SOURCE = {name: globals()[name] for name in NAMES}
 NOT_INLINED = ('cascaded_step',)   # large, and called once per step
 globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))
@@ -944,8 +901,6 @@ def fleet_step(
     weight: np.ndarray, sim_dt: float, n: int, steps_p: int, steps_a: int, steps_z: int,
     feed_forward: np.ndarray, use_feed_forward: bool, feedforward_weight: np.ndarray,
     leashing: bool, square_root_position: bool, square_root_attitude: bool
-
-
 ) -> Tuple[np.ndarray, Memo, np.ndarray]:
     """
     One step of the controllers of a fleet: `cascaded_step` for each vehicle, in a
@@ -972,10 +927,12 @@ def fleet_step(
         np.empty_like(memo.ref_vel), np.empty_like(memo.thrust), np.empty_like(memo.torques))
     action = np.empty((params.shape[0], 4))
     for k in range(params.shape[0]):
+        inputs = Inputs(
+            params[k], reference[k], body_state[k], acceleration[k], inertia[k], mass[k],
+            weight[k], sim_dt, Steps(steps_p, steps_a, steps_z), feed_forward[k],
+            use_feed_forward, feedforward_weight[k], leashing, square_root_position,
+            square_root_attitude)
         x_new[k], memo_k, action[k] = cascaded_step(
-            params[k], x[k], Memo(memo.ref_vel[k], memo.thrust[k], memo.torques[k]),
-            reference[k], body_state[k], acceleration[k], inertia[k], mass[k], weight[k],
-            sim_dt, n, steps_p, steps_a, steps_z, feed_forward[k], use_feed_forward,
-            feedforward_weight[k], leashing, square_root_position, square_root_attitude)
+            x[k], Memo(memo.ref_vel[k], memo.thrust[k], memo.torques[k]), inputs, n)
         ref_vel[k], thrust[k], torques[k] = memo_k.ref_vel, memo_k.thrust, memo_k.torques
     return x_new, Memo(ref_vel, thrust, torques), action

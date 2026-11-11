@@ -127,8 +127,6 @@ def thrustEqn(vi: float, *prop_params: float) -> float:
 def thrust_blade_element_model(
     prop_speed: float, airstream_velocity: np.ndarray, R: float, A: float, rho: float,
     a: float, b: float, c: float, eta: float, theta0: float, theta1: float
-
-
 ) -> float:
     """
     Thrust of one propeller from the blade-element model: the induced velocity is found
@@ -184,8 +182,6 @@ def thrust_blade_element_model(
 def thrusts_blade_element_model(
     speeds: np.ndarray, airstream_velocities: np.ndarray, prop_params: np.ndarray,
     rho: float
-
-
 ) -> np.ndarray:
     """
     Thrust of each propeller from the blade-element model, by solving
@@ -359,8 +355,6 @@ def _current(i: int, c: MotorInputs) -> float:
 
 def motor_electrical(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Voltage and current of each motor. The current responds instantly to the
@@ -409,8 +403,6 @@ def _acc(i: int, c: MotorInputs) -> float:
 
 def motor_acc(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
-
-
 ) -> np.ndarray:
     """
     Angular acceleration of each motor: electrical torque minus viscous friction
@@ -462,8 +454,6 @@ def _add_power(acc: float, i: int, c: MotorInputs) -> float:
 
 def motor_power(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
-
-
 ) -> float:
     """
     Total electrical power (W) drawn by the motors.
@@ -622,8 +612,6 @@ def _delivering(op: Delivery) -> Terminal:
 
 def battery_terminal(
     power: float, open_circuit_voltage: float, internal_resistance: float
-
-
 ) -> Terminal:
     """
     Terminal voltage of a battery delivering ``power``, modeling the motors'
@@ -720,8 +708,6 @@ def _limited(op: Candidate) -> OperatingPoint:
 def battery_operating_point(
     speed: np.ndarray, u: np.ndarray, open_circuit_voltage: float,
     internal_resistance: float, motor_params: np.ndarray
-
-
 ) -> OperatingPoint:
     """
     Terminal voltage and power at which the battery and the motors agree: the
@@ -816,8 +802,6 @@ def battery_end_step(
     motor_speeds: np.ndarray, u: np.ndarray, motor_params: np.ndarray,
     battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
     dt: float
-
-
 ) -> BatteryEnd:
     """
     The battery's state after one integrated time step. The charge drawn during
@@ -871,8 +855,6 @@ def battery_end_step(
 
 def _add_torque(
     acc: Tuple[float, float, float], i: int, c: TorqueInputs
-
-
 ) -> Tuple[float, float, float]:
     """
     ``acc`` plus the torques of propeller ``i``.
@@ -905,8 +887,6 @@ def _add_torque(
 def body_torques(
     thrusts: np.ndarray, drag_torques: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
-
-
 ) -> np.ndarray:
     """
     Total torque on the three body axes (roll, pitch, yaw) due to the
@@ -943,8 +923,6 @@ def body_torques(
 def forces_torques(
     speeds: np.ndarray, prop_params: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
-
-
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Total force and torque on the body from propellers whose thrust is
@@ -978,8 +956,6 @@ def forces_torques(
 def body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
-
-
 ) -> np.ndarray:
     """
     Given forces and torqes, return the rate of change of state.

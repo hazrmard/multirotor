@@ -35,12 +35,12 @@ Altitude and position stages run every ``period_z`` and ``period_p`` seconds. Th
 others run every ``period_a`` seconds.
 """
 from __future__ import annotations
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
 from ..simulation import Multirotor
-from .cascade import cascaded_step, leash_distance, pid_stage
+from .cascade import Inputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
 from ..tuples import ControllerParams, ControllerState, Memo, Steps
 from .data import (
@@ -95,31 +95,6 @@ def _state64(vehicle: Multirotor) -> np.ndarray:
     return np.asarray(vehicle.state, dtype=np.float64)
 
 
-class _Row(property):
-    """
-    A property that views one row of a stage's parameter matrix, over its columns.
-    ``row`` is that row, so that the rows of the matrix can be found by name from
-    the stage classes.
-    """
-
-    def __init__(
-        self, fget: Callable[[Any], Any], fset: Callable[[Any, Any], None], doc: str, row: int
-    ) -> None:
-        """
-        Parameters
-        ----------
-        fget, fset : callable
-            The getter and setter of the property.
-        doc : str
-            The property's docstring.
-        row : int
-            The row of the parameter matrix that the property views.
-        """
-        super().__init__(fget, fset, doc=doc)
-        self.row: int = row
-
-
-
 def _param(row: int, doc: str) -> property:
     """
     A property that views one row of the parameter matrix, over a stage's columns.
@@ -134,7 +109,7 @@ def _param(row: int, doc: str) -> property:
     Returns
     -------
     property
-        The property, a `_Row`.
+        The property.
     """
     def get(self: PIDStage) -> np.ndarray:
         "The row, over the stage's columns."
@@ -142,7 +117,7 @@ def _param(row: int, doc: str) -> property:
     def set(self: PIDStage, value: Gain) -> None:
         "Set the row, over the stage's columns."
         self._data.params[row, self._start:self._stop] = value
-    return _Row(get, set, doc, row)
+    return property(get, set, doc=doc)
 
 
 def _state(row: int, doc: str) -> property:
@@ -184,7 +159,7 @@ def _scalar_param(row: int, doc: str) -> property:
     Returns
     -------
     property
-        The property, a `_Row`, which reads the first channel's value.
+        The property, which reads the first channel's value.
     """
     def get(self: PIDStage) -> float:
         "The value of the first channel."
@@ -192,7 +167,7 @@ def _scalar_param(row: int, doc: str) -> property:
     def set(self: PIDStage, value: float) -> None:
         "Set the value of every channel."
         self._data.params[row, self._start:self._stop] = value
-    return _Row(get, set, doc, row)
+    return property(get, set, doc=doc)
 
 
 class PIDStage:
@@ -246,17 +221,17 @@ class PIDStage:
 
     def _bind(self, data: ControllerData, start: int, n: int) -> None:
         """
-    Make this controller a view of ``n`` columns of ``data``, from ``start``.
+        Make this controller a view of ``n`` columns of ``data``, from ``start``.
 
-    Parameters
-    ----------
-    data : ControllerData
-        The matrices to view.
-    start : int
-        The first column.
-    n : int
-        The number of columns.
-    """
+        Parameters
+        ----------
+        data : ControllerData
+            The matrices to view.
+        start : int
+            The first column.
+        n : int
+            The number of columns.
+        """
         self._data: ControllerData = data
         self._start: int = start
         self._stop: int = start + n
@@ -265,15 +240,15 @@ class PIDStage:
 
     def _adopt(self, data: ControllerData, start: int) -> None:
         """
-    Move this controller, with its values, to columns of ``data`` from ``start``.
+        Move this controller, with its values, to columns of ``data`` from ``start``.
 
-    Parameters
-    ----------
-    data : ControllerData
-        The matrices to move into.
-    start : int
-        The first column.
-    """
+        Parameters
+        ----------
+        data : ControllerData
+            The matrices to move into.
+        start : int
+            The first column.
+        """
         self._adopted = True
         stop = start + self.n
         data.params[:, start:stop] = self._data.params[:, self._start:self._stop]
@@ -301,21 +276,15 @@ class PIDStage:
             For a name that is not an attribute.
         """
         for name, param in params.items():
-            if hasattr(self, name):
-                attr = getattr(self, name)
-                if isinstance(attr, np.ndarray):
-                    param = np.asarray(param, dtype=attr.dtype)
-                    # cast to an axis & assign in-place
-                    # for cases where float param is assigned to array attr
-                    if attr.ndim > 0:
-                        attr[:] = param
-                    else:
-                        attr = param
-                else:
-                    attr = param
-                setattr(self, name, attr)
-            else:
+            if not hasattr(self, name):
                 raise AttributeError('Attribute %s not part of class.' % name)
+            attr = getattr(self, name)
+            if isinstance(attr, np.ndarray) and attr.ndim > 0:
+                # Assign in place, which broadcasts a number to every channel. The
+                # attribute may be a copy of the matrix's values, so set it back.
+                attr[:] = np.asarray(param, dtype=attr.dtype)
+                param = attr
+            setattr(self, name, param)
 
 
     def get_params(self) -> Dict[str, Any]:
@@ -423,8 +392,8 @@ class PosController(PIDStage):
         self.max_acceleration = max_acceleration
         if self.leashing or self.square_root_scaling:
             self.k_p = 0.5 * self.max_jerk / self.max_acceleration
-        self._params = tuple(list(self._params) + \
-            ['max_velocity', 'max_acceleration', 'max_jerk', 'square_root_scaling', 'leashing'])
+        self._params += (
+            'max_velocity', 'max_acceleration', 'max_jerk', 'square_root_scaling', 'leashing')
 
 
 class VelController(PIDStage):
@@ -456,7 +425,7 @@ class VelController(PIDStage):
         """
         super().__init__(k_p, k_i, k_d, max_err_i, n=2)
         self.max_tilt = max_tilt
-        self._params = tuple(list(self._params) + ['max_tilt'])
+        self._params += ('max_tilt',)
 
 
 class AttController(PIDStage):
@@ -492,8 +461,7 @@ class AttController(PIDStage):
         self.max_acceleration = max_acceleration
         if self.square_root_scaling:
             self.k_p = self.max_jerk / self.max_acceleration
-        self._params = tuple(list(self._params) + \
-            ['max_acceleration', 'max_jerk', 'square_root_scaling'])
+        self._params += ('max_acceleration', 'max_jerk', 'square_root_scaling',)
 
 
 class RateController(PIDStage):
@@ -523,7 +491,7 @@ class RateController(PIDStage):
         # TODO: check max acceleration limits from ardupilot
         super().__init__(k_p, k_i, k_d, max_err_i, n=3)
         self.max_acceleration = max_acceleration
-        self._params = tuple(list(self._params) + ['max_acceleration'])
+        self._params += ('max_acceleration',)
 
 
     def _get_max_acceleration(self) -> Union[float, np.ndarray]:
@@ -542,9 +510,9 @@ class RateController(PIDStage):
         """
         self._data.params[PID_LIMIT, self._start:self._stop] = value
 
-    max_acceleration = _Row(
+    max_acceleration = property(
         _get_max_acceleration, _set_max_acceleration,
-        "Maximum acceleration in rad/s/s. A number if it is the same for all axes.", PID_LIMIT)
+        doc="Maximum acceleration in rad/s/s. A number if it is the same for all axes.")
 
 
 class AltController(PIDStage):
@@ -574,7 +542,7 @@ class AltController(PIDStage):
         """
         super().__init__(k_p, 0., 0., max_err_i, n=1) # strictly a P controller
         self.max_velocity = max_velocity
-        self._params = tuple(list(self._params) + ['max_velocity'])
+        self._params += ('max_velocity',)
 
 
 class AltRateController(PIDStage):
@@ -602,6 +570,15 @@ class Controller:
         (x,y) --> Position --> Velocity --> Attitude --> Rate --> (Moments)
         (z)   --> Altitude --> Velocity --> (Forces)
     """
+
+    _STAGE_NAMES = ('ctrl_p', 'ctrl_v', 'ctrl_a', 'ctrl_r', 'ctrl_z', 'ctrl_vz')
+    "The attributes that hold the stages, in the order of their columns."
+
+    @property
+    def _stages(self) -> tuple:
+        "The six stages, in the order of their columns."
+        return tuple(getattr(self, name) for name in self._STAGE_NAMES)
+
 
     def __init__(
         self,
@@ -661,8 +638,7 @@ class Controller:
         self.steps_z = max(1, round(self.period_z / dt))
         self.feedforward_weight = feedforward_weight
         # The stages become views of the columns of one data object
-        stages = (self.ctrl_p, self.ctrl_v, self.ctrl_a, self.ctrl_r, self.ctrl_z,
-                  self.ctrl_vz)
+        stages = self._stages
         # A stage moves into this controller's data, so it can belong to only one
         # controller. Check all stages before moving any.
         if len({id(stage) for stage in stages}) < len(stages):
@@ -697,12 +673,8 @@ class Controller:
         self._torques = np.zeros(3)
         self.n = 0
         self.t = self.vehicle.t
-        self.ctrl_p.reset()
-        self.ctrl_v.reset()
-        self.ctrl_a.reset()
-        self.ctrl_r.reset()
-        self.ctrl_z.reset()
-        self.ctrl_vz.reset()
+        for stage in self._stages:
+            stage.reset()
         return self.state
 
 
@@ -768,12 +740,8 @@ class Controller:
             ``ctrl_vz``), a dict of its parameters, as in `PIDStage.set_params`. For the
             controller, the values of attributes such as ``feedforward_weight``.
         """
-        self.ctrl_p.set_params(**params.get('ctrl_p', {}))
-        self.ctrl_v.set_params(**params.get('ctrl_v', {}))
-        self.ctrl_a.set_params(**params.get('ctrl_a', {}))
-        self.ctrl_r.set_params(**params.get('ctrl_r', {}))
-        self.ctrl_z.set_params(**params.get('ctrl_z', {}))
-        self.ctrl_vz.set_params(**params.get('ctrl_vz', {}))
+        for name in self._STAGE_NAMES:
+            getattr(self, name).set_params(**params.get(name, {}))
         local_params = {k:v for k,v in params.items() if not isinstance(v, dict)}
         for name, param in local_params.items():
             if hasattr(self, name):
@@ -793,25 +761,15 @@ class Controller:
             The parameters of each stage by its name (``ctrl_p``, ...), as in
             `PIDStage.get_params`, and the ``feedforward_weight``.
         """
-        p = dict(
-            ctrl_p=self.ctrl_p.get_params(),
-            ctrl_v=self.ctrl_v.get_params(),
-            ctrl_a=self.ctrl_a.get_params(),
-            ctrl_r=self.ctrl_r.get_params(),
-            ctrl_z=self.ctrl_z.get_params(),
-            ctrl_vz=self.ctrl_vz.get_params(),
-            feedforward_weight=self.feedforward_weight
-        )
+        p = {name: getattr(self, name).get_params() for name in self._STAGE_NAMES}
+        p['feedforward_weight'] = self.feedforward_weight
         return p
 
 
     @property
     def state(self) -> np.ndarray:
         "The state of the six stages, concatenated."
-        return np.concatenate(
-            (self.ctrl_p.state, self.ctrl_v.state, self.ctrl_a.state,
-            self.ctrl_r.state, self.ctrl_z.state, self.ctrl_vz.state)
-        )
+        return np.concatenate([stage.state for stage in self._stages])
 
 
     @property
@@ -879,16 +837,15 @@ class Controller:
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
-        state, memo, action = cascaded_step(
-            self._data.params, self._data.state,
-            Memo(self._ref_vel, self._thrust, self._torques), target, _state64(vehicle),
-            _vector(vehicle.acceleration),
+        inputs = Inputs(
+            self._data.params, target, _state64(vehicle), _vector(vehicle.acceleration),
             np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
-            float(vehicle.params.mass), float(vehicle.weight),
-            float(vehicle.simulation.dt), self.n, self.steps_p, self.steps_a,
-            self.steps_z, feed_forward, use_feed_forward,
+            float(vehicle.params.mass), float(vehicle.weight), float(vehicle.simulation.dt),
+            Steps(self.steps_p, self.steps_a, self.steps_z), feed_forward, use_feed_forward,
             float(self.feedforward_weight), self.ctrl_p.leashing,
             self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling)
+        state, memo, action = cascaded_step(
+            self._data.state, Memo(self._ref_vel, self._thrust, self._torques), inputs, self.n)
         action = action.astype(self.dtype)
         # The outputs of the stages are kept even if the state is not, as `thrust` and
         # `torques` report the last step that ran, probe or not.
