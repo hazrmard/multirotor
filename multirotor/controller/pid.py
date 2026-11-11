@@ -10,22 +10,26 @@ state of their control channels. They compute nothing and know no vehicle. A
 `Controller` is the executor, as `Multirotor` is for `VehicleParams`: it takes
 over the stages' values into one `ControllerData`, which holds them as matrices
 with one column per control channel, and passes the matrices and its vehicle's
-state to a compiled kernel in `multirotor.controller.kernels`.
+state to the compiled functions in `multirotor.controller.cascade`.
 
 `PIDController` is the one stage that executes: a generic PID controller whose
-``step`` runs the PID law kernel. It can be used on its own, or to build a
-cascade with other stages.
+``step`` runs the PID law (`multirotor.controller.cascade.pid_stage`). It can be
+used on its own, or to build a cascade with other stages.
 
 Call chain of `Controller.step`, between the vehicle's steps. The stages do not
-call each other: ``cascaded_pid_step`` calls the stage kernels in order::
+call each other: ``cascaded_step`` calls the stage functions in order::
 
-    Controller.step ---> kernels.cascaded_pid_step
-        --> kernels.altitude_pid_step
-        --> kernels.climb_pid_step
-        --> kernels.position_pid_step
-        --> kernels.velocity_pid_step
-        --> kernels.attitude_pid_step
-        --> kernels.rate_pid_step
+    Controller.step ---> cascade.cascaded_step
+        --> cascade.altitude_stage
+        --> cascade.climb_stage
+        --> cascade.position_stage
+        --> cascade.velocity_stage
+        --> cascade.attitude_stage
+        --> cascade.rate_stage
+
+The functions take the controller's state and return its new state, so a step with
+``persist=False`` is one whose new state is dropped. `multirotor.controller.cascade`
+describes the stages and the arrays.
 
 Altitude and position stages run every ``period_z`` and ``period_p`` seconds. The
 others run every ``period_a`` seconds.
@@ -36,12 +40,12 @@ from typing import Union, Dict
 import numpy as np
 
 from ..simulation import Multirotor
-from .data import ControllerData
-from .kernels import (
-    PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT, PID_MAX_ACCELERATION,
-    PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE, PID_ACTION, PID_INTEGRAL,
-    pid_stage, leash_distance, cascaded_pid_step,
-    sqrt_control # noqa: F401, kept importable from here
+from .cascade import cascaded_step, leash_distance, pid_stage
+from .cascade import sqrt_control # noqa: F401, kept importable from here
+from .data import (
+    ControllerData, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
+    PID_MAX_ACCELERATION, PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE,
+    PID_ACTION, PID_INTEGRAL
 )
 
 # See more:
@@ -223,12 +227,16 @@ class PIDController(PIDStage):
         """
         shape = (self.n,)
         ref = np.array(np.broadcast_to(_vector(reference), shape))
+        # A reference that is the error is a measurement of zero
         mea = np.zeros(shape) if ref_is_error \
             else np.array(np.broadcast_to(_vector(measurement), shape))
-        out = np.empty(shape)
-        pid_stage(self._data.params, self._data.state, self._start, self._stop,
-                  ref, mea, float(dt), ref_is_error, persist, out)
-        return out
+        columns = slice(self._start, self._stop)
+        state = self._data.state[:, columns]
+        action, new_state = pid_stage(
+            self._data.params[:, columns], state, ref, mea, float(dt))
+        if persist:
+            state[:] = new_state
+        return action
 
 
 
@@ -489,14 +497,12 @@ class Controller:
     def reset(self):
         self.action = np.zeros(4, self.vehicle.dtype)
         self.reference = np.zeros_like(self.action)
-        # Outputs of the stages that later stages, and the steps in between, reuse.
-        # Scratch for the kernel, in float64 like the integrator's state. The
+        # Outputs of the stages that later stages, and the steps in between, reuse
+        # (the memo of `cascaded_step`), in float64 like the integrator's state. The
         # public `thrust` and `torques` are in the vehicle's dtype.
+        self._ref_vel = np.zeros(2)
         self._thrust = np.zeros(1)
         self._torques = np.zeros(3)
-        self._ref_vel = np.zeros(2)
-        self._pid_vel = np.zeros(2)
-        self._pitch_roll = np.zeros(2)
         self.n = 0
         self.t = self.vehicle.t
         self.ctrl_p.reset()
@@ -584,20 +590,22 @@ class Controller:
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
-        action = np.empty(4)
-        cascaded_pid_step(
-            self._data.params, self._data.state, target, _state64(vehicle),
+        state, memo, action = cascaded_step(
+            self._data.params, self._data.state,
+            (self._ref_vel, self._thrust, self._torques), target, _state64(vehicle),
             _vector(vehicle.acceleration),
             np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
             float(vehicle.params.mass), float(vehicle.weight),
             float(vehicle.simulation.dt), self.n, self.steps_p, self.steps_a,
             self.steps_z, feed_forward, use_feed_forward,
             float(self.feedforward_weight), self.ctrl_p.leashing,
-            self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling,
-            persist, self._ref_vel, self._pid_vel, self._pitch_roll, self._thrust,
-            self._torques, action)
+            self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling)
         action = action.astype(self.dtype)
+        # The outputs of the stages are kept even if the state is not, as `thrust` and
+        # `torques` report the last step that ran, probe or not.
+        self._ref_vel, self._thrust, self._torques = memo
         if persist:
+            self._data.state[:] = state
             self.n += 1
             self.t = vehicle.t
             self.action = action

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from multirotor.controller import FleetController
-from multirotor.controller.kernels import PID_K_P
+from multirotor.controller.data import PID_K_P
 from multirotor.fleet import Fleet
 from multirotor.optimize import get_controller, get_fleet_controller
 from multirotor.simulation import Multirotor

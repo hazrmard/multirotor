@@ -312,10 +312,11 @@ def build_for(backend: str):
         the other functions of this module.
     """
     from .controller import cascade
-    from . import dynamics, physics
+    from . import coords, dynamics, physics
+    built_coords = build(coords.SOURCE, coords.NAMES, backend, vars(coords))
     built_physics = build(physics.SOURCE, physics.NAMES, backend, vars(physics))
     built_cascade = build(
-        cascade.SOURCE, cascade.NAMES, backend, {**vars(cascade), **vars(built_physics)},
+        cascade.SOURCE, cascade.NAMES, backend, {**vars(cascade), **vars(built_coords)},
         cascade.NOT_INLINED)
     built_dynamics = build(
         dynamics.SOURCE, dynamics.NAMES, backend, {**vars(dynamics), **vars(built_physics)})

@@ -134,6 +134,6 @@ And for simulating control:
 These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
 functions call which, and how the integrated state is laid out. Those of
-`multirotor/controller/pid.py` and `multirotor/controller/kernels.py` do the same
+`multirotor/controller/pid.py` and `multirotor/controller/cascade.py` do the same
 for the controller. `multirotor/fleet.py` and `multirotor/fleet_kernels.py` show how a fleet's arrays are laid out and which kernels its loops call. The compiled reward of the environments is in
 `multirotor/env_kernels.py`.

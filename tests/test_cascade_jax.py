@@ -10,11 +10,13 @@ jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
 
 import multirotor.controller.cascade as cascade
-from multirotor.controller import kernels as K
+import multirotor.coords as coords
+from multirotor.controller import data as K
 from multirotor.lazy import build
 from test_cascade import INERTIA, MASS, OPTIONS, SIM_DT, WEIGHT, inputs, make_params
 
-JAX = build(cascade.SOURCE, cascade.NAMES, 'jax', vars(cascade))
+JAX_COORDS = build(coords.SOURCE, coords.NAMES, 'jax', vars(coords))
+JAX = build(cascade.SOURCE, cascade.NAMES, 'jax', {**vars(cascade), **vars(JAX_COORDS)})
 
 
 

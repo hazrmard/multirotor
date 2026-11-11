@@ -13,7 +13,7 @@ import jax.numpy as jnp
 
 import multirotor.physics as physics
 import multirotor.rollout as rollout
-from multirotor.controller import kernels as K
+from multirotor.controller import data as K
 
 from test_rollout import (
     BUILT, DT, POSITION_TOLERANCE, SUBSTEPS, TARGET, arguments, dop853, reference)

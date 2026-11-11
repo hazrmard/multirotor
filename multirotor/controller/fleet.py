@@ -2,7 +2,7 @@
 The controllers of a `multirotor.fleet.Fleet`. `FleetController` holds the
 parameters and the state of the cascaded controller of each of ``K`` vehicles as
 arrays with the vehicle as the first axis, and steps all of them with one compiled
-loop over the vehicles (`multirotor.controller.kernels.fleet_cascaded_pid_step`).
+loop over the vehicles (`multirotor.controller.cascade.fleet_step`).
 
 It is the `Controller` of every vehicle at once. The controllers of the vehicles
 have the same structure: the same periods and options. Their gains and limits can
@@ -11,7 +11,7 @@ differ from vehicle to vehicle.
 The arrays follow the layout of `multirotor.controller.data.ControllerData`, with
 the vehicle in front. A vehicle's slice, such as ``params[k]``, is the matrix of
 one `Controller`: one column per control channel of its six stages. The ``PID_*``
-and ``CASCADE_*`` constants in `multirotor.controller.kernels` name the rows and
+and ``CASCADE_*`` constants in `multirotor.controller.data` name the rows and
 the first column of each stage.
 """
 from copy import deepcopy
@@ -20,9 +20,8 @@ from typing import Dict, Sequence, Union
 import numpy as np
 
 from ..fleet import Fleet
-from .kernels import (
-    N_CASCADE_CHANNELS, N_PID_PARAMS, N_PID_STATES, fleet_cascaded_pid_step
-)
+from .cascade import fleet_step
+from .data import N_CASCADE_CHANNELS, N_PID_STATES
 from .pid import Controller
 
 
@@ -127,13 +126,11 @@ class FleetController:
         self.state[:] = 0.
         self.action = np.zeros((k_vehicles, 4), self.fleet.dtype)
         self.reference = np.zeros((k_vehicles, 4), self.fleet.dtype)
-        # Scratch for the kernel, in float64 like the integrator's state. The
+        # The memo of `fleet_step`, in float64 like the integrator's state. The
         # public `thrust` and `torques` are in the fleet's dtype.
+        self._ref_vel = np.zeros((k_vehicles, 2))
         self._thrust = np.zeros((k_vehicles, 1))
         self._torques = np.zeros((k_vehicles, 3))
-        self._ref_vel = np.zeros((k_vehicles, 2))
-        self._pid_vel = np.zeros((k_vehicles, 2))
-        self._pitch_roll = np.zeros((k_vehicles, 2))
         self.n = 0
         self.t = self.fleet.t
 
@@ -242,17 +239,19 @@ class FleetController:
         feed_forward = np.ascontiguousarray(np.broadcast_to(
             np.asarray(feed_forward_velocity, dtype=float)[..., :2], (k_vehicles, 2))) \
             if use_feed_forward else np.zeros((k_vehicles, 2))
-        action = np.empty((k_vehicles, 4))
-        fleet_cascaded_pid_step(
-            self.params, self.state, target, np.ascontiguousarray(fleet._state),
-            np.ascontiguousarray(fleet._dxdt[:, 3:6]), fleet._inertia, fleet._mass,
-            fleet.weight, float(fleet.simulation.dt), self.n, self.steps_p,
-            self.steps_a, self.steps_z, feed_forward, use_feed_forward,
+        state, memo, action = fleet_step(
+            self.params, self.state, (self._ref_vel, self._thrust, self._torques), target,
+            np.ascontiguousarray(fleet._state), np.ascontiguousarray(fleet._dxdt[:, 3:6]),
+            fleet._inertia, fleet._mass, fleet.weight, float(fleet.simulation.dt), self.n,
+            self.steps_p, self.steps_a, self.steps_z, feed_forward, use_feed_forward,
             self.feedforward_weight, self.leashing, self.square_root_position,
-            self.square_root_attitude, persist, self._ref_vel, self._pid_vel,
-            self._pitch_roll, self._thrust, self._torques, action)
+            self.square_root_attitude)
         action = action.astype(fleet.dtype)
+        # The outputs of the stages are kept even if the state is not, as `thrust` and
+        # `torques` report the last step that ran, probe or not.
+        self._ref_vel, self._thrust, self._torques = memo
         if persist:
+            self.state[:] = state
             self.n += 1
             self.t = fleet.t
             self.action = action
