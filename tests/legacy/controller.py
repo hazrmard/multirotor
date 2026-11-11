@@ -232,8 +232,8 @@ class PosController(PIDController):
             err_unit = err / (err_len + 1e-6)
             err_len = min(err_len, self.leash)
             err = err_unit * err_len
-            if persist: self.err = err
-            velocity = self.err_p = self.k_p * err
+            # The oracle used to store the leashed error as the previous error here,
+            # before the PID law below read it; fixed together with the kernel.
         if err_len > 0. and self.square_root_scaling:
             velocity = np.zeros_like(self.k_p)
             velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, dt)
