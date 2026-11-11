@@ -21,6 +21,11 @@ The state of a vehicle is a tuple ``(x, aux, acc)``:
 * ``acc``: the body-frame acceleration at the start of the last step, which the
   controller's leash reads.
 
+A rollout starts from rest, or from the state of a vehicle and a controller that have
+been running: `multirotor.trees` reads that state out of the imperative classes and writes
+it back, and names the gains and parameters that a rollout is differentiated with
+respect to.
+
 Three step functions share the signature
 ``step(state, u, plant, t, dt, substeps)``: `step_body` (no motors),
 `step_motors` and `step_motors_battery`. The ``plant`` tuple is built by
@@ -143,13 +148,13 @@ def allocate(alloc_inverse, thrust_torques):
 def _drive(carry, i, c):
     "The controller's action and the propeller speeds it asks for."
     controller_x, memo, state = carry
-    plant, ctrl, targets, dt = c[0], c[1], c[2], c[3]
+    plant, ctrl, targets, dt, n0 = c[0], c[1], c[2], c[3], c[5]
     (cparams, alloc_inverse, steps, feedforward_weight, leashing, square_root_position,
      square_root_attitude) = ctrl
     g, mass, inertia = plant[0], plant[1], plant[2]
     controller_x, memo, action = cascaded_step(
         cparams, controller_x, memo, targets[i], state[0][:N_BODY_STATES], state[2], inertia,
-        mass, mass * g, dt, i, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
+        mass, mass * g, dt, i + n0, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
         feedforward_weight, leashing, square_root_position, square_root_attitude)
     return controller_x, memo, action, allocate(alloc_inverse, action)
 
@@ -162,36 +167,38 @@ def _record(state, action):
 
 def _loop_step_body(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_body(carry[2], u, c[0], i * c[3], c[3], c[4])
+    state = step_body(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
 
 def _loop_step_motors(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_motors(carry[2], u, c[0], i * c[3], c[3], c[4])
+    state = step_motors(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
 
 def _loop_step_motors_battery(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_motors_battery(carry[2], u, c[0], i * c[3], c[3], c[4])
+    state = step_motors_battery(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
 
-def _carry0(state0):
-    return (
-        xp.array(((0.,) * 12,) * 7),
-        (xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.))), state0)
+def _carry0(state0, start):
+    "The carry of the scan, and the number of steps taken before it."
+    if start is None:
+        zeros = (xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.)))
+        return (xp.array(((0.,) * 12,) * 7), zeros, state0), 0
+    return (start[0], start[1], state0), start[2]
 
 
 
-def closed_loop_body(state0, plant, ctrl, targets, dt, substeps):
+def closed_loop_body(state0, plant, ctrl, targets, dt, substeps, start=None):
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
-    rest. `closed_loop_motors` and `closed_loop_motors_battery` are the same for a
+    rest or from a given controller state. `closed_loop_motors` and `closed_loop_motors_battery` are the same for a
     vehicle with motors, and with motors and a battery.
 
     Parameters
@@ -208,6 +215,10 @@ def closed_loop_body(state0, plant, ctrl, targets, dt, substeps):
         The simulation time step.
     substeps : int
         RK4 steps per simulation step.
+    start : tuple, optional
+        The controller's ``(x, memo, n)`` to start from: its state matrix, its memo
+        and the number of steps it has taken (which sets the phase of the stages that
+        run every few steps). By default the controller starts at rest, with ``n=0``.
 
     Returns
     -------
@@ -217,23 +228,26 @@ def closed_loop_body(state0, plant, ctrl, targets, dt, substeps):
         Per step, the vehicle's 12 body states after the step and the 4 controller
         outputs (thrust and torques) that drove it, shape (n, 16).
     """
+    carry0, n0 = _carry0(state0, start)
     return xp.scan(
-        _loop_step_body, _carry0(state0), targets.shape[0], (plant, ctrl, targets, dt, substeps))
+        _loop_step_body, carry0, targets.shape[0], (plant, ctrl, targets, dt, substeps, n0))
 
 
 
-def closed_loop_motors(state0, plant, ctrl, targets, dt, substeps):
+def closed_loop_motors(state0, plant, ctrl, targets, dt, substeps, start=None):
     "`closed_loop_body` for a vehicle with motors."
+    carry0, n0 = _carry0(state0, start)
     return xp.scan(
-        _loop_step_motors, _carry0(state0), targets.shape[0], (plant, ctrl, targets, dt, substeps))
+        _loop_step_motors, carry0, targets.shape[0], (plant, ctrl, targets, dt, substeps, n0))
 
 
 
-def closed_loop_motors_battery(state0, plant, ctrl, targets, dt, substeps):
+def closed_loop_motors_battery(state0, plant, ctrl, targets, dt, substeps, start=None):
     "`closed_loop_body` for a vehicle with motors and a battery."
+    carry0, n0 = _carry0(state0, start)
     return xp.scan(
-        _loop_step_motors_battery, _carry0(state0), targets.shape[0],
-        (plant, ctrl, targets, dt, substeps))
+        _loop_step_motors_battery, carry0, targets.shape[0],
+        (plant, ctrl, targets, dt, substeps, n0))
 
 
 
@@ -245,6 +259,17 @@ NAMES = (
 SOURCE = {name: globals()[name] for name in NAMES}
 NOT_INLINED = ('step_body', 'step_motors', 'step_motors_battery')   # large, and called once per step
 globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))
+
+
+
+PLANT_FIELDS = (
+    'g', 'mass', 'inertia', 'inertia_inverse', 'prop_params', 'clockwise', 'positions',
+    'motor_params', 'max_voltage', 'disturbance',
+    'battery_params', 'ocv_soc', 'ocv_voltage')
+"""
+The elements of the ``plant`` tuple, in order. A vehicle without motors has the first 7,
+with motors the first 10, and with motors and a battery all 13.
+"""
 
 
 
@@ -276,17 +301,18 @@ def plant_arguments(vehicle):
         np.array(p.prop_params, float), np.array(p.clockwise, float), np.array(p.positions, float))
     x = np.array(vehicle.state, float)
     aux = np.zeros(3)
+    acceleration = np.array(vehicle.acceleration, float)
     if vehicle._data.motors is None:
-        return 'body', (x, aux, np.zeros(3)), plant
+        return 'body', (x, aux, acceleration), plant
     plant += (
         np.array(p.motor_params, float), float(vehicle.battery.motor_voltage_limit), np.zeros(6))
     x = np.concatenate((x, vehicle._data.motors.speed.astype(float)))
     if not vehicle.battery.has_model:
-        return 'motors', (x, aux, np.zeros(3)), plant
+        return 'motors', (x, aux, acceleration), plant
     b = vehicle.battery
     plant += (np.array(b._params_vector, float), np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
     aux = np.array((b.charge_drawn, float(b.cutoff), float(b.overload)))
-    return 'motors_battery', (x, aux, np.zeros(3)), plant
+    return 'motors_battery', (x, aux, acceleration), plant
 
 
 

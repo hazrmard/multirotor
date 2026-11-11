@@ -66,13 +66,26 @@ def _state64(vehicle: Multirotor) -> np.ndarray:
     return np.asarray(vehicle.state, dtype=np.float64)
 
 
+class _Row(property):
+    """
+    A property that views one row of a stage's parameter matrix, over its columns.
+    ``row`` is that row, so that `multirotor.trees` can find the matrix entry of
+    every named parameter from the stage classes.
+    """
+
+    def __init__(self, fget, fset, doc: str, row: int):
+        super().__init__(fget, fset, doc=doc)
+        self.row: int = row
+
+
+
 def _param(row: int, doc: str) -> property:
     "A property that views one row of the parameter matrix, over a stage's columns."
     def get(self):
         return self._data.params[row, self._start:self._stop]
     def set(self, value):
         self._data.params[row, self._start:self._stop] = value
-    return property(get, set, doc=doc)
+    return _Row(get, set, doc, row)
 
 
 def _state(row: int, doc: str) -> property:
@@ -90,7 +103,7 @@ def _scalar_param(row: int, doc: str) -> property:
         return float(self._data.params[row, self._start])
     def set(self, value):
         self._data.params[row, self._start:self._stop] = value
-    return property(get, set, doc=doc)
+    return _Row(get, set, doc, row)
 
 
 class PIDStage:
@@ -366,14 +379,16 @@ class RateController(PIDStage):
         self._params = tuple(list(self._params) + ['max_acceleration'])
 
 
-    @property
-    def max_acceleration(self) -> Union[float, np.ndarray]:
-        "Maximum acceleration in rad/s/s. A number if it is the same for all axes."
+    def _get_max_acceleration(self) -> Union[float, np.ndarray]:
         limit = self._data.params[PID_LIMIT, self._start:self._stop]
         return float(limit[0]) if np.all(limit == limit[0]) else limit.copy()
-    @max_acceleration.setter
-    def max_acceleration(self, value):
+
+    def _set_max_acceleration(self, value):
         self._data.params[PID_LIMIT, self._start:self._stop] = value
+
+    max_acceleration = _Row(
+        _get_max_acceleration, _set_max_acceleration,
+        "Maximum acceleration in rad/s/s. A number if it is the same for all axes.", PID_LIMIT)
 
 
 class AltController(PIDStage):
