@@ -66,8 +66,7 @@ on below), so a function reads ``op.memo`` where it would otherwise read ``op[1]
 backends treat them as they do the tuples of `multirotor.tuples`: numba keeps them on the
 stack, and JAX traces them as pytrees, so they cost nothing.
 """
-from collections import namedtuple
-from typing import Tuple
+from typing import NamedTuple, Tuple
 
 import numpy as np
 from numba import njit
@@ -91,52 +90,117 @@ INF = float('inf')
 # Named tuples. Each is what one function hands to another, in place of a tuple that
 # the receiver would unpack by position. They are cheap on both backends (see above).
 
-PidLaw = namedtuple('PidLaw', 'action err err_p err_i err_d integral')
-"What `_pid_scalar` returns: the action and the new error terms of a channel."
 
-ChannelState = namedtuple(
-    'ChannelState', 'err err_p err_i err_d reference action integral')
-"""
-The new state of one channel: the seven values of a column of ``x``, in the order of the
-``PID_*`` rows. A channel function returns one, and `multirotor.xp_numba.map_rows` stacks
-them into the matrix.
-"""
+class PidLaw(NamedTuple):
+    "What `_pid_scalar` returns: the action and the new error terms of a channel."
+    action: float
+    err: float
+    err_p: float
+    err_i: float
+    err_d: float
+    integral: float
 
-Channel = namedtuple('Channel', 'params x reference measurement dt')
-"""
-What a channel function takes besides the channel's index: the stage's parameters and
-state, its reference and measurement (one value per channel), and the time step.
-"""
 
-ClimbChannel = namedtuple('ClimbChannel', Channel._fields + ('orientation', 'mass', 'weight'))
-"The `Channel` of the climb stage, with the vehicle's roll, pitch, yaw, mass and weight."
+class ChannelState(NamedTuple):
+    """
+    The new state of one channel: the seven values of a column of ``x``, in the order of the
+    ``PID_*`` rows. A channel function returns one, and `multirotor.xp_numba.map_rows` stacks
+    them into the matrix.
+    """
+    err: float
+    err_p: float
+    err_i: float
+    err_d: float
+    reference: float
+    action: float
+    integral: float
 
-SqrtChannel = namedtuple('SqrtChannel', 'params x reference err dt')
-"The `Channel` of the square-root controller: it takes the error, not the measurement."
 
-Terms = namedtuple('Terms', 'params x reference measurement err dt')
-"""
-The operand of `_pid_terms` and `_sqrt_terms`, which `xp.cond` chooses between. Both take
-every field, whether they use it or not.
-"""
+class Channel(NamedTuple):
+    """
+    What a channel function takes besides the channel's index: the stage's parameters and
+    state, its reference and measurement (one value per channel), and the time step.
+    """
+    params: np.ndarray
+    x: np.ndarray
+    reference: np.ndarray
+    measurement: np.ndarray
+    dt: float
 
-Leash = namedtuple('Leash', 'params err body_state acceleration sim_dt')
-"The operand of `_leashed` and `_unleashed`: the position error and the vehicle's motion."
 
-Inputs = namedtuple('Inputs', (
-    'params reference body_state acceleration inertia mass weight sim_dt steps feed_forward '
-    'use_feed_forward feedforward_weight leashing square_root_position square_root_attitude'))
-"""
-Everything besides the state and the memo that `cascaded_step` was given, with the same
-names as its arguments, except that ``steps`` is a `multirotor.tuples.Steps`.
-"""
+class ClimbChannel(NamedTuple):
+    "The `Channel` of the climb stage, with the vehicle's roll, pitch, yaw, mass and weight."
+    params: np.ndarray
+    x: np.ndarray
+    reference: np.ndarray
+    measurement: np.ndarray
+    dt: float
+    orientation: np.ndarray
+    mass: float
+    weight: float
 
-Operand = namedtuple('Operand', 'x memo inputs')
-"""
-The operand of a branch of the cascade: the matrix of the stages' state ``x``, the
-`multirotor.tuples.Memo`, and the `Inputs`. A branch returns the new ``(x, memo)``.
-"""
 
+class SqrtChannel(NamedTuple):
+    "The `Channel` of the square-root controller: it takes the error, not the measurement."
+    params: np.ndarray
+    x: np.ndarray
+    reference: np.ndarray
+    err: np.ndarray
+    dt: float
+
+
+class Terms(NamedTuple):
+    """
+    The operand of `_pid_terms` and `_sqrt_terms`, which `xp.cond` chooses between. Both take
+    every field, whether they use it or not.
+    """
+    params: np.ndarray
+    x: np.ndarray
+    reference: np.ndarray
+    measurement: np.ndarray
+    err: np.ndarray
+    dt: float
+
+
+class Leash(NamedTuple):
+    "The operand of `_leashed` and `_unleashed`: the position error and the vehicle's motion."
+    params: np.ndarray
+    err: np.ndarray
+    body_state: np.ndarray
+    acceleration: np.ndarray
+    sim_dt: float
+
+
+class Inputs(NamedTuple):
+    """
+    Everything besides the state and the memo that `cascaded_step` was given, with the same
+    names as its arguments, except that ``steps`` is a `multirotor.tuples.Steps`.
+    """
+    params: np.ndarray
+    reference: np.ndarray
+    body_state: np.ndarray
+    acceleration: np.ndarray
+    inertia: np.ndarray
+    mass: float
+    weight: float
+    sim_dt: float
+    steps: Steps
+    feed_forward: np.ndarray
+    use_feed_forward: bool
+    feedforward_weight: float
+    leashing: bool
+    square_root_position: bool
+    square_root_attitude: bool
+
+
+class Operand(NamedTuple):
+    """
+    The operand of a branch of the cascade: the matrix of the stages' state ``x``, the
+    `multirotor.tuples.Memo`, and the `Inputs`. A branch returns the new ``(x, memo)``.
+    """
+    x: np.ndarray
+    memo: Memo
+    inputs: Inputs
 
 
 def _clip(value: float, limit: float) -> float:
@@ -166,6 +230,8 @@ def _clip(value: float, limit: float) -> float:
 def _pid_scalar(
     params: np.ndarray, x: np.ndarray, i: int, reference: float, measurement: float,
     dt: float
+
+
 ) -> PidLaw:
     """
     The PID law of channel ``i``, given its reference and measurement. The integral
@@ -404,6 +470,8 @@ def _sqrt_terms(op: Terms) -> np.ndarray:
 def pid_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     The plain PID law on every channel of a stage, as a bare
@@ -435,6 +503,8 @@ def pid_stage(
 def altitude_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Altitude stage (1 channel): z-position error to climb rate, limited. The arguments
@@ -449,6 +519,8 @@ def altitude_stage(
 def climb_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     orientation: np.ndarray, mass: float, weight: float, dt: float
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Climb rate stage (1 channel): vertical velocity error to thrust force. The thrust is
@@ -480,6 +552,8 @@ def climb_stage(
 def velocity_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Velocity stage (2 channels): body-frame xy-velocity error to pitch and roll,
@@ -494,6 +568,8 @@ def velocity_stage(
 def attitude_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     dt: float, square_root_scaling: bool
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Attitude stage (3 channels): orientation error to Euler rates. Optionally replaces
@@ -527,6 +603,8 @@ def attitude_stage(
 def rate_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     orientation: np.ndarray, inertia: np.ndarray, dt: float
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Rate stage (3 channels): Euler rate error to body torques.
@@ -561,6 +639,8 @@ def rate_stage(
 
 def leash_distance(
     k_p: float, body_state: np.ndarray, acceleration: np.ndarray, sim_dt: float
+
+
 ) -> float:
     """
     The largest horizontal position error that the position controller acts on,
@@ -629,6 +709,8 @@ def position_stage(
     params: np.ndarray, x: np.ndarray, reference: np.ndarray, measurement: np.ndarray,
     body_state: np.ndarray, acceleration: np.ndarray, sim_dt: float, dt: float,
     leashing: bool, square_root_scaling: bool
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Position stage (2 channels): inertial xy-position error to body-frame xy-velocity.
@@ -778,6 +860,8 @@ def cascaded_step(
     weight: float, sim_dt: float, n: int, steps_p: int, steps_a: int, steps_z: int,
     feed_forward: np.ndarray, use_feed_forward: bool, feedforward_weight: float,
     leashing: bool, square_root_position: bool, square_root_attitude: bool
+
+
 ) -> Tuple[np.ndarray, Memo, np.ndarray]:
     """
     One step of the whole cascade of a `Controller`: the six stages in order, each at
@@ -860,6 +944,8 @@ def fleet_step(
     weight: np.ndarray, sim_dt: float, n: int, steps_p: int, steps_a: int, steps_z: int,
     feed_forward: np.ndarray, use_feed_forward: bool, feedforward_weight: np.ndarray,
     leashing: bool, square_root_position: bool, square_root_attitude: bool
+
+
 ) -> Tuple[np.ndarray, Memo, np.ndarray]:
     """
     One step of the controllers of a fleet: `cascaded_step` for each vehicle, in a

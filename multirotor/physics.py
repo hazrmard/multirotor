@@ -39,8 +39,7 @@ Functions with no arrow after them, such as ``battery_ocv`` and
 `Multirotor.get_forces_torques`, and ``thrust_blade_element_model`` in
 `Propeller.thrust`.
 """
-from collections import namedtuple
-from typing import Iterable, Tuple
+from typing import Iterable, NamedTuple, Tuple
 
 import numpy as np
 from numba import njit
@@ -128,6 +127,8 @@ def thrustEqn(vi: float, *prop_params: float) -> float:
 def thrust_blade_element_model(
     prop_speed: float, airstream_velocity: np.ndarray, R: float, A: float, rho: float,
     a: float, b: float, c: float, eta: float, theta0: float, theta1: float
+
+
 ) -> float:
     """
     Thrust of one propeller from the blade-element model: the induced velocity is found
@@ -183,6 +184,8 @@ def thrust_blade_element_model(
 def thrusts_blade_element_model(
     speeds: np.ndarray, airstream_velocities: np.ndarray, prop_params: np.ndarray,
     rho: float
+
+
 ) -> np.ndarray:
     """
     Thrust of each propeller from the blade-element model, by solving
@@ -221,50 +224,99 @@ def thrusts_blade_element_model(
 # receiver would unpack by position. Both backends treat them as free (see
 # `multirotor.tuples`).
 
-MotorInputs = namedtuple('MotorInputs', 'speed u max_voltage motor_params')
-"The arguments of `motor_electrical`, which the per-motor functions take as one value."
 
-TorqueInputs = namedtuple('TorqueInputs', 'thrusts drag_torques clockwise positions')
-"The arguments of `body_torques` after the first, which `_add_torque` takes as one value."
+class MotorInputs(NamedTuple):
+    "The arguments of `motor_electrical`, which the per-motor functions take as one value."
+    speed: np.ndarray
+    u: np.ndarray
+    max_voltage: float
+    motor_params: np.ndarray
 
-Terminal = namedtuple('Terminal', 'voltage ok')
-"What `battery_terminal` returns: the terminal voltage, and whether the battery can deliver the power."
 
-OperatingPoint = namedtuple('OperatingPoint', 'terminal_voltage power ok')
-"""
-What `battery_operating_point` returns: the terminal voltage, the power the motors draw,
-and whether the battery can deliver it.
-"""
+class TorqueInputs(NamedTuple):
+    "The arguments of `body_torques` after the first, which `_add_torque` takes as one value."
+    thrusts: np.ndarray
+    drag_torques: np.ndarray
+    clockwise: np.ndarray
+    positions: np.ndarray
 
-BatteryEnd = namedtuple(
-    'BatteryEnd', 'charge_drawn current voltage cutoff overload voltage_limit')
-"""
-What `battery_end_step` returns: the charge drawn, the battery current, the terminal
-voltage, whether the battery has cut off, whether it was overloaded, and the motors'
-voltage limit for the next step.
-"""
 
-OcvTable = namedtuple('OcvTable', 'soc ocv_soc ocv_voltage')
-"The operand of `_interpolate`: the state of charge and the table."
+class Terminal(NamedTuple):
+    "What `battery_terminal` returns: the terminal voltage, and whether the battery can deliver the power."
+    voltage: float
+    ok: bool
 
-Load = namedtuple('Load', 'power open_circuit_voltage internal_resistance')
-"The operand of `_ideal` and `_loaded`: the power drawn and the battery's source voltage and resistance."
 
-Delivery = namedtuple('Delivery', 'open_circuit_voltage discriminant')
-"The operand of `_overloaded` and `_delivering`: the source voltage and the discriminant of the quadratic."
+class OperatingPoint(NamedTuple):
+    """
+    What `battery_operating_point` returns: the terminal voltage, the power the motors draw,
+    and whether the battery can deliver it.
+    """
+    terminal_voltage: float
+    power: float
+    ok: bool
 
-Candidate = namedtuple('Candidate', (
-    'terminal_voltage power ok speed u open_circuit_voltage internal_resistance motor_params'))
-"""
-The operand of `_unlimited`, `_limited` and `_balance`: the operating point if no motor is
-limited, and what is needed to look for another.
-"""
 
-Discharge = namedtuple('Discharge', (
-    'charge_drawn current open_circuit_voltage cutoff overload motor_speeds u motor_params '
-    'battery_params'))
-"The operand of `_dead` and `_live`: the battery's state after the step, and what is needed to update it."
+class BatteryEnd(NamedTuple):
+    """
+    What `battery_end_step` returns: the charge drawn, the battery current, the terminal
+    voltage, whether the battery has cut off, whether it was overloaded, and the motors'
+    voltage limit for the next step.
+    """
+    charge_drawn: float
+    current: float
+    voltage: float
+    cutoff: bool
+    overload: bool
+    voltage_limit: float
 
+
+class OcvTable(NamedTuple):
+    "The operand of `_interpolate`: the state of charge and the table."
+    soc: float
+    ocv_soc: np.ndarray
+    ocv_voltage: np.ndarray
+
+
+class Load(NamedTuple):
+    "The operand of `_ideal` and `_loaded`: the power drawn and the battery's source voltage and resistance."
+    power: float
+    open_circuit_voltage: float
+    internal_resistance: float
+
+
+class Delivery(NamedTuple):
+    "The operand of `_overloaded` and `_delivering`: the source voltage and the discriminant of the quadratic."
+    open_circuit_voltage: float
+    discriminant: float
+
+
+class Candidate(NamedTuple):
+    """
+    The operand of `_unlimited`, `_limited` and `_balance`: the operating point if no motor is
+    limited, and what is needed to look for another.
+    """
+    terminal_voltage: float
+    power: float
+    ok: bool
+    speed: np.ndarray
+    u: np.ndarray
+    open_circuit_voltage: float
+    internal_resistance: float
+    motor_params: np.ndarray
+
+
+class Discharge(NamedTuple):
+    "The operand of `_dead` and `_live`: the battery's state after the step, and what is needed to update it."
+    charge_drawn: float
+    current: float
+    open_circuit_voltage: float
+    cutoff: bool
+    overload: bool
+    motor_speeds: np.ndarray
+    u: np.ndarray
+    motor_params: np.ndarray
+    battery_params: np.ndarray
 
 
 def _voltage(i: int, c: MotorInputs) -> float:
@@ -307,6 +359,8 @@ def _current(i: int, c: MotorInputs) -> float:
 
 def motor_electrical(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Voltage and current of each motor. The current responds instantly to the
@@ -355,6 +409,8 @@ def _acc(i: int, c: MotorInputs) -> float:
 
 def motor_acc(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+
+
 ) -> np.ndarray:
     """
     Angular acceleration of each motor: electrical torque minus viscous friction
@@ -406,6 +462,8 @@ def _add_power(acc: float, i: int, c: MotorInputs) -> float:
 
 def motor_power(
     speed: np.ndarray, u: np.ndarray, max_voltage: float, motor_params: np.ndarray
+
+
 ) -> float:
     """
     Total electrical power (W) drawn by the motors.
@@ -564,6 +622,8 @@ def _delivering(op: Delivery) -> Terminal:
 
 def battery_terminal(
     power: float, open_circuit_voltage: float, internal_resistance: float
+
+
 ) -> Terminal:
     """
     Terminal voltage of a battery delivering ``power``, modeling the motors'
@@ -660,6 +720,8 @@ def _limited(op: Candidate) -> OperatingPoint:
 def battery_operating_point(
     speed: np.ndarray, u: np.ndarray, open_circuit_voltage: float,
     internal_resistance: float, motor_params: np.ndarray
+
+
 ) -> OperatingPoint:
     """
     Terminal voltage and power at which the battery and the motors agree: the
@@ -754,6 +816,8 @@ def battery_end_step(
     motor_speeds: np.ndarray, u: np.ndarray, motor_params: np.ndarray,
     battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
     dt: float
+
+
 ) -> BatteryEnd:
     """
     The battery's state after one integrated time step. The charge drawn during
@@ -807,6 +871,8 @@ def battery_end_step(
 
 def _add_torque(
     acc: Tuple[float, float, float], i: int, c: TorqueInputs
+
+
 ) -> Tuple[float, float, float]:
     """
     ``acc`` plus the torques of propeller ``i``.
@@ -839,6 +905,8 @@ def _add_torque(
 def body_torques(
     thrusts: np.ndarray, drag_torques: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
+
+
 ) -> np.ndarray:
     """
     Total torque on the three body axes (roll, pitch, yaw) due to the
@@ -875,6 +943,8 @@ def body_torques(
 def forces_torques(
     speeds: np.ndarray, prop_params: np.ndarray, clockwise: np.ndarray,
     positions: np.ndarray
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Total force and torque on the body from propellers whose thrust is
@@ -908,6 +978,8 @@ def forces_torques(
 def body_derivative(
     forces: np.ndarray, torques: np.ndarray, x: np.ndarray, g: float, mass: float,
     inertia_matrix: np.matrix, inertia_matrix_inverse: np.matrix
+
+
 ) -> np.ndarray:
     """
     Given forces and torqes, return the rate of change of state.

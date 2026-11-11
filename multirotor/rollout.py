@@ -26,8 +26,7 @@ Three step functions share the signature
 `step_motors` and `step_motors_battery`.
 """
 import types
-from collections import namedtuple
-from typing import Callable, Optional, Tuple
+from typing import Callable, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 
@@ -45,42 +44,95 @@ from .tuples import (
 Rhs = Callable[[float, np.ndarray, tuple], np.ndarray]
 "A right-hand side ``f(t, x, args)`` of ``dx/dt``, with the arguments as one tuple."
 
-BodyArgs = namedtuple('BodyArgs', 'forces torques g mass inertia inertia_inverse')
-"The arguments of `rhs_body` after ``t`` and ``x``."
 
-MotorsArgs = namedtuple('MotorsArgs', (
-    'u max_voltage disturbance g mass inertia inertia_inverse prop_params motor_params '
-    'clockwise positions'))
-"The arguments of `rhs_body_with_motors` after ``t`` and ``x``."
+class BodyArgs(NamedTuple):
+    "The arguments of `rhs_body` after ``t`` and ``x``."
+    forces: np.ndarray
+    torques: np.ndarray
+    g: float
+    mass: float
+    inertia: np.ndarray
+    inertia_inverse: np.ndarray
 
-BatteryArgs = namedtuple('BatteryArgs', (
-    'u cutoff disturbance g mass inertia inertia_inverse prop_params motor_params clockwise '
-    'positions battery_params ocv_soc ocv_voltage charge_drawn'))
-"The arguments of `rhs_body_with_motors_and_battery` after ``t`` and ``x``."
 
-Substep = namedtuple('Substep', 'f t h args')
-"What `_substep` needs: the right-hand side, the start time, the substep length and the arguments."
+class MotorsArgs(NamedTuple):
+    "The arguments of `rhs_body_with_motors` after ``t`` and ``x``."
+    u: np.ndarray
+    max_voltage: float
+    disturbance: np.ndarray
+    g: float
+    mass: float
+    inertia: np.ndarray
+    inertia_inverse: np.ndarray
+    prop_params: np.ndarray
+    motor_params: np.ndarray
+    clockwise: np.ndarray
+    positions: np.ndarray
 
-Rollout = namedtuple('Rollout', 'vehicle ctrl targets dt substeps n0')
-"""
-What the loop of a rollout is given besides the carry and the step index: the vehicle's and
-the controller's parameters, the targets, the time step, the RK4 substeps per step, and the
-number of controller steps taken before the rollout.
-"""
 
-Carry = namedtuple('Carry', 'x memo state')
-"""
-What the loop of a rollout carries from step to step: the controller's state matrix ``x``
-and its `Memo`, and the vehicle's `VehicleState`.
-"""
+class BatteryArgs(NamedTuple):
+    "The arguments of `rhs_body_with_motors_and_battery` after ``t`` and ``x``."
+    u: np.ndarray
+    cutoff: bool
+    disturbance: np.ndarray
+    g: float
+    mass: float
+    inertia: np.ndarray
+    inertia_inverse: np.ndarray
+    prop_params: np.ndarray
+    motor_params: np.ndarray
+    clockwise: np.ndarray
+    positions: np.ndarray
+    battery_params: np.ndarray
+    ocv_soc: np.ndarray
+    ocv_voltage: np.ndarray
+    charge_drawn: float
 
-Drive = namedtuple('Drive', 'x memo action u')
-"What the controller gives a step: its new state and memo, its action, and the propeller speeds."
 
+class Substep(NamedTuple):
+    "What `_substep` needs: the right-hand side, the start time, the substep length and the arguments."
+    f: Rhs
+    t: float
+    h: float
+    args: tuple
+
+
+class Rollout(NamedTuple):
+    """
+    What the loop of a rollout is given besides the carry and the step index: the vehicle's and
+    the controller's parameters, the targets, the time step, the RK4 substeps per step, and the
+    number of controller steps taken before the rollout.
+    """
+    vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]
+    ctrl: ControllerParams
+    targets: np.ndarray
+    dt: float
+    substeps: int
+    n0: int
+
+
+class Carry(NamedTuple):
+    """
+    What the loop of a rollout carries from step to step: the controller's state matrix ``x``
+    and its `Memo`, and the vehicle's `VehicleState`.
+    """
+    x: np.ndarray
+    memo: Memo
+    state: VehicleState
+
+
+class Drive(NamedTuple):
+    "What the controller gives a step: its new state and memo, its action, and the propeller speeds."
+    x: np.ndarray
+    memo: Memo
+    action: np.ndarray
+    u: np.ndarray
 
 
 def rk4_step(
     f: Rhs, t: float, x: np.ndarray, dt: float, args: tuple
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     One RK4 step of ``dx/dt = f(t, x, args)``.
@@ -115,6 +167,8 @@ def rk4_step(
 
 def integrate(
     f: Rhs, t: float, x: np.ndarray, dt: float, substeps: int, args: tuple
+
+
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Advance ``x`` by ``dt`` in ``substeps`` RK4 steps.
@@ -238,6 +292,8 @@ def _rhs_battery(t: float, x: np.ndarray, a: BatteryArgs) -> np.ndarray:
 
 def step_body(
     state: VehicleState, u: np.ndarray, vehicle: BodyVehicle, dt: float, substeps: int
+
+
 ) -> VehicleState:
     """
     Advance a vehicle without motors by one step: the speed signals are the propeller
@@ -273,6 +329,8 @@ def step_body(
 
 def step_motors(
     state: VehicleState, u: np.ndarray, vehicle: MotorsVehicle, dt: float, substeps: int
+
+
 ) -> VehicleState:
     """
     Advance a vehicle with motors and no battery model by one step; the motors see
@@ -290,6 +348,8 @@ def step_motors(
 
 def step_motors_battery(
     state: VehicleState, u: np.ndarray, vehicle: BatteryVehicle, dt: float, substeps: int
+
+
 ) -> VehicleState:
     """
     Advance a vehicle with motors and a battery model by one step. The battery sags and can
@@ -501,6 +561,8 @@ def _result(carry: Carry, n0: int, steps: int) -> Tuple[ControllerState, Vehicle
 def closed_loop_body(
     state0: VehicleState, vehicle: BodyVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
+
+
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
@@ -547,6 +609,8 @@ def closed_loop_body(
 def closed_loop_motors(
     state0: VehicleState, vehicle: MotorsVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
+
+
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     `closed_loop_body` for a vehicle with motors (`MotorsVehicle`).
@@ -575,6 +639,8 @@ def closed_loop_motors(
 def closed_loop_motors_battery(
     state0: VehicleState, vehicle: BatteryVehicle, ctrl: ControllerParams,
     targets: np.ndarray, dt: float, substeps: int, start: Optional[ControllerState] = None
+
+
 ) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
     """
     `closed_loop_body` for a vehicle with motors and a battery (`BatteryVehicle`).

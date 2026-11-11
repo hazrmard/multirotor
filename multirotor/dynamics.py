@@ -50,8 +50,7 @@ Which one `Multirotor` integrates:
 * ``rhs_motor_only`` steps a standalone `Motor`, and the motors of a
   `Multirotor` when their speeds are needed without stepping the body.
 """
-from collections import namedtuple
-from typing import Tuple
+from typing import NamedTuple, Tuple
 
 import numpy as np
 
@@ -68,17 +67,28 @@ from .physics import (
 N_BODY_STATES = 12
 "The first 12 elements of the integrated state are the body states."
 
-BatteryState = namedtuple('BatteryState', 'terminal_voltage current voltage_limit')
-"What `battery_state` returns: the terminal voltage, the battery current, and the motors' voltage limit."
 
-Supply = namedtuple('Supply', 'open_circuit_voltage speeds u motor_params battery_params')
-"The operand of `_no_current` and `_supplying`: the battery's source voltage and the motors."
+class BatteryState(NamedTuple):
+    "What `battery_state` returns: the terminal voltage, the battery current, and the motors' voltage limit."
+    terminal_voltage: float
+    current: float
+    voltage_limit: float
 
+
+class Supply(NamedTuple):
+    "The operand of `_no_current` and `_supplying`: the battery's source voltage and the motors."
+    open_circuit_voltage: float
+    speeds: np.ndarray
+    u: np.ndarray
+    motor_params: np.ndarray
+    battery_params: np.ndarray
 
 
 def rhs_body(
     t: float, x: np.ndarray, forces: np.ndarray, torques: np.ndarray, g: float,
     mass: float, inertia_matrix: np.ndarray, inertia_matrix_inverse: np.ndarray
+
+
 ) -> np.ndarray:
     """
     Rate of change of the vehicle's 12 body states under forces and torques that
@@ -120,6 +130,8 @@ def rhs_body(
 def rhs_motor_only(
     t: float, speed: np.ndarray, u: np.ndarray, max_voltage: float,
     motor_params: np.ndarray
+
+
 ) -> np.ndarray:
     """
     Rate of change of motor speeds, for motors stepped on their own (outside a
@@ -152,6 +164,8 @@ def rhs_body_with_motors(
     disturbance: np.ndarray, g: float, mass: float, inertia_matrix: np.ndarray,
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray
+
+
 ) -> np.ndarray:
     """
     Rate of change of the body and its motors, for vehicles with motors whose
@@ -250,6 +264,8 @@ def battery_state(
     speeds: np.ndarray, u: np.ndarray, charge: float, cutoff: bool,
     motor_params: np.ndarray, battery_params: np.ndarray, ocv_soc: np.ndarray,
     ocv_voltage: np.ndarray
+
+
 ) -> BatteryState:
     """
     The battery's terminal voltage and current, and the voltage limit it puts
@@ -297,6 +313,8 @@ def rhs_body_with_motors_and_battery(
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
     battery_params: np.ndarray, ocv_soc: np.ndarray, ocv_voltage: np.ndarray,
     charge_drawn: float
+
+
 ) -> np.ndarray:
     """
     Like `rhs_body_with_motors`, with a battery model. The battery's terminal
@@ -357,6 +375,8 @@ def rhs_body_with_motors_blade_element(
     inertia_matrix_inverse: np.ndarray, prop_params: np.ndarray,
     motor_params: np.ndarray, clockwise: np.ndarray, positions: np.ndarray,
     rho: float
+
+
 ) -> np.ndarray:
     """
     Like `rhs_body_with_motors`, for vehicles whose thrust comes from the
