@@ -6,6 +6,10 @@ returns ``dx/dt`` for the whole integrated state ``x``.
 This module is the only code that knows the layout of ``x``. It slices ``x``,
 calls the subsystem equations in `multirotor.physics`, and stacks their results.
 
+The small functions and local named tuples here (``_no_current``, ``_supplying``,
+``Supply``) are the branches of an ``xp.cond`` and their operand; the reasons are
+given in `multirotor.physics`.
+
 The state ``x`` and the functions each right-hand side calls, for following the
 order of execution. An arrow goes from a caller to the function it calls. Every
 right-hand side is compiled with numba, except

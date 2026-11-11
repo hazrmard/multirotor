@@ -32,6 +32,20 @@ the blade-element thrust functions, which solve an equation with scipy's
 Functions with no arrow after them, such as ``battery_ocv`` and
 ``body_derivative``, call no other function in this module.
 
+Why some functions are small, and why there are named tuples in this module. The
+equations are written once and built for numba or JAX (`multirotor.lazy`). JAX cannot
+trace a Python ``if`` or ``for`` on traced values, so a branch is an ``xp.cond`` and a
+loop is an ``xp.map_`` or ``xp.fori_loop`` (see `multirotor.xp_numba`), each taking a
+module-level function that has one operand and cannot close over locals. That makes a
+function per branch or loop body (``_empty`` and ``_interpolate`` are the two sides of
+one ``if``; ``_voltage`` is the body of a loop over the motors), and a named tuple as
+its operand (``OcvTable``, ``Load``, ``MotorInputs``), built by the parent function
+from its locals. Both backends compile them to what the plain ``if`` or ``for`` would
+be. An operand is local to the functions that use it and is not exported. A result that
+callers use (``Terminal``, ``OperatingPoint``, ``BatteryEnd``) is named so that both
+sides of a branch return the same type. The tuples that cross modules, such as the
+vehicle and the controller's parameters, are in `multirotor.tuples`.
+
 `multirotor.simulation` also calls some of these directly, between solver steps:
 ``motor_electrical`` for each motor's voltage and current,
 ``battery_end_step`` and ``battery_ocv`` for the battery's state,
@@ -292,9 +306,7 @@ class Candidate(NamedTuple):
     The operand of `_unlimited`, `_limited` and `_balance`: the operating point if no motor is
     limited, and what is needed to look for another.
     """
-    terminal_voltage: float
-    power: float
-    ok: bool
+    point: OperatingPoint
     speed: np.ndarray
     u: np.ndarray
     open_circuit_voltage: float
@@ -303,12 +315,12 @@ class Candidate(NamedTuple):
 
 
 class Discharge(NamedTuple):
-    "The operand of `_dead` and `_live`: the battery's state after the step, and what is needed to update it."
-    charge_drawn: float
-    current: float
-    open_circuit_voltage: float
-    cutoff: bool
-    overload: bool
+    """
+    The operand of `_dead` and `_live`: the battery's state after the step as it is, for a
+    battery that supplies nothing (``end.voltage`` is the open-circuit voltage and
+    ``end.voltage_limit`` is 0), and what is needed to update it.
+    """
+    end: BatteryEnd
     motor_speeds: np.ndarray
     u: np.ndarray
     motor_params: np.ndarray
@@ -657,7 +669,7 @@ def _unlimited(op: Candidate) -> OperatingPoint:
     OperatingPoint
         The first operating point.
     """
-    return OperatingPoint(op.terminal_voltage, op.power, op.ok)
+    return op.point
 
 
 
@@ -748,8 +760,8 @@ def battery_operating_point(
     return xp.cond(
         requested_voltage.max() <= terminal.voltage, _unlimited, _limited,
         Candidate(
-            terminal.voltage, power, terminal.ok, speed, u, v_oc, internal_resistance,
-            motor_params))
+            OperatingPoint(terminal.voltage, power, terminal.ok), speed, u, v_oc,
+            internal_resistance, motor_params))
 
 
 
@@ -767,8 +779,7 @@ def _dead(op: Discharge) -> BatteryEnd:
     BatteryEnd
         The state as it is, with a voltage limit of 0 for the motors.
     """
-    return BatteryEnd(
-        op.charge_drawn, op.current, op.open_circuit_voltage, op.cutoff, op.overload, 0.)
+    return op.end
 
 
 
@@ -786,13 +797,14 @@ def _live(op: Discharge) -> BatteryEnd:
     BatteryEnd
         The state with the terminal voltage, the cutoff and the overload updated.
     """
+    end = op.end
     point = battery_operating_point(
-        op.motor_speeds, op.u, op.open_circuit_voltage,
+        op.motor_speeds, op.u, end.voltage,
         op.battery_params[BATTERY_INTERNAL_RESISTANCE], op.motor_params)
     # The cutoff takes effect from the next step
-    cutoff = op.cutoff | (point.terminal_voltage < op.battery_params[BATTERY_MIN_VOLTAGE])
+    cutoff = end.cutoff | (point.terminal_voltage < op.battery_params[BATTERY_MIN_VOLTAGE])
     return BatteryEnd(
-        op.charge_drawn, op.current, point.terminal_voltage, cutoff,
+        end.charge_drawn, end.current, point.terminal_voltage, cutoff,
         xp.logical_not(point.ok), point.terminal_voltage)
 
 
@@ -848,8 +860,8 @@ def battery_end_step(
     return xp.cond(
         cutoff | (soc <= 0.), _dead, _live,
         Discharge(
-            charge_drawn, current, open_circuit_voltage, cutoff, overload, motor_speeds, u,
-            motor_params, battery_params))
+            BatteryEnd(charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.),
+            motor_speeds, u, motor_params, battery_params))
 
 
 
