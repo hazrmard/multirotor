@@ -1,6 +1,6 @@
 import numpy as np
 from numba import njit
-from typing import Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from .pid import Controller
 from ..helpers import get_vehicle_ability
@@ -14,8 +14,23 @@ except ImportError:
 
 
 class SCurveController:
+    """
+    A `Controller` that plans an S-curve trajectory to the target in the xy-plane, and
+    feeds its velocity to the position stage as a feed-forward reference.
+    """
 
-    def __init__(self, ctrl: Controller):
+    def __init__(self, ctrl: Controller) -> None:
+        """
+        Parameters
+        ----------
+        ctrl : Controller
+            The controller to wrap.
+
+        Raises
+        ------
+        ImportError
+            If the planner, ``pyscurve``, is not installed.
+        """
         if not ScurvePlanner:
             raise ImportError('Py-Scurve not installed')
         self.ctrl = ctrl
@@ -29,7 +44,16 @@ class SCurveController:
         self.reset()
 
 
-    def get_params(self):
+    def get_params(self) -> Dict[str, Any]:
+        """
+        The parameters of the planner and of the wrapped controller.
+
+        Returns
+        -------
+        dict
+            ``steps``, ``max_velocity``, ``max_acceleration`` and ``max_jerk`` of the planner,
+            and ``ctrl``, the wrapped controller's parameters (`Controller.get_params`).
+        """
         p = dict(
             steps=self.steps,
             max_velocity=self.max_velocity, max_acceleration=self.max_acceleration,
@@ -39,7 +63,16 @@ class SCurveController:
         return p
 
 
-    def set_params(self,**params: Dict[str, Union[np.ndarray, bool, float, int]]):
+    def set_params(self, **params: Union[Dict[str, Any], np.ndarray, bool, float, int]) -> None:
+        """
+        Set the parameters of the planner and of the wrapped controller.
+
+        Parameters
+        ----------
+        **params : dict, np.ndarray, bool, float or int
+            Parameters of the planner by name, and those of the wrapped controller either
+            nested under ``ctrl`` or by the names of its stages (`Controller.set_params`).
+        """
         ctrl_params = params.get('ctrl', None)
         # if controller params are not nested under 'ctrl, make a dict
         # containing those params...
@@ -64,7 +97,8 @@ class SCurveController:
         self.steps = self.ctrl.steps_p
 
 
-    def reset(self):
+    def reset(self) -> None:
+        "Reset the wrapped controller, and plan again from the start."
         self.ctrl.reset()
         # these parameters are dictated by the controller
         self.steps = self.ctrl.steps_p
@@ -86,7 +120,22 @@ class SCurveController:
         self.ref_xy = np.empty(2, self.ctrl.vehicle.dtype)
 
 
-    def step(self, reference: np.ndarray, ref_is_error=False):
+    def step(self, reference: np.ndarray, ref_is_error: bool = False) -> np.ndarray:
+        """
+        Calculate the controller's action, planning a new trajectory if the target changed.
+
+        Parameters
+        ----------
+        reference : np.ndarray
+            The target: x, y, z and yaw, shape (4,).
+        ref_is_error : bool
+            Ignored: the target is always a position.
+
+        Returns
+        -------
+        np.ndarray
+            The thrust and the three torques, shape (4,).
+        """
         ref_xy = reference[:2]
         if self.n==0 or not np.array_equal(ref_xy, self.ref_xy):
             self.ref_xy = ref_xy
@@ -120,20 +169,46 @@ class SCurveController:
 
 
     @property
-    def action(self):
+    def action(self) -> np.ndarray:
+        "The wrapped controller's last action."
         return self.ctrl.action
     @property
-    def reference(self):
+    def reference(self) -> np.ndarray:
+        "The wrapped controller's last target."
         return self.ctrl.reference
     @property
-    def feedforward_weight(self):
+    def feedforward_weight(self) -> float:
+        "The wrapped controller's weight of the feed-forward velocity."
         return self.ctrl.feedforward_weight
 
 
 
 
-def acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float, dt: float=1e-2):
-    """Solve 1d kinematics problem"""
+def acc_1d(
+    amax: float, vmax: float, v0: float, v1: float, disp: float, dt: float = 1e-2
+) -> float:
+    """
+    Solve a 1d kinematics problem: the acceleration that takes a body to a displacement, ending
+    at a velocity.
+
+    Parameters
+    ----------
+    amax : float
+        The largest acceleration.
+    vmax : float
+        The largest speed.
+    v0, v1 : float
+        The velocity now and the velocity wanted at the target.
+    disp : float
+        The displacement to the target.
+    dt : float
+        The time step.
+
+    Returns
+    -------
+    float
+        The acceleration to apply, at most ``amax`` in magnitude.
+    """
     sign = np.sign(disp)
     dist = np.abs(disp)
     relvel = v1 - v0 # desired change in velocity
@@ -166,8 +241,20 @@ def acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float, dt: floa
 
 
 # @njit
-def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float):
-    """Solve 1d kinematics problem"""
+def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float) -> float:
+    """
+    Solve a 1d kinematics problem, without a time step.
+
+    Parameters
+    ----------
+    amax, vmax, v0, v1, disp : float
+        As in `acc_1d`.
+
+    Returns
+    -------
+    float
+        The acceleration to apply, at most ``amax`` in magnitude.
+    """
     sign = np.sign(disp)
     dist = np.abs(disp)
     relvel = v1 - v0 # desired change in velocity
@@ -245,8 +332,30 @@ def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float):
 
 
 # @njit
-def acc_to_target_3d(amax: np.ndarray, vmax: np.ndarray, v0_vec: np.ndarray, v1_vec: np.ndarray, disp: float, dt: float=1e-2):
-    """Solve 3d kinematics problem"""
+def acc_to_target_3d(
+    amax: np.ndarray, vmax: np.ndarray, v0_vec: np.ndarray, v1_vec: np.ndarray,
+    disp: np.ndarray, dt: float = 1e-2
+) -> np.ndarray:
+    """
+    Solve a 3d kinematics problem, an `acc_1d` for each axis, scaled so that the acceleration
+    has the largest magnitude.
+
+    Parameters
+    ----------
+    amax, vmax : np.ndarray
+        The largest acceleration and speed on each axis, shape (3,).
+    v0_vec, v1_vec : np.ndarray
+        The velocity now and the velocity wanted at the target, shape (3,).
+    disp : np.ndarray
+        The displacement to the target, shape (3,).
+    dt : float
+        The time step.
+
+    Returns
+    -------
+    np.ndarray
+        The acceleration to apply, shape (3,).
+    """
     acc_x = acc_1d(amax[0], vmax[0], v0_vec[0], v1_vec[0], disp[0], dt)
     acc_y = acc_1d(amax[1], vmax[1], v0_vec[1], v1_vec[1], disp[1], dt)
     acc_z = acc_1d(amax[2], vmax[2], v0_vec[2], v1_vec[2], disp[2], dt)
@@ -254,8 +363,30 @@ def acc_to_target_3d(amax: np.ndarray, vmax: np.ndarray, v0_vec: np.ndarray, v1_
     acc = acc_xyz * amax / (np.linalg.norm(acc_xyz) + 1e-6)
     return acc
 # @njit
-def acc_to_target_2d(amax: float, vmax: float, v0_vec: np.ndarray, v1_vec: np.ndarray, disp: float, dt: float=1e-2):
-    """Solve 2d kinematics problem"""
+def acc_to_target_2d(
+    amax: float, vmax: float, v0_vec: np.ndarray, v1_vec: np.ndarray, disp: np.ndarray,
+    dt: float = 1e-2
+) -> np.ndarray:
+    """
+    Solve a 2d kinematics problem, an `acc_1d` for each axis, scaled so that the acceleration
+    has the largest magnitude.
+
+    Parameters
+    ----------
+    amax, vmax : float
+        The largest acceleration and speed.
+    v0_vec, v1_vec : np.ndarray
+        The velocity now and the velocity wanted at the target, shape (2,).
+    disp : np.ndarray
+        The displacement to the target, shape (2,).
+    dt : float
+        The time step.
+
+    Returns
+    -------
+    np.ndarray
+        The acceleration to apply, shape (2,).
+    """
     acc_x = acc_1d(amax, vmax, v0_vec[0], v1_vec[0], disp[0], dt)
     acc_y = acc_1d(amax, vmax, v0_vec[1], v1_vec[1], disp[1], dt)
     acc_xyz = np.asarray([acc_x, acc_y])
@@ -274,6 +405,25 @@ def compute_accel_2d(
     to_velocity : np.ndarray,
     dt: float=1e-2
     ) -> np.ndarray:
+    """
+    The acceleration that takes a vehicle from a position and velocity to another, in 2d.
+
+    Parameters
+    ----------
+    amax, vmax : float
+        The largest acceleration and speed.
+    from_position, from_velocity : np.ndarray
+        The position and velocity now, shape (2,).
+    to_position, to_velocity : np.ndarray
+        The position and velocity wanted, shape (2,).
+    dt : float
+        The time step.
+
+    Returns
+    -------
+    np.ndarray
+        The acceleration to apply, shape (2,).
+    """
     target_disp = to_position - from_position
     acc = acc_to_target_2d(amax, vmax, from_velocity, to_velocity, target_disp, dt)
     # if self.log:

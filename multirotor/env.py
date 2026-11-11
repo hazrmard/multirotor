@@ -48,9 +48,10 @@ class BaseMultirotorEnv(gym.Env):
 
     @property
     def state(self) -> np.ndarray:
+        "The vehicle's body state."
         return self.vehicle.state
     @state.setter
-    def state(self, x: np.ndarray):
+    def state(self, x: np.ndarray) -> None:
         self.vehicle.state = np.asarray(x, self.vehicle.dtype)
 
 
@@ -121,6 +122,19 @@ class BaseMultirotorEnv(gym.Env):
         The return value of `step()`, from the flags that `reward()` has set. The
         episode terminates when the vehicle reaches the origin, leaves the
         bounding box or tips over. It is truncated when it runs out of time.
+
+        Parameters
+        ----------
+        nstate : np.ndarray
+            The state after the step.
+        reward : float
+            The reward of the step.
+
+        Returns
+        -------
+        tuple
+            The state, the reward, whether the episode terminated, whether it was truncated,
+            and an info dict of the flags.
         """
         terminated = self._reached or self._outofbounds or self._tipped
         info = dict(
@@ -131,6 +145,20 @@ class BaseMultirotorEnv(gym.Env):
 
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        """
+        Advance the environment by one step. Subclasses define what an action is.
+
+        Parameters
+        ----------
+        action : np.ndarray
+            The action.
+
+        Returns
+        -------
+        tuple
+            The state, the reward, whether the episode terminated, whether it was truncated,
+            and an info dict.
+        """
         raise NotImplementedError
 
 

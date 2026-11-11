@@ -50,6 +50,7 @@ Which one `Multirotor` integrates:
 * ``rhs_motor_only`` steps a standalone `Motor`, and the motors of a
   `Multirotor` when their speeds are needed without stepping the body.
 """
+from collections import namedtuple
 from typing import Tuple
 
 import numpy as np
@@ -66,6 +67,12 @@ from .physics import (
 
 N_BODY_STATES = 12
 "The first 12 elements of the integrated state are the body states."
+
+BatteryState = namedtuple('BatteryState', 'terminal_voltage current voltage_limit')
+"What `battery_state` returns: the terminal voltage, the battery current, and the motors' voltage limit."
+
+Supply = namedtuple('Supply', 'open_circuit_voltage speeds u motor_params battery_params')
+"The operand of `_no_current` and `_supplying`: the battery's source voltage and the motors."
 
 
 
@@ -199,18 +206,43 @@ def rhs_body_with_motors(
 
 
 
-def _no_current(op):
-    "A battery that is cut off or empty supplies no current, and the motors get no voltage."
-    return op[0], 0., 0.
+def _no_current(op: Supply) -> BatteryState:
+    """
+    A battery that is cut off or empty supplies no current, and the motors get no voltage.
+
+    Parameters
+    ----------
+    op : Supply
+        The battery's source voltage and the motors.
+
+    Returns
+    -------
+    BatteryState
+        The source voltage, and no current or voltage limit.
+    """
+    return BatteryState(op.open_circuit_voltage, 0., 0.)
 
 
 
-def _supplying(op):
-    open_circuit_voltage, speeds, u, motor_params, battery_params = op
-    terminal_voltage, power, _ = battery_operating_point(
-        speeds, u, open_circuit_voltage,
-        battery_params[BATTERY_INTERNAL_RESISTANCE], motor_params)
-    return terminal_voltage, power / terminal_voltage, terminal_voltage
+def _supplying(op: Supply) -> BatteryState:
+    """
+    A battery that supplies the motors: its voltage, and the current at the power they draw.
+
+    Parameters
+    ----------
+    op : Supply
+        The battery's source voltage and the motors.
+
+    Returns
+    -------
+    BatteryState
+        The terminal voltage, the current and the motors' voltage limit.
+    """
+    point = battery_operating_point(
+        op.speeds, op.u, op.open_circuit_voltage,
+        op.battery_params[BATTERY_INTERNAL_RESISTANCE], op.motor_params)
+    return BatteryState(
+        point.terminal_voltage, point.power / point.terminal_voltage, point.terminal_voltage)
 
 
 
@@ -218,7 +250,7 @@ def battery_state(
     speeds: np.ndarray, u: np.ndarray, charge: float, cutoff: bool,
     motor_params: np.ndarray, battery_params: np.ndarray, ocv_soc: np.ndarray,
     ocv_voltage: np.ndarray
-) -> Tuple[float, float, float]:
+) -> BatteryState:
     """
     The battery's terminal voltage and current, and the voltage limit it puts
     on the motors. A battery that is cut off or empty supplies no current, and
@@ -246,7 +278,7 @@ def battery_state(
 
     Returns
     -------
-    Tuple[float, float, float]
+    BatteryState
         The terminal voltage (V), the battery current (A), and the motors'
         voltage limit (V).
     """
@@ -254,7 +286,7 @@ def battery_state(
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
     return xp.cond(
         cutoff | (soc <= 0.), _no_current, _supplying,
-        (open_circuit_voltage, speeds, u, motor_params, battery_params))
+        Supply(open_circuit_voltage, speeds, u, motor_params, battery_params))
 
 
 

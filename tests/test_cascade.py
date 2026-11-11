@@ -13,6 +13,7 @@ import pytest
 
 import multirotor.controller.cascade as cascade
 from multirotor.controller import data as K
+from multirotor.tuples import Memo
 
 OPTIONS = list(itertools.product(
     (False, True), (False, True), (False, True), (False, True),
@@ -52,7 +53,7 @@ def leaves(tree):
 
 
 def zero_memo():
-    return (np.zeros(2), np.zeros(1), np.zeros(3))
+    return Memo(np.zeros(2), np.zeros(1), np.zeros(3))
 
 
 

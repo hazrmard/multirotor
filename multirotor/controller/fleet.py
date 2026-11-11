@@ -15,11 +15,12 @@ and ``CASCADE_*`` constants in `multirotor.controller.data` name the rows and
 the first column of each stage.
 """
 from copy import deepcopy
-from typing import Dict, Sequence, Union
+from typing import Any, Dict, Sequence, Union
 
 import numpy as np
 
 from ..fleet import Fleet
+from ..tuples import Memo
 from .cascade import fleet_step
 from .data import N_CASCADE_CHANNELS, N_PID_STATES
 from .pid import Controller
@@ -108,12 +109,36 @@ class FleetController:
 
     @staticmethod
     def _copy(controller: Controller) -> Controller:
-        "A copy of a controller that shares its vehicle, which is not part of its gains."
+        """
+        A copy of a controller that shares its vehicle, which is not part of its gains.
+
+        Parameters
+        ----------
+        controller : Controller
+            The controller to copy.
+
+        Returns
+        -------
+        Controller
+            The copy.
+        """
         return deepcopy(controller, {id(controller.vehicle): controller.vehicle})
 
 
     def _controller_of(self, index: int) -> Controller:
-        "A new `Controller` with the parameters of one vehicle's controller."
+        """
+        A new `Controller` with the parameters of one vehicle's controller.
+
+        Parameters
+        ----------
+        index : int
+            The index of the vehicle in the fleet.
+
+        Returns
+        -------
+        Controller
+            The new controller.
+        """
         controller = self._copy(self._template)
         controller._data.params[:] = self.params[index]
         controller.feedforward_weight = self.feedforward_weight[index]
@@ -147,7 +172,7 @@ class FleetController:
         return self._torques.astype(self.fleet.dtype)
 
 
-    def set_params(self, index: int, **params) -> None:
+    def set_params(self, index: int, **params: Any) -> None:
         """
         Set the gains (i.e. the PID parameters) of one vehicle's controller, as
         `Controller.set_params` does for a controller.
@@ -240,7 +265,7 @@ class FleetController:
             np.asarray(feed_forward_velocity, dtype=float)[..., :2], (k_vehicles, 2))) \
             if use_feed_forward else np.zeros((k_vehicles, 2))
         state, memo, action = fleet_step(
-            self.params, self.state, (self._ref_vel, self._thrust, self._torques), target,
+            self.params, self.state, Memo(self._ref_vel, self._thrust, self._torques), target,
             np.ascontiguousarray(fleet._state), np.ascontiguousarray(fleet._dxdt[:, 3:6]),
             fleet._inertia, fleet._mass, fleet.weight, float(fleet.simulation.dt), self.n,
             self.steps_p, self.steps_a, self.steps_z, feed_forward, use_feed_forward,

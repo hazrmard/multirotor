@@ -20,7 +20,7 @@ Compared with ``K`` separate `Multirotor` vehicles, a `Fleet`:
   needs a numerical solution at every evaluation of the derivative and is not
   supported.
 """
-from typing import List, Sequence
+from typing import List, Sequence, Union
 
 import numpy as np
 
@@ -138,7 +138,20 @@ class Fleet:
 
 
     def _check_alike(self, vehicles: List[Multirotor]) -> None:
-        "Raise if the vehicles are not of one kind."
+        """
+        Raise if the vehicles are not of one kind.
+
+        Parameters
+        ----------
+        vehicles : List[Multirotor]
+            The vehicles.
+
+        Raises
+        ------
+        ValueError
+            If they differ in the number of propellers, in having motors, a battery model,
+            the thrust model, or the dtype.
+        """
         first = vehicles[0]
         kinds = {
             'number of propellers': lambda v: len(v.propellers),
@@ -159,6 +172,7 @@ class Fleet:
 
 
     def __len__(self) -> int:
+        "The number of vehicles."
         return self._x.shape[0]
 
 
@@ -311,7 +325,24 @@ class Fleet:
 
 
     def _signals(self, u: np.ndarray) -> np.ndarray:
-        "Speed signals as a float64 array of shape (K, n)."
+        """
+        Speed signals as a float64 array of shape (K, n).
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals.
+
+        Returns
+        -------
+        np.ndarray
+            The signals, contiguous, of shape (K, n).
+
+        Raises
+        ------
+        ValueError
+            If ``u`` is not of shape (K, n).
+        """
         u = np.asarray(u, dtype=float)
         if u.shape != (len(self), self.n_propellers):
             raise ValueError(
@@ -320,8 +351,22 @@ class Fleet:
         return np.ascontiguousarray(u)
 
 
-    def _disturbance(self, forces, torques) -> np.ndarray:
-        "Disturbing forces and torques as an array of shape (K, 6)."
+    def _disturbance(
+        self, forces: Union[float, np.ndarray], torques: Union[float, np.ndarray]
+    ) -> np.ndarray:
+        """
+        Disturbing forces and torques as an array of shape (K, 6).
+
+        Parameters
+        ----------
+        forces, torques : float or np.ndarray
+            The disturbing forces and torques, shape (3,) or (K, 3), or a number for all.
+
+        Returns
+        -------
+        np.ndarray
+            The disturbances of every vehicle, shape (K, 6).
+        """
         disturbance = np.zeros((len(self), 6))
         disturbance[:, :3] += forces
         disturbance[:, 3:] += torques
@@ -412,6 +457,13 @@ class Fleet:
         Advance vehicles without motors by one time step. Forces and torques
         depend only on the speed signals, which are fixed over the step, so
         they are calculated once.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals, shape (K, n).
+        disturbance : np.ndarray
+            The disturbing forces and torques, shape (K, 6).
         """
         forces, torques = fleet_forces_torques(
             u, self._prop_params, self._clockwise, self._positions)
@@ -428,6 +480,13 @@ class Fleet:
         """
         Advance the bodies, the motors and the batteries by one time step,
         integrating them together.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals, shape (K, n).
+        disturbance : np.ndarray
+            The disturbing forces and torques, shape (K, 6).
         """
         k_vehicles = len(self)
         common = (self._g, self._mass, self._inertia, self._inertia_inverse,

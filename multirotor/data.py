@@ -29,7 +29,19 @@ from . import physics
 
 
 def _value(x: float) -> float:
-    """Missing (None) parameters are stored as NaN."""
+    """
+    Missing (None) parameters are stored as NaN.
+
+    Parameters
+    ----------
+    x : float or None
+        The parameter.
+
+    Returns
+    -------
+    float
+        ``x``, or NaN if it is None.
+    """
     return np.nan if x is None else float(x)
 
 
@@ -82,6 +94,7 @@ class MotorData:
 
 
     def __len__(self) -> int:
+        "The number of motors."
         return self.speed.shape[0]
 
 
@@ -159,6 +172,7 @@ class PropellerData:
 
 
     def __len__(self) -> int:
+        "The number of propellers."
         return self.speed.shape[0]
 
 

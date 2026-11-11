@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import multirotor.controller.cascade as cascade
 import multirotor.coords as coords
 from multirotor.controller import data as K
+from multirotor.tuples import Memo
 from multirotor.lazy import build
 from test_cascade import INERTIA, MASS, OPTIONS, SIM_DT, WEIGHT, inputs, make_params
 
@@ -26,7 +27,7 @@ def test_jax_matches_numba():
         params = make_params(rng)
         step = jax.jit(JAX.cascaded_step, static_argnums=(11, 12, 13, 15, 17, 18, 19))
         x_n = x_j = np.zeros((K.N_PID_STATES, 12))
-        memo_n = memo_j = (np.zeros(2), np.zeros(1), np.zeros(3))
+        memo_n = memo_j = Memo(np.zeros(2), np.zeros(1), np.zeros(3))
         for n in range(20):
             reference, body_state, acceleration, velocity = inputs(rng)
             args = (reference, body_state, acceleration, INERTIA, MASS, WEIGHT, SIM_DT, n,
@@ -61,7 +62,7 @@ def test_gradient_through_a_rollout_matches_finite_differences(steps, flags):
             state = state.at[2].add(1e-3 * (action[0] - WEIGHT) / MASS)
             return (x, memo, state.at[6:9].add(1e-3 * action[1:])), action
         carry = (jnp.zeros((K.N_PID_STATES, 12)),
-                 (jnp.zeros(2), jnp.zeros(1), jnp.zeros(3)), jnp.zeros(12))
+                 Memo(jnp.zeros(2), jnp.zeros(1), jnp.zeros(3)), jnp.zeros(12))
         return jax.lax.scan(body, carry, (jnp.arange(40), targets))[1]
 
     scale = float(jnp.mean(rollout(params)**2))

@@ -1,4 +1,4 @@
-from typing import Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 from copy import deepcopy
 
 import numpy as np
@@ -119,6 +119,22 @@ class Propeller:
         self, data: PropellerData, i: int, params: PropellerParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
+        """
+        Make this propeller a view of column ``i`` of ``data``.
+
+        Parameters
+        ----------
+        data : PropellerData
+            The data object that holds the propeller's parameters and state.
+        i : int
+            The propeller's index in ``data``.
+        params : PropellerParams
+            The propeller's parameters.
+        simulation : SimulationParams
+            The simulation parameters.
+        integrator : Integrator
+            The integrator for the propeller's motor.
+        """
         self.params: PropellerParams = params
         self.simulation: SimulationParams = simulation
         self._data: PropellerData = data
@@ -143,17 +159,18 @@ class Propeller:
         "Radians per second"
         return float(self._data.speed[self._i])
     @speed.setter
-    def speed(self, speed: float):
+    def speed(self, speed: float) -> None:
         self._data.speed[self._i] = speed
 
 
-    def reset(self):
+    def reset(self) -> None:
+        "Stop the propeller, and its motor."
         self.speed = 0.
         if self.motor is not None:
             self.motor.reset()
 
 
-    def apply_speed(self, u: float, **kwargs) -> float:
+    def apply_speed(self, u: float, **kwargs: Any) -> float:
         """
         Calculate the speed of the propeller after the speed signal takes effect.
         This method is *pure*: it leaves the state of the propeller unchanged.
@@ -163,6 +180,8 @@ class Propeller:
         ----------
         u : float
             Radians per second speed command
+        **kwargs : Any
+            Passed to `Motor.apply_speed`, if there is a motor.
 
         Returns
         -------
@@ -174,7 +193,7 @@ class Propeller:
         return u
 
 
-    def step(self, u: float, **kwargs) -> float:
+    def step(self, u: float, **kwargs: Any) -> float:
         """
         Step through the speed command. This method changes the state of the
         propeller.
@@ -183,6 +202,8 @@ class Propeller:
         ----------
         u : float
             Speed command in radians per second.
+        **kwargs : Any
+            Passed to `Motor.step`, if there is a motor.
 
         Returns
         -------
@@ -196,13 +217,45 @@ class Propeller:
         return self.speed
 
 
-    def _thrust_constant(self, speed,airstream_velocity: np.ndarray=np.zeros(3)) -> float:
+    def _thrust_constant(
+        self, speed: float, airstream_velocity: np.ndarray = np.zeros(3)
+    ) -> float:
+        """
+        Thrust that is ``k_thrust * speed**2``.
+
+        Parameters
+        ----------
+        speed : float
+            The propeller's speed (rad/s).
+        airstream_velocity : np.ndarray
+            Ignored by this model.
+
+        Returns
+        -------
+        float
+            The thrust (N).
+        """
         return self.params.k_thrust * speed**2
 
 
     def _thrust_blade_element_model(
-        self, speed, airstream_velocity: np.ndarray=np.zeros(3)
+        self, speed: float, airstream_velocity: np.ndarray = np.zeros(3)
     ) -> float:
+        """
+        Thrust from the blade-element model.
+
+        Parameters
+        ----------
+        speed : float
+            The propeller's speed (rad/s).
+        airstream_velocity : np.ndarray
+            The airstream velocity at the propeller, shape (3,).
+
+        Returns
+        -------
+        float
+            The thrust (N).
+        """
         p = self.params
         return thrust_blade_element_model(
             speed, airstream_velocity,
@@ -212,11 +265,13 @@ class Propeller:
 
     @property
     def state(self) -> float:
+        "The propeller's state: its speed (rad/s)."
         return self.speed
 
 
     @property
     def rpm(self) -> float:
+        "The propeller's speed in revolutions per minute."
         return self.speed * 60. / (2. * np.pi)
 
 
@@ -284,6 +339,22 @@ class Motor:
         self, data: MotorData, i: int, params: MotorParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
+        """
+        Make this motor a view of column ``i`` of ``data``.
+
+        Parameters
+        ----------
+        data : MotorData
+            The data object that holds the motor's parameters and state.
+        i : int
+            The motor's index in ``data``.
+        params : MotorParams
+            The motor's parameters.
+        simulation : SimulationParams
+            The simulation parameters.
+        integrator : Integrator
+            The integrator for the motor's speed.
+        """
         self.params: MotorParams = params
         self.simulation: SimulationParams = simulation
         self.integrator: Integrator = integrator
@@ -296,27 +367,37 @@ class Motor:
         "Radians per second"
         return float(self._data.speed[self._i])
     @speed.setter
-    def speed(self, speed: float):
+    def speed(self, speed: float) -> None:
         self._data.speed[self._i] = speed
 
 
     @property
     def voltage(self) -> float:
+        "The voltage (V) across the motor at the last step."
         return float(self._data.voltage[self._i])
     @voltage.setter
-    def voltage(self, voltage: float):
+    def voltage(self, voltage: float) -> None:
         self._data.voltage[self._i] = voltage
 
 
     @property
     def current(self) -> float:
+        "The current (A) through the motor at the last step."
         return float(self._data.current[self._i])
     @current.setter
-    def current(self, current: float):
+    def current(self, current: float) -> None:
         self._data.current[self._i] = current
 
 
     def reset(self) -> float:
+        """
+        Stop the motor, with no voltage and no current.
+
+        Returns
+        -------
+        float
+            The motor's speed, 0.
+        """
         self.speed = 0.
         self.voltage = 0.
         self.current = 0.
@@ -394,7 +475,18 @@ class Motor:
     def _integrate(self, u: float, max_voltage: float) -> np.ndarray:
         """
         Speed of this motor after one time step, without changing its state.
-        Returns an array of shape (1,).
+
+        Parameters
+        ----------
+        u : float
+            The speed signal.
+        max_voltage : float
+            The voltage limit (V).
+
+        Returns
+        -------
+        np.ndarray
+            The speed (rad/s), shape (1,).
         """
         speed = self._data.speed[self._i:self._i + 1].copy()
         args = (np.asarray([u], dtype=float), float(max_voltage), self._params_column())
@@ -417,6 +509,14 @@ class Battery:
 
 
     def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
+        """
+        Parameters
+        ----------
+        params : BatteryParams
+            The battery's parameters. A battery without a model has a constant voltage.
+        simulation : SimulationParams
+            The simulation parameters.
+        """
         self.params = deepcopy(params)
         self.simulation = simulation
         self.voltage: float = None
@@ -472,10 +572,20 @@ class Battery:
         return 0. if self.cutoff else self.voltage
 
 
-    def open_circuit_voltage(self, charge_drawn: float=None) -> float:
+    def open_circuit_voltage(self, charge_drawn: Optional[float] = None) -> float:
         """
         Open-circuit voltage (V) after drawing ``charge_drawn`` coulombs from a
         full battery. By default, the charge drawn so far.
+
+        Parameters
+        ----------
+        charge_drawn : float, optional
+            The charge (C) drawn from a full battery.
+
+        Returns
+        -------
+        float
+            The open-circuit voltage (V).
         """
         if not self.has_model:
             return self.params.max_voltage
@@ -484,7 +594,7 @@ class Battery:
         return battery_ocv(soc, self._ocv_soc, self._ocv_voltage)
 
 
-    def reset(self):
+    def reset(self) -> float:
         """
         Return the battery to full charge.
 
@@ -503,10 +613,11 @@ class Battery:
 
     @property
     def state(self) -> float:
+        "The battery's state: its terminal voltage (V)."
         return self.voltage
 
 
-    def step(self, load: float=None):
+    def step(self, load: Optional[float] = None) -> None:
         """
         Draw a constant current from the battery for one time step. Without a
         load, or without a battery model, this does nothing.
@@ -692,7 +803,7 @@ class Multirotor:
 
 
     @property
-    def position(self):
+    def position(self) -> np.ndarray:
         """Position in the inertial frame."""
         return self.state[0:3]
 
@@ -725,13 +836,18 @@ class Multirotor:
         return a_inertial
 
 
-    def rollout_params(self):
+    def rollout_params(self) -> Union[BodyVehicle, MotorsVehicle, BatteryVehicle]:
         """
         The parameters of this vehicle as the tuple that `multirotor.rollout` takes,
         with float64 copies of the arrays: `BodyVehicle`, `MotorsVehicle` (with motors) or
         `BatteryVehicle` (with motors and a battery model). The type says which of
         ``closed_loop_body``, ``closed_loop_motors`` and ``closed_loop_motors_battery``
         takes it (`multirotor.tuples.kind_of`).
+
+        Returns
+        -------
+        BodyVehicle, MotorsVehicle or BatteryVehicle
+            The parameters.
 
         Raises
         ------
@@ -747,10 +863,15 @@ class Multirotor:
         return type(v)(*copies)
 
 
-    def rollout_state(self):
+    def rollout_state(self) -> VehicleState:
         """
         The state of this vehicle as the `multirotor.tuples.VehicleState` that
         `multirotor.rollout` starts from, with float64 copies of the arrays.
+
+        Returns
+        -------
+        VehicleState
+            The state.
         """
         x = np.array(self.state, float)
         aux = np.zeros(3)
@@ -762,12 +883,17 @@ class Multirotor:
         return VehicleState(x, aux, np.array(self.acceleration, float), float(self.t))
 
 
-    def set_rollout_state(self, state) -> None:
+    def set_rollout_state(self, state: VehicleState) -> None:
         """
         Continue from a `multirotor.tuples.VehicleState`, such as the one a rollout returns.
 
         The motors' voltages and currents and the battery's voltage and current are outputs
         of a step, not state. They are updated by the next step.
+
+        Parameters
+        ----------
+        state : VehicleState
+            The state to continue from.
 
         Raises
         ------
@@ -813,6 +939,7 @@ class Multirotor:
 
     @property
     def weight(self) -> float:
+        "The vehicle's weight (N)."
         return self.simulation.g * self.params.mass
 
 
@@ -852,7 +979,7 @@ class Multirotor:
         """Propeller speeds (rad/s). A copy, not a view of the internal array."""
         return np.array(self._data.speed, self.dtype)
     @speeds.setter
-    def speeds(self, speeds: np.ndarray):
+    def speeds(self, speeds: np.ndarray) -> None:
         self._step_propellers(speeds)
 
 
@@ -860,6 +987,16 @@ class Multirotor:
         """
         Speeds of all motors after one time step under speed signals ``u``,
         integrating the motors on their own, without changing their state.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals, shape (n,).
+
+        Returns
+        -------
+        np.ndarray
+            The motor speeds (rad/s), shape (n,).
         """
         motors = self._data.motors
         args = (
@@ -875,6 +1012,16 @@ class Multirotor:
         Propeller speeds after one time step under speed signals ``u``, without
         changing the state of the propellers. Without motors, speed signals take
         effect instantaneously.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals, shape (n,).
+
+        Returns
+        -------
+        np.ndarray
+            The propeller speeds (rad/s), shape (n,).
         """
         if self._data.motors is None:
             return np.asarray(u)
@@ -887,6 +1034,15 @@ class Multirotor:
         """
         Set motor speeds, and the voltages and currents at those speeds under
         speed signals ``u`` and voltage limit ``max_voltage``.
+
+        Parameters
+        ----------
+        speed : np.ndarray
+            The motor speeds (rad/s), shape (n,).
+        u : np.ndarray
+            The speed signals, shape (n,).
+        max_voltage : float
+            The voltage limit (V).
         """
         motors = self._data.motors
         motors.speed[:] = speed
@@ -899,6 +1055,11 @@ class Multirotor:
         """
         Advance all propellers (and motors) by one time step under speed signals
         ``u``, on their own.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            The speed signals, shape (n,).
         """
         if self._data.motors is None:
             self._data.speed[:] = u
@@ -965,7 +1126,9 @@ class Multirotor:
         return forces, torques.astype(self.dtype)
 
 
-    def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray, params=None):
+    def dxdt_dynamics(
+        self, t: float, x: np.ndarray, u: np.ndarray, params: Optional[dict] = None
+    ) -> np.ndarray:
         """
         Calculate the rate of change of state given the dynamics (forces, torques)
         acting on the system.
@@ -978,6 +1141,9 @@ class Multirotor:
             State of the vehicle.
         u : np.ndarray
             A 6-vector of forces and torques.
+        params : dict, optional
+            Ignored. Present so that the method has the signature that the ``control``
+            library calls.
 
         Returns
         -------
@@ -997,8 +1163,9 @@ class Multirotor:
 
     def dxdt_speeds(
         self, t: float, x: np.ndarray, u: np.ndarray,
-        disturb_forces: np.ndarray=0., disturb_torques: np.ndarray=0., params=None
-    ):
+        disturb_forces: np.ndarray=0., disturb_torques: np.ndarray=0.,
+        params: Optional[dict] = None
+    ) -> np.ndarray:
         """
         Calculate the rate of change of state given the propeller speeds on the
         system (rad/s).
@@ -1022,6 +1189,9 @@ class Multirotor:
             Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
+        params : dict, optional
+            Ignored. Present so that the method has the signature that the ``control``
+            library calls.
 
         Returns
         -------
@@ -1242,7 +1412,7 @@ class Multirotor:
     def nonlinear_dynamics_controls_system(
         self, linearize: bool=False, perturbation: float=1e-1,
         about_state: np.ndarray=0, about_action: np.ndarray=0
-    ):
+    ) -> Any:
         """
         Create a system representation using the python controls library. The
         system takes net forces and torques as input.
@@ -1282,7 +1452,7 @@ class Multirotor:
     def nonlinear_speeds_controls_system(
         self, linearize: bool=False, perturbation: float=1e-1,
         about_state: np.ndarray=0, about_action: np.ndarray=0
-    ):
+    ) -> Any:
         """
         Create a system representation using the python controls library. The
         system takes propeller speed signals as input.

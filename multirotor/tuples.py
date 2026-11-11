@@ -23,6 +23,9 @@ differentiate with respect to the inertia, replace both fields:
 leaves the dynamics with the old inverse, and the gradient is silently wrong.
 """
 from collections import namedtuple
+from typing import Union
+
+import numpy as np
 
 
 BodyVehicle = namedtuple('BodyVehicle', (
@@ -69,33 +72,78 @@ The state of a vehicle:
 """
 
 
+Steps = namedtuple('Steps', 'position attitude altitude')
+"""
+The period of each multi-rate stage of the cascade, in simulation steps: the position stage,
+the attitude group (velocity, attitude and rate stages) and the altitude group (altitude and
+climb stages). Each is a positive integer.
+"""
+
+Memo = namedtuple('Memo', 'ref_vel thrust torques')
+"""
+The outputs of three stages, which the cascade keeps between steps: the velocity reference
+that the position stage gives the velocity stage, shape (2,); the climb stage's thrust,
+shape (1,); and the rate stage's torques, shape (3,). A stage that does not run at a step
+repeats its output.
+"""
+
 ControllerParams = namedtuple('ControllerParams', (
     'params alloc_inverse steps feedforward_weight leashing square_root_position '
     'square_root_attitude'))
 """
 The parameters of a `multirotor.controller.Controller`: the matrix of the stages'
 parameters, the inverse of the vehicle's control allocation matrix, the periods of the
-position, attitude and altitude stages (``steps``), and the options.
+stages (`Steps`), and the options.
 """
 
 ControllerState = namedtuple('ControllerState', 'x memo n')
 """
-The state of a controller: the matrix of the stages' state ``x``, the ``memo`` of the
-outputs that the stages running at their own period hold between their runs
-(``(ref_vel, thrust, torques)``), and the number of steps ``n`` taken. ``n`` sets the phase
-of those stages.
+The state of a controller: the matrix of the stages' state ``x``, the `Memo` of the
+outputs that the stages running at their own period hold between their runs, and the number
+of steps ``n`` taken. ``n`` sets the phase of those stages.
 """
 
 
-def rhs_arguments(vehicle, u, limit, disturbance) -> tuple:
+def rhs_arguments(
+    vehicle: Union[MotorsVehicle, BatteryVehicle], u: np.ndarray, limit: Union[float, bool],
+    disturbance: np.ndarray
+) -> tuple:
     """
     The arguments, after ``t`` and ``x``, of the right-hand side in `multirotor.dynamics` for a
-    vehicle with motors: ``u``, the voltage limit (or the battery's cutoff flag), the
-    disturbance, then the vehicle's parameters.
+    vehicle with motors.
+
+    Parameters
+    ----------
+    vehicle : MotorsVehicle or BatteryVehicle
+        The vehicle's parameters.
+    u : np.ndarray
+        The speed signals, shape (n,).
+    limit : float or bool
+        The motors' voltage limit, or with a battery model the battery's cutoff flag.
+    disturbance : np.ndarray
+        The force and torque disturbing the body, shape (6,).
+
+    Returns
+    -------
+    tuple
+        ``u``, ``limit``, ``disturbance``, then the vehicle's parameters.
     """
     return (u, limit, disturbance) + tuple(vehicle[:-2])
 
 
-def kind_of(vehicle) -> str:
-    "``'body'``, ``'motors'`` or ``'motors_battery'``: the type of a vehicle's parameters."
+def kind_of(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> str:
+    """
+    The type of a vehicle's parameters, as the name of its rollout function.
+
+    Parameters
+    ----------
+    vehicle : BodyVehicle, MotorsVehicle or BatteryVehicle
+        The vehicle's parameters.
+
+    Returns
+    -------
+    str
+        ``'body'``, ``'motors'`` or ``'motors_battery'``: the ``closed_loop_<kind>`` function
+        that takes it.
+    """
     return KINDS[type(vehicle)]
