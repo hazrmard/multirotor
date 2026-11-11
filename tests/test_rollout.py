@@ -11,6 +11,7 @@ import multirotor.rollout as rollout
 from scipy.integrate import solve_ivp
 
 from multirotor.simulation import Multirotor, odeint_integrator
+from multirotor.tuples import kind_of
 from multirotor.vehicle import BatteryParams
 
 from common import make_params
@@ -61,9 +62,9 @@ def reference(kind: str, steps: int, integrator=odeint_integrator) -> np.ndarray
 def arguments(kind: str):
     "The rollout's arguments from a fresh vehicle and controller."
     vehicle = make_vehicle(kind)
-    found, state, vehicle_params = rollout.vehicle_arguments(vehicle)
-    assert found == kind
-    return state, vehicle_params, rollout.controller_arguments(make_controller(pid, vehicle), vehicle)
+    vehicle_params = vehicle.rollout_params()
+    assert kind_of(vehicle_params) == kind
+    return vehicle.rollout_state(), vehicle_params, make_controller(pid, vehicle).rollout_params()
 
 
 

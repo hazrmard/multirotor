@@ -18,6 +18,7 @@ from .dynamics import (
     rhs_body_with_motors_blade_element, rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
+from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState
 
 
 Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
@@ -737,6 +738,82 @@ class Multirotor:
         dcm = direction_cosine_matrix(*self.orientation)
         a_inertial = body_to_inertial(self.acceleration, dcm)
         return a_inertial
+
+
+    def rollout_params(self):
+        """
+        The parameters of this vehicle as the tuple that `multirotor.rollout` takes,
+        with float64 copies of the arrays: `BodyVehicle`, `MotorsVehicle` (with motors) or
+        `BatteryVehicle` (with motors and a battery model). The type says which of
+        ``closed_loop_body``, ``closed_loop_motors`` and ``closed_loop_motors_battery``
+        takes it (`multirotor.tuples.kind_of`).
+
+        Raises
+        ------
+        ValueError
+            For blade-element thrust, which the rollout does not support.
+        """
+        if not self._data.use_thrust_constant:
+            raise ValueError('Blade-element thrust is not supported.')
+        p = self._kernel_params
+        body = (
+            p.g, p.mass, np.array(p.inertia_matrix, float), np.array(p.inertia_matrix_inverse, float),
+            np.array(p.prop_params, float), np.array(p.clockwise, float),
+            np.array(p.positions, float))
+        if self._data.motors is None:
+            return BodyVehicle(*body)
+        motors = body + (
+            np.array(p.motor_params, float), float(self.battery.motor_voltage_limit), np.zeros(6))
+        if not self.battery.has_model:
+            return MotorsVehicle(*motors)
+        b = self.battery
+        return BatteryVehicle(*motors, np.array(b._params_vector, float),
+                              np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
+
+
+    def rollout_state(self):
+        """
+        The state of this vehicle as the `multirotor.tuples.VehicleState` that
+        `multirotor.rollout` starts from, with float64 copies of the arrays.
+        """
+        x = np.array(self.state, float)
+        aux = np.zeros(3)
+        if self._data.motors is not None:
+            x = np.concatenate((x, self._data.motors.speed.astype(float)))
+            if self.battery.has_model:
+                b = self.battery
+                aux = np.array((b.charge_drawn, float(b.cutoff), float(b.overload)))
+        return VehicleState(x, aux, np.array(self.acceleration, float), float(self.t))
+
+
+    def set_rollout_state(self, state) -> None:
+        """
+        Continue from a `multirotor.tuples.VehicleState`, such as the one a rollout returns.
+
+        The motors' voltages and currents and the battery's voltage and current are outputs
+        of a step, not state. They are updated by the next step.
+
+        Raises
+        ------
+        ValueError
+            If the state is not that of this kind of vehicle.
+        """
+        x = np.asarray(state.x, float)
+        expected = self.rollout_state().x.shape
+        if x.shape != expected:
+            raise ValueError(f'The vehicle state has shape {x.shape}; expected {expected}.')
+        n_body = self.state.shape[0]
+        self.state = x[:n_body].astype(self.dtype)
+        self._dxdt[3:6] = np.asarray(state.acceleration, float)
+        self.t = float(state.t)
+        if self._data.motors is not None:
+            self._data.motors.speed[:] = x[n_body:]
+            if self.battery.has_model:
+                battery = self.battery
+                battery.charge_drawn = float(state.aux[0])
+                battery.cutoff, battery.overload = bool(state.aux[1]), bool(state.aux[2])
+                battery.current = 0.
+                battery.voltage = 0. if battery.empty else battery.open_circuit_voltage()
 
 
 

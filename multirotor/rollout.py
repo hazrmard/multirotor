@@ -13,23 +13,17 @@ Differences from `Multirotor.step_speeds` and `Controller.step`:
 * Vehicles with blade-element thrust are not supported (their thrust needs a
   root solve that is not differentiable here).
 
-The state of a vehicle is a tuple ``(x, aux, acc)``:
-
-* ``x``: the 12 body states, then the motor speeds if the vehicle has motors.
-* ``aux``: ``(charge drawn, cut off, overloaded)`` of the battery, as floats; a
-  placeholder otherwise.
-* ``acc``: the body-frame acceleration at the start of the last step, which the
-  controller's leash reads.
-
-A rollout starts from rest, or from the state of a vehicle and a controller that have
-been running: `multirotor.trees` reads that state out of the imperative classes and writes
-it back, and names the controller and vehicle parameters that a rollout is differentiated with
-respect to.
+Everything goes in and out as the named tuples of `multirotor.tuples`: the vehicle's
+parameters (`BodyVehicle`, `MotorsVehicle` or `BatteryVehicle`) and state (`VehicleState`),
+and the controller's parameters (`ControllerParams`) and state (`ControllerState`). The
+imperative classes make and take them: `Multirotor.rollout_params`,
+`Multirotor.rollout_state`, `Controller.rollout_params`, `Controller.rollout_state` and
+`set_rollout_state` of both. A rollout starts from rest, or from the state of a vehicle and a
+controller that have been running, and the state at its end can be written back.
 
 Three step functions share the signature
-``step(state, u, vehicle, t, dt, substeps)``: `step_body` (no motors),
-`step_motors` and `step_motors_battery`. The ``vehicle`` tuple is built by
-`vehicle_arguments`, which reads a `Multirotor`.
+``step(state, u, vehicle, dt, substeps)``: `step_body` (no motors),
+`step_motors` and `step_motors_battery`.
 """
 import numpy as np
 
@@ -39,6 +33,7 @@ from .dynamics import (
     N_BODY_STATES, rhs_body, rhs_body_with_motors, rhs_body_with_motors_and_battery)
 from .lazy import build
 from .physics import battery_end_step, forces_torques
+from .tuples import ControllerState, VehicleState
 
 
 
@@ -89,47 +84,45 @@ def _rhs_battery(t, x, a):
 
 
 
-def step_body(state, u, vehicle, t, dt, substeps):
+def step_body(state, u, vehicle, dt, substeps):
     "A vehicle without motors: the speed signals are the propeller speeds."
-    g, mass, inertia, inertia_inverse, prop_params, clockwise, positions = vehicle[:7]
-    forces, torques = forces_torques(u, prop_params, clockwise, positions)
+    forces, torques = forces_torques(
+        u, vehicle.prop_params, vehicle.clockwise, vehicle.positions)
     x, dxdt = integrate(
-        _rhs_body, t, state[0], dt, substeps,
-        (forces, torques, g, mass, inertia, inertia_inverse))
-    return x, state[1], dxdt[3:6]
+        _rhs_body, state.t, state.x, dt, substeps,
+        (forces, torques, vehicle.g, vehicle.mass, vehicle.inertia, vehicle.inertia_inverse))
+    return VehicleState(x, state.aux, dxdt[3:6], state.t + dt)
 
 
 
-def step_motors(state, u, vehicle, t, dt, substeps):
+def step_motors(state, u, vehicle, dt, substeps):
     "A vehicle with motors and no battery model; the motors see ``max_voltage``."
-    (g, mass, inertia, inertia_inverse, prop_params, clockwise, positions,
-     motor_params, max_voltage, disturbance) = vehicle[:10]
     x, dxdt = integrate(
-        _rhs_motors, t, state[0], dt, substeps,
-        (u, max_voltage, disturbance, g, mass, inertia, inertia_inverse,
-         prop_params, motor_params, clockwise, positions))
-    return x, state[1], dxdt[3:6]
+        _rhs_motors, state.t, state.x, dt, substeps,
+        (u, vehicle.max_voltage, vehicle.disturbance, vehicle.g, vehicle.mass,
+         vehicle.inertia, vehicle.inertia_inverse, vehicle.prop_params, vehicle.motor_params,
+         vehicle.clockwise, vehicle.positions))
+    return VehicleState(x, state.aux, dxdt[3:6], state.t + dt)
 
 
 
-def step_motors_battery(state, u, vehicle, t, dt, substeps):
+def step_motors_battery(state, u, vehicle, dt, substeps):
     "A vehicle with motors and a battery model, which sags and can cut the motors off."
-    (g, mass, inertia, inertia_inverse, prop_params, clockwise, positions,
-     motor_params, max_voltage, disturbance, battery_params, ocv_soc,
-     ocv_voltage) = vehicle[:13]
-    x, aux = state[0], state[1]
+    x, aux = state.x, state.aux
     charge_drawn, cutoff, overload = aux[0], aux[1] > .5, aux[2] > .5
     x_ext = xp.concatenate((x, xp.array((0.,))))
     x_new, dxdt = integrate(
-        _rhs_battery, t, x_ext, dt, substeps,
-        (u, cutoff, disturbance, g, mass, inertia, inertia_inverse, prop_params,
-         motor_params, clockwise, positions, battery_params, ocv_soc, ocv_voltage,
-         charge_drawn))
+        _rhs_battery, state.t, x_ext, dt, substeps,
+        (u, cutoff, vehicle.disturbance, vehicle.g, vehicle.mass, vehicle.inertia,
+         vehicle.inertia_inverse, vehicle.prop_params, vehicle.motor_params,
+         vehicle.clockwise, vehicle.positions, vehicle.battery_params, vehicle.ocv_soc,
+         vehicle.ocv_voltage, charge_drawn))
     n = x.shape[0]
     charge_drawn, _, _, cutoff, overload, _ = battery_end_step(
         x_new[n], charge_drawn, cutoff, overload, x_new[N_BODY_STATES:n], u,
-        motor_params, battery_params, ocv_soc, ocv_voltage, dt)
-    return x_new[:n], xp.array((charge_drawn, cutoff * 1., overload * 1.)), dxdt[3:6]
+        vehicle.motor_params, vehicle.battery_params, vehicle.ocv_soc, vehicle.ocv_voltage, dt)
+    return VehicleState(
+        x_new[:n], xp.array((charge_drawn, cutoff * 1., overload * 1.)), dxdt[3:6], state.t + dt)
 
 
 
@@ -149,39 +142,37 @@ def _drive(carry, i, c):
     "The controller's action and the propeller speeds it asks for."
     controller_x, memo, state = carry
     vehicle, ctrl, targets, dt, n0 = c[0], c[1], c[2], c[3], c[5]
-    (cparams, alloc_inverse, steps, feedforward_weight, leashing, square_root_position,
-     square_root_attitude) = ctrl
-    g, mass, inertia = vehicle[0], vehicle[1], vehicle[2]
     controller_x, memo, action = cascaded_step(
-        cparams, controller_x, memo, targets[i], state[0][:N_BODY_STATES], state[2], inertia,
-        mass, mass * g, dt, i + n0, steps[0], steps[1], steps[2], xp.array((0., 0.)), False,
-        feedforward_weight, leashing, square_root_position, square_root_attitude)
-    return controller_x, memo, action, allocate(alloc_inverse, action)
+        ctrl.params, controller_x, memo, targets[i], state.x[:N_BODY_STATES], state.acceleration,
+        vehicle.inertia, vehicle.mass, vehicle.mass * vehicle.g, dt, i + n0, ctrl.steps[0],
+        ctrl.steps[1], ctrl.steps[2], xp.array((0., 0.)), False, ctrl.feedforward_weight,
+        ctrl.leashing, ctrl.square_root_position, ctrl.square_root_attitude)
+    return controller_x, memo, action, allocate(ctrl.alloc_inverse, action)
 
 
 
 def _record(state, action):
-    return xp.concatenate((state[0][:N_BODY_STATES], action))
+    return xp.concatenate((state.x[:N_BODY_STATES], action))
 
 
 
 def _loop_step_body(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_body(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
+    state = step_body(carry[2], u, c[0], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
 
 def _loop_step_motors(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_motors(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
+    state = step_motors(carry[2], u, c[0], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
 
 def _loop_step_motors_battery(carry, i, c):
     controller_x, memo, action, u = _drive(carry, i, c)
-    state = step_motors_battery(carry[2], u, c[0], (i + c[5]) * c[3], c[3], c[4])
+    state = step_motors_battery(carry[2], u, c[0], c[3], c[4])
     return (controller_x, memo, state), _record(state, action)
 
 
@@ -191,138 +182,85 @@ def _carry0(state0, start):
     if start is None:
         zeros = (xp.array((0., 0.)), xp.array((0.,)), xp.array((0., 0., 0.)))
         return (xp.array(((0.,) * 12,) * 7), zeros, state0), 0
-    return (start[0], start[1], state0), start[2]
+    return (start.x, start.memo, state0), start.n
+
+
+
+def _result(carry, n0, steps):
+    "The final controller and vehicle states, as the tuples that a rollout starts from."
+    return ControllerState(carry[0], carry[1], n0 + steps), carry[2]
 
 
 
 def closed_loop_body(state0, vehicle, ctrl, targets, dt, substeps, start=None):
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
-    rest or from a given controller state. `closed_loop_motors` and `closed_loop_motors_battery` are the same for a
-    vehicle with motors, and with motors and a battery.
+    rest or from a given controller state. `closed_loop_motors` and
+    `closed_loop_motors_battery` are the same for a vehicle with motors, and with motors
+    and a battery.
 
     Parameters
     ----------
-    state0 : tuple
-        The vehicle's ``(x, aux, acc)`` at the start.
-    vehicle : tuple
-        The vehicle's arguments, from `vehicle_arguments`.
-    ctrl : tuple
-        The controller's arguments, from `controller_arguments`.
+    state0 : VehicleState
+        The vehicle's state at the start.
+    vehicle : BodyVehicle
+        The vehicle's parameters, from `Multirotor.rollout_params`.
+    ctrl : ControllerParams
+        The controller's parameters, from `Controller.rollout_params`.
     targets : np.ndarray
         The target of each step: x, y, z and yaw, shape (n, 4), n at least 1.
     dt : float
         The simulation time step.
     substeps : int
         RK4 steps per simulation step.
-    start : tuple, optional
-        The controller's ``(x, memo, n)`` to start from: its state matrix, its memo
-        and the number of steps it has taken (which sets the phase of the stages that
-        run every few steps). By default the controller starts at rest, with ``n=0``.
+    start : ControllerState, optional
+        The controller's state to start from, including the number of steps it has taken,
+        which sets the phase of the stages that run every few steps. By default the
+        controller starts at rest, with ``n=0``.
 
     Returns
     -------
     carry : tuple
-        The final controller state, memo and vehicle state.
+        The final `ControllerState` and `VehicleState`. They are what ``start`` and
+        ``state0`` of the next rollout take, and what ``set_rollout_state`` writes back.
     trajectory : np.ndarray
         Per step, the vehicle's 12 body states after the step and the 4 controller
         outputs (thrust and torques) that drove it, shape (n, 16).
     """
     carry0, n0 = _carry0(state0, start)
-    return xp.scan(
+    carry, trajectory = xp.scan(
         _loop_step_body, carry0, targets.shape[0], (vehicle, ctrl, targets, dt, substeps, n0))
+    return _result(carry, n0, targets.shape[0]), trajectory
 
 
 
 def closed_loop_motors(state0, vehicle, ctrl, targets, dt, substeps, start=None):
-    "`closed_loop_body` for a vehicle with motors."
+    "`closed_loop_body` for a vehicle with motors (`MotorsVehicle`)."
     carry0, n0 = _carry0(state0, start)
-    return xp.scan(
+    carry, trajectory = xp.scan(
         _loop_step_motors, carry0, targets.shape[0], (vehicle, ctrl, targets, dt, substeps, n0))
+    return _result(carry, n0, targets.shape[0]), trajectory
 
 
 
 def closed_loop_motors_battery(state0, vehicle, ctrl, targets, dt, substeps, start=None):
-    "`closed_loop_body` for a vehicle with motors and a battery."
+    "`closed_loop_body` for a vehicle with motors and a battery (`BatteryVehicle`)."
     carry0, n0 = _carry0(state0, start)
-    return xp.scan(
+    carry, trajectory = xp.scan(
         _loop_step_motors_battery, carry0, targets.shape[0],
         (vehicle, ctrl, targets, dt, substeps, n0))
+    return _result(carry, n0, targets.shape[0]), trajectory
 
 
 
 NAMES = (
     'rk4_step', 'integrate', '_substep', '_rhs_body', '_rhs_motors', '_rhs_battery', 'step_body', 'step_motors',
     'step_motors_battery', '_speed', 'allocate', '_drive', '_record', '_loop_step_body', '_loop_step_motors',
-    '_loop_step_motors_battery', '_carry0', 'closed_loop_body', 'closed_loop_motors',
+    '_loop_step_motors_battery', '_carry0', '_result', 'closed_loop_body', 'closed_loop_motors',
     'closed_loop_motors_battery')
 SOURCE = {name: globals()[name] for name in NAMES}
 NOT_INLINED = ('step_body', 'step_motors', 'step_motors_battery')   # large, and called once per step
 globals().update(vars(build(SOURCE, NAMES, 'numba', globals(), NOT_INLINED)))
-
-
-
-VEHICLE_FIELDS = (
-    'g', 'mass', 'inertia', 'inertia_inverse', 'prop_params', 'clockwise', 'positions',
-    'motor_params', 'max_voltage', 'disturbance',
-    'battery_params', 'ocv_soc', 'ocv_voltage')
-"""
-The elements of the ``vehicle`` tuple, in order. A vehicle without motors has the first 7,
-with motors the first 10, and with motors and a battery all 13.
-"""
-
-
-
-def vehicle_arguments(vehicle):
-    """
-    The step function's name, the vehicle's state and its ``params`` tuple, read
-    from a `multirotor.simulation.Multirotor`. Arrays are float64 copies.
-
-    Returns
-    -------
-    kind : str
-        ``'body'``, ``'motors'`` or ``'motors_battery'``: the vehicle's
-        ``step_<kind>`` function.
-    state : tuple
-        ``(x, aux, acc)`` from the vehicle's current state.
-    params : tuple
-        The arguments of the step function.
-
-    Raises
-    ------
-    ValueError
-        For blade-element thrust.
-    """
-    if not vehicle._data.use_thrust_constant:
-        raise ValueError('Blade-element thrust is not supported.')
-    p = vehicle._kernel_params
-    params = (
-        p.g, p.mass, np.array(p.inertia_matrix, float), np.array(p.inertia_matrix_inverse, float),
-        np.array(p.prop_params, float), np.array(p.clockwise, float), np.array(p.positions, float))
-    x = np.array(vehicle.state, float)
-    aux = np.zeros(3)
-    acceleration = np.array(vehicle.acceleration, float)
-    if vehicle._data.motors is None:
-        return 'body', (x, aux, acceleration), params
-    params += (
-        np.array(p.motor_params, float), float(vehicle.battery.motor_voltage_limit), np.zeros(6))
-    x = np.concatenate((x, vehicle._data.motors.speed.astype(float)))
-    if not vehicle.battery.has_model:
-        return 'motors', (x, aux, acceleration), params
-    b = vehicle.battery
-    params += (np.array(b._params_vector, float), np.array(b._ocv_soc, float), np.array(b._ocv_voltage, float))
-    aux = np.array((b.charge_drawn, float(b.cutoff), float(b.overload)))
-    return 'motors_battery', (x, aux, acceleration), params
-
-
-
-def controller_arguments(controller, vehicle):
-    "The ``ctrl`` tuple of the ``closed_loop_<kind>`` functions, read from a `multirotor.controller.Controller`."
-    return (
-        np.array(controller._data.params, float), np.array(vehicle.alloc_inverse, float),
-        (controller.steps_p, controller.steps_a, controller.steps_z),
-        float(controller.feedforward_weight), bool(controller.ctrl_p.leashing),
-        bool(controller.ctrl_p.square_root_scaling), bool(controller.ctrl_a.square_root_scaling))
 
 
 

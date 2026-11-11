@@ -42,6 +42,7 @@ import numpy as np
 from ..simulation import Multirotor
 from .cascade import cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
+from ..tuples import ControllerParams, ControllerState
 from .data import (
     ControllerData, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
     PID_MAX_ACCELERATION, PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE,
@@ -69,8 +70,8 @@ def _state64(vehicle: Multirotor) -> np.ndarray:
 class _Row(property):
     """
     A property that views one row of a stage's parameter matrix, over its columns.
-    ``row`` is that row, so that `multirotor.trees` can find the matrix entry of
-    every named parameter from the stage classes.
+    ``row`` is that row, so that the rows of the matrix can be found by name from
+    the stage classes.
     """
 
     def __init__(self, fget, fset, doc: str, row: int):
@@ -527,6 +528,39 @@ class Controller:
         self.ctrl_z.reset()
         self.ctrl_vz.reset()
         return self.state
+
+
+    def rollout_params(self):
+        """
+        The parameters of this controller as the `multirotor.tuples.ControllerParams` that
+        `multirotor.rollout` takes, with float64 copies of the arrays. The control allocation
+        is the vehicle's, as of this call: it does not follow later changes to the vehicle.
+        """
+        return ControllerParams(
+            np.array(self._data.params, float), np.array(self.vehicle.alloc_inverse, float),
+            (self.steps_p, self.steps_a, self.steps_z), float(self.feedforward_weight),
+            bool(self.ctrl_p.leashing), bool(self.ctrl_p.square_root_scaling),
+            bool(self.ctrl_a.square_root_scaling))
+
+
+    def rollout_state(self):
+        "The state of this controller as the `multirotor.tuples.ControllerState` that a rollout starts from."
+        return ControllerState(
+            np.array(self._data.state, float),
+            (np.array(self._ref_vel, float), np.array(self._thrust, float),
+             np.array(self._torques, float)), int(self.n))
+
+
+    def set_rollout_state(self, state) -> None:
+        """
+        Continue from a `multirotor.tuples.ControllerState`, such as the one a rollout returns.
+        Set the vehicle's state first: the controller's time is the vehicle's.
+        """
+        self._data.state[:] = np.asarray(state.x, float)
+        self._ref_vel, self._thrust, self._torques = (np.array(m, float) for m in state.memo)
+        self.n = int(state.n)
+        self.t = self.vehicle.t
+        self.action = np.concatenate((self._thrust, self._torques)).astype(self.dtype)
 
 
     def set_params(self, **params):

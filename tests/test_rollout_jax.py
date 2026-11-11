@@ -1,7 +1,7 @@
 """
 `multirotor.rollout` built for JAX: parity with the numba build and with the loop of
 `Controller` and `Multirotor`, convergence of RK4 with the number of substeps, and
-gradients of a rollout's loss with respect to gains and vehicle parameters.
+gradients of a rollout's loss with respect to controller and vehicle parameters.
 Skipped without JAX.
 """
 import numpy as np
@@ -77,15 +77,17 @@ def test_gradients_match_finite_differences(kind):
     targets = jnp.tile(jnp.asarray(TARGET), (steps, 1))
 
     def loss(theta):
-        params = jnp.asarray(ctrl[0]).at[K.PID_K_P].multiply(theta[0])
-        vehicle_params_ = list(vehicle_params)
-        vehicle_params_[1] = vehicle_params[1] * theta[1]
-        vehicle_params_[7] = jnp.asarray(vehicle_params[7]).at[physics.MOTOR_RESISTANCE].multiply(theta[2])
+        ctrl_ = ctrl._replace(params=jnp.asarray(ctrl.params).at[K.PID_K_P].multiply(theta[0]))
+        vehicle_ = vehicle_params._replace(
+            mass=vehicle_params.mass * theta[1],
+            motor_params=jnp.asarray(vehicle_params.motor_params).at[
+                physics.MOTOR_RESISTANCE].multiply(theta[2]))
         if kind == 'motors_battery':
-            vehicle_params_[10] = jnp.asarray(vehicle_params[10]).at[
-                physics.BATTERY_INTERNAL_RESISTANCE].multiply(theta[3])
+            vehicle_ = vehicle_._replace(battery_params=jnp.asarray(
+                vehicle_params.battery_params).at[
+                    physics.BATTERY_INTERNAL_RESISTANCE].multiply(theta[3]))
         trajectory = getattr(JAX, 'closed_loop_' + kind)(
-            state, tuple(vehicle_params_), (params,) + ctrl[1:], targets, DT, substeps)[1]
+            state, vehicle_, ctrl_, targets, DT, substeps)[1]
         return jnp.mean((trajectory[:, :3] - targets[:, :3])**2)
 
     value, gradient = jax.jit(jax.value_and_grad(loss))(jnp.ones(4))
