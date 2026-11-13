@@ -7,7 +7,7 @@ gradient in the same type, so ``grad(loss)(vehicle).mass`` is the gradient with
 respect to the mass. A kernel reads ``vehicle.mass`` where it once read ``vehicle[1]``.
 
 These are the tuples that cross modules. A tuple that is only the operand of one
-function's branches or loop body, such as ``Load`` in `multirotor.physics`, is defined
+function's branches or loop body, such as ``BatteryLoad`` in `multirotor.physics`, is defined
 beside those functions, and is not exported.
 
 The imperative classes convert to and from these tuples, and nowhere else: see

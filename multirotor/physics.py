@@ -39,11 +39,12 @@ loop is an ``xp.map_`` or ``xp.fori_loop`` (see `multirotor.xp_numba`), each tak
 module-level function that has one operand and cannot close over locals. That makes a
 function per branch or loop body (``_empty`` and ``_interpolate`` are the two sides of
 one ``if``; ``_voltage`` is the body of a loop over the motors), and a named tuple as
-its operand (``OcvTable``, ``Load``, ``MotorInputs``), built by the parent function
+its input (``OcvCurve``, ``BatteryLoad``, ``MotorDrive``), built by the parent function
 from its locals. Both backends compile them to what the plain ``if`` or ``for`` would
-be. An operand is local to the functions that use it and is not exported. A result that
-callers use (``Terminal``, ``OperatingPoint``, ``BatteryEnd``) is named so that both
-sides of a branch return the same type. The tuples that cross modules, such as the
+be. Such an input is named for what it holds and for what it is the input of, is local to
+the functions that use it, and is not exported. A result that callers use
+(``Terminal``, ``OperatingPoint``, ``BatteryEnd``) is named so that both sides of a
+branch return the same type. The tuples that cross modules, such as the
 vehicle and the controller's parameters, are in `multirotor.tuples`.
 
 `multirotor.simulation` also calls some of these directly, between solver steps:
@@ -197,16 +198,22 @@ def thrusts_blade_element_model(
 # `multirotor.tuples`).
 
 
-class MotorInputs(NamedTuple):
-    "The arguments of `motor_electrical`, which the per-motor functions take as one value."
+class MotorDrive(NamedTuple):
+    """
+    The drive of the motors: their speeds, speed signals, the voltage limit and their
+    parameters. The input to `motor_electrical` and to the per-motor loop bodies.
+    """
     speed: np.ndarray
     u: np.ndarray
     max_voltage: float
     motor_params: np.ndarray
 
 
-class TorqueInputs(NamedTuple):
-    "The arguments of `body_torques` after the first, which `_add_torque` takes as one value."
+class PropellerForces(NamedTuple):
+    """
+    The forces of the propellers and their layout: thrusts, drag torques, spin directions and
+    positions. The input to the per-propeller loop body `_add_torque`.
+    """
     thrusts: np.ndarray
     drag_torques: np.ndarray
     clockwise: np.ndarray
@@ -214,14 +221,17 @@ class TorqueInputs(NamedTuple):
 
 
 class Terminal(NamedTuple):
-    "What `battery_terminal` returns: the terminal voltage, and whether the battery can deliver the power."
+    """
+    The output of `battery_terminal`: the terminal voltage, and whether the battery can
+    deliver the power.
+    """
     voltage: float
     ok: bool
 
 
 class OperatingPoint(NamedTuple):
     """
-    What `battery_operating_point` returns: the terminal voltage, the power the motors draw,
+    The output of `battery_operating_point`: the terminal voltage, the power the motors draw,
     and whether the battery can deliver it.
     """
     terminal_voltage: float
@@ -231,7 +241,7 @@ class OperatingPoint(NamedTuple):
 
 class BatteryEnd(NamedTuple):
     """
-    What `battery_end_step` returns: the charge drawn, the battery current, the terminal
+    The output of `battery_end_step`: the charge drawn, the battery current, the terminal
     voltage, whether the battery has cut off, whether it was overloaded, and the motors'
     voltage limit for the next step.
     """
@@ -243,30 +253,40 @@ class BatteryEnd(NamedTuple):
     voltage_limit: float
 
 
-class OcvTable(NamedTuple):
-    "The operand of `_interpolate`: the state of charge and the table."
+class OcvCurve(NamedTuple):
+    """
+    The open-circuit-voltage curve of the battery and the state of charge to read it at. The
+    input to `_empty` and `_interpolate`.
+    """
     soc: float
     ocv_soc: np.ndarray
     ocv_voltage: np.ndarray
 
 
-class Load(NamedTuple):
-    "The operand of `_ideal` and `_loaded`: the power drawn and the battery's source voltage and resistance."
+class BatteryLoad(NamedTuple):
+    """
+    The load on the battery: the power drawn, and the battery's source voltage and resistance.
+    The input to `_ideal` and `_loaded`.
+    """
     power: float
     open_circuit_voltage: float
     internal_resistance: float
 
 
-class Delivery(NamedTuple):
-    "The operand of `_overloaded` and `_delivering`: the source voltage and the discriminant of the quadratic."
+class TerminalQuadratic(NamedTuple):
+    """
+    The quadratic that gives the terminal voltage: the source voltage and its discriminant.
+    The input to `_overloaded` and `_delivering`.
+    """
     open_circuit_voltage: float
     discriminant: float
 
 
-class Candidate(NamedTuple):
+class OperatingPointSearch(NamedTuple):
     """
-    The operand of `_unlimited`, `_limited` and `_balance`: the operating point if no motor is
-    limited, and what is needed to look for another.
+    The search for the battery's operating point: the operating point if no motor is voltage
+    limited, and the motors and the battery that a limited one is solved from. The input to
+    `_unlimited`, `_limited` and `_balance`.
     """
     point: OperatingPoint
     speed: np.ndarray
@@ -276,11 +296,12 @@ class Candidate(NamedTuple):
     motor_params: np.ndarray
 
 
-class Discharge(NamedTuple):
+class BatteryAfterStep(NamedTuple):
     """
-    The operand of `_dead` and `_live`: the battery's state after the step as it is, for a
-    battery that supplies nothing (``end.voltage`` is the open-circuit voltage and
-    ``end.voltage_limit`` is 0), and what is needed to update it.
+    The battery after a step, before its cutoff and overload are updated: its `BatteryEnd` as
+    it is for a battery that supplies nothing (``end.voltage`` is the open-circuit voltage and
+    ``end.voltage_limit`` is 0), and the motors and battery that a live one is updated from.
+    The input to `_dead` and `_live`.
     """
     end: BatteryEnd
     motor_speeds: np.ndarray
@@ -289,7 +310,7 @@ class Discharge(NamedTuple):
     battery_params: np.ndarray
 
 
-def _voltage(i: int, c: MotorInputs) -> float:
+def _voltage(i: int, c: MotorDrive) -> float:
     """
     Voltage of motor ``i``.
 
@@ -300,7 +321,7 @@ def _voltage(i: int, c: MotorInputs) -> float:
 
 
 
-def _current(i: int, c: MotorInputs) -> float:
+def _current(i: int, c: MotorDrive) -> float:
     """
     Current of motor ``i``. The arguments are those of `_voltage`.
 
@@ -329,12 +350,12 @@ def motor_electrical(
     """
 
     n = speed.shape[0]
-    consts = MotorInputs(speed, u, max_voltage, motor_params)
+    consts = MotorDrive(speed, u, max_voltage, motor_params)
     return xp.map_(_voltage, n, consts), xp.map_(_current, n, consts)
 
 
 
-def _acc(i: int, c: MotorInputs) -> float:
+def _acc(i: int, c: MotorDrive) -> float:
     """
     Angular acceleration of motor ``i``. The arguments are those of `_voltage`.
 
@@ -362,11 +383,11 @@ def motor_acc(
     """
 
     n = speed.shape[0]
-    return xp.map_(_acc, n, MotorInputs(speed, u, max_voltage, motor_params))
+    return xp.map_(_acc, n, MotorDrive(speed, u, max_voltage, motor_params))
 
 
 
-def _add_power(acc: float, i: int, c: MotorInputs) -> float:
+def _add_power(acc: float, i: int, c: MotorDrive) -> float:
     """
     ``acc`` plus the electrical power of motor ``i``.
 
@@ -382,17 +403,17 @@ def motor_power(
     """Total electrical power (W) drawn by the motors."""
 
     return xp.fold(
-        _add_power, 0., speed.shape[0], MotorInputs(speed, u, max_voltage, motor_params))
+        _add_power, 0., speed.shape[0], MotorDrive(speed, u, max_voltage, motor_params))
 
 
 
-def _empty(op: OcvTable) -> float:
+def _empty(op: OcvCurve) -> float:
     """The voltage of an empty battery: none."""
     return 0.
 
 
 
-def _interpolate(op: OcvTable) -> float:
+def _interpolate(op: OcvCurve) -> float:
     """
     The open-circuit voltage, interpolated from the table.
 
@@ -412,32 +433,32 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
     Returns: The open-circuit voltage (V).
     """
 
-    return xp.cond(soc <= 0., _empty, _interpolate, OcvTable(soc, ocv_soc, ocv_voltage))
+    return xp.cond(soc <= 0., _empty, _interpolate, OcvCurve(soc, ocv_soc, ocv_voltage))
 
 
 
-def _ideal(op: Load) -> Terminal:
+def _ideal(op: BatteryLoad) -> Terminal:
     """A battery without resistance: the terminal voltage is the source voltage."""
     return Terminal(op.open_circuit_voltage, True)
 
 
 
-def _loaded(op: Load) -> Terminal:
+def _loaded(op: BatteryLoad) -> Terminal:
     """A battery with resistance: the larger root of the quadratic, if there is one."""
     discriminant = op.open_circuit_voltage**2 - 4. * op.internal_resistance * op.power
     return xp.cond(
         discriminant < 0., _overloaded, _delivering,
-        Delivery(op.open_circuit_voltage, discriminant))
+        TerminalQuadratic(op.open_circuit_voltage, discriminant))
 
 
 
-def _overloaded(op: Delivery) -> Terminal:
+def _overloaded(op: TerminalQuadratic) -> Terminal:
     """The battery can't deliver the power: the voltage at its maximum power."""
     return Terminal(0.5 * op.open_circuit_voltage, False)
 
 
 
-def _delivering(op: Delivery) -> Terminal:
+def _delivering(op: TerminalQuadratic) -> Terminal:
     """The battery delivers the power, at the larger root of the quadratic."""
     return Terminal(0.5 * (op.open_circuit_voltage + xp.sqrt_nonneg(op.discriminant)), True)
 
@@ -463,17 +484,17 @@ def battery_terminal(
 
     return xp.cond(
         internal_resistance == 0., _ideal, _loaded,
-        Load(power, open_circuit_voltage, internal_resistance))
+        BatteryLoad(power, open_circuit_voltage, internal_resistance))
 
 
 
-def _unlimited(op: Candidate) -> OperatingPoint:
+def _unlimited(op: OperatingPointSearch) -> OperatingPoint:
     """No motor is limited by the terminal voltage: it is as first computed."""
     return op.point
 
 
 
-def _balance(v: float, op: Candidate) -> float:
+def _balance(v: float, op: OperatingPointSearch) -> float:
     """
     Zero where the motors' voltage limit equals the terminal voltage.
 
@@ -485,7 +506,7 @@ def _balance(v: float, op: Candidate) -> float:
 
 
 
-def _limited(op: Candidate) -> OperatingPoint:
+def _limited(op: OperatingPointSearch) -> OperatingPoint:
     """Some motors are limited by the terminal voltage, found by bisection on [0, V_oc]."""
     v_oc = op.open_circuit_voltage
     terminal_voltage = xp.root(_balance, 0., v_oc, 1e-12 * v_oc, op)
@@ -526,19 +547,19 @@ def battery_operating_point(
     terminal = battery_terminal(power, v_oc, internal_resistance)
     return xp.cond(
         requested_voltage.max() <= terminal.voltage, _unlimited, _limited,
-        Candidate(
+        OperatingPointSearch(
             OperatingPoint(terminal.voltage, power, terminal.ok), speed, u, v_oc,
             internal_resistance, motor_params))
 
 
 
-def _dead(op: Discharge) -> BatteryEnd:
+def _dead(op: BatteryAfterStep) -> BatteryEnd:
     """A battery that is cut off or empty supplies nothing."""
     return op.end
 
 
 
-def _live(op: Discharge) -> BatteryEnd:
+def _live(op: BatteryAfterStep) -> BatteryEnd:
     """
     A battery that supplies the motors: its voltage, and whether it cuts off or is overloaded.
     """
@@ -586,14 +607,14 @@ def battery_end_step(
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
     return xp.cond(
         cutoff | (soc <= 0.), _dead, _live,
-        Discharge(
+        BatteryAfterStep(
             BatteryEnd(charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.),
             motor_speeds, u, motor_params, battery_params))
 
 
 
 def _add_torque(
-    acc: Tuple[float, float, float], i: int, c: TorqueInputs
+    acc: Tuple[float, float, float], i: int, c: PropellerForces
 ) -> Tuple[float, float, float]:
     """
     ``acc`` plus the torques of propeller ``i``.
@@ -632,7 +653,7 @@ def body_torques(
     # contributes no torque.
     n = thrusts.shape[0]
     roll, pitch, yaw = xp.fold(
-        _add_torque, (0., 0., 0.), n, TorqueInputs(thrusts, drag_torques, clockwise, positions))
+        _add_torque, (0., 0., 0.), n, PropellerForces(thrusts, drag_torques, clockwise, positions))
     return xp.array((roll, pitch, yaw))
 
 

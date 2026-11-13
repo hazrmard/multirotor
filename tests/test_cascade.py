@@ -59,9 +59,9 @@ def zero_memo():
 
 def make_inputs(params, args, steps, feed_forward, leashing, sqrt_pos, sqrt_att,
                 feedforward_weight=.4):
-    "`cascade.Inputs` from the random arguments of `inputs`."
+    "`cascade.CascadeStepInputs` from the random arguments of `inputs`."
     reference, body_state, acceleration, velocity = args
-    return cascade.Inputs(
+    return cascade.CascadeStepInputs(
         params, reference, body_state, acceleration, INERTIA, MASS, WEIGHT, SIM_DT,
         Steps(*steps), velocity, feed_forward, feedforward_weight, leashing, sqrt_pos, sqrt_att)
 

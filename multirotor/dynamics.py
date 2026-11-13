@@ -7,7 +7,7 @@ This module is the only code that knows the layout of ``x``. It slices ``x``,
 calls the subsystem equations in `multirotor.physics`, and stacks their results.
 
 The small functions and local named tuples here (``_no_current``, ``_supplying``,
-``Supply``) are the branches of an ``xp.cond`` and their operand; the reasons are
+``MotorSupply``) are the branches of an ``xp.cond`` and their input; the reasons are
 given in `multirotor.physics`.
 
 The state ``x`` and the functions each right-hand side calls, for following the
@@ -73,14 +73,20 @@ N_BODY_STATES = 12
 
 
 class BatteryState(NamedTuple):
-    "What `battery_state` returns: the terminal voltage, the battery current, and the motors' voltage limit."
+    """
+    The output of `battery_state`: the terminal voltage, the battery current, and the motors'
+    voltage limit.
+    """
     terminal_voltage: float
     current: float
     voltage_limit: float
 
 
-class Supply(NamedTuple):
-    "The operand of `_no_current` and `_supplying`: the battery's source voltage and the motors."
+class MotorSupply(NamedTuple):
+    """
+    The battery's supply to the motors: its source voltage, and the motors' speeds, signals
+    and parameters. The input to `_no_current` and `_supplying`.
+    """
     open_circuit_voltage: float
     speeds: np.ndarray
     u: np.ndarray
@@ -162,13 +168,13 @@ def rhs_body_with_motors(
 
 
 
-def _no_current(op: Supply) -> BatteryState:
+def _no_current(op: MotorSupply) -> BatteryState:
     """A battery that is cut off or empty supplies no current, and the motors get no voltage."""
     return BatteryState(op.open_circuit_voltage, 0., 0.)
 
 
 
-def _supplying(op: Supply) -> BatteryState:
+def _supplying(op: MotorSupply) -> BatteryState:
     """A battery that supplies the motors: its voltage, and the current at the power they draw."""
     point = battery_operating_point(
         op.speeds, op.u, op.open_circuit_voltage,
@@ -202,7 +208,7 @@ def battery_state(
     open_circuit_voltage = battery_ocv(soc, ocv_soc, ocv_voltage)
     return xp.cond(
         cutoff | (soc <= 0.), _no_current, _supplying,
-        Supply(open_circuit_voltage, speeds, u, motor_params, battery_params))
+        MotorSupply(open_circuit_voltage, speeds, u, motor_params, battery_params))
 
 
 

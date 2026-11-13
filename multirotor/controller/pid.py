@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 
 from ..simulation import Multirotor
-from .cascade import Inputs, cascaded_step, leash_distance, pid_stage
+from .cascade import CascadeStepInputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
 from ..tuples import ControllerParams, ControllerState, Memo, Steps
 from .data import (
@@ -744,7 +744,7 @@ class Controller:
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
-        inputs = Inputs(
+        inputs = CascadeStepInputs(
             self._data.params, target, _state64(vehicle), _vector(vehicle.acceleration),
             np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
             float(vehicle.params.mass), float(vehicle.weight), float(vehicle.simulation.dt),
