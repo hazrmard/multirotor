@@ -1,4 +1,4 @@
-from typing import Callable, Iterable, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 from types import SimpleNamespace
 
 import numpy as np
@@ -123,6 +123,19 @@ def find_nominal_speed(thrust_fn: Callable[[float], float], weight: float) -> fl
         The speed to balance the weight.
     """
     def balance(speed: float) -> float:
+        """
+        The thrust in excess of the weight at a speed.
+
+        Parameters
+        ----------
+        speed : float
+            The propeller speed.
+
+        Returns
+        -------
+        float
+            Thrust minus weight (N), which is zero at the nominal speed.
+        """
         thrust = thrust_fn(speed)
         residual = thrust - weight
         return residual
@@ -194,6 +207,21 @@ def learn_speed_voltage_scaling(
 
 
 def moment_of_inertia_disk(m: float, r: float) -> float:
+    """
+    Moment of inertia of a uniform disk about its axis.
+
+    Parameters
+    ----------
+    m : float
+        The mass (kg).
+    r : float
+        The radius (m).
+
+    Returns
+    -------
+    float
+        The moment of inertia (kg m^2).
+    """
     return 0.5 * m * r**2
 
 
@@ -232,7 +260,28 @@ def get_vehicle_ability(
     vp: VehicleParams, sp: SimulationParams,
     max_tilt: float=np.pi/12,
     max_rads: float=600
-):
+) -> Dict[str, float]:
+    """
+    The largest accelerations that a vehicle can achieve.
+
+    Parameters
+    ----------
+    vp : VehicleParams
+        The vehicle's parameters.
+    sp : SimulationParams
+        The simulation parameters, for gravity.
+    max_tilt : float
+        The tilt (rad) at which the vehicle still holds its altitude, for the lateral
+        acceleration.
+    max_rads : float
+        The largest propeller speed (rad/s).
+
+    Returns
+    -------
+    dict
+        ``max_acc_xy`` and ``max_acc_z`` (m/s^2), and ``max_ang_acc``, the largest angular
+        acceleration (rad/s^2) about any axis.
+    """
     n = len(vp.propellers)
 
     thrusts = [p.k_thrust * max_rads**2 for p in vp.propellers]
@@ -282,8 +331,8 @@ class DataLog:
     """
     def __init__(
         self, vehicle: 'Multirotor'=None, controller: 'Controller'=None,
-        other_vars=None
-    ):
+        other_vars: Optional[Iterable[str]] = None
+    ) -> None:
         """
         Parameters
         ----------
@@ -299,11 +348,15 @@ class DataLog:
         return self.track(vehicle, controller, other_vars)
     
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
+        "A log is true even when it is empty."
         return True
 
 
-    def track(self, vehicle, controller, other_vars=None):
+    def track(
+        self, vehicle: 'Multirotor', controller: 'Controller',
+        other_vars: Optional[Iterable[str]] = None
+    ) -> None:
         """
         Register Multirotor and Controller instances to track, along with names
         of any other variables to be manually added.
@@ -316,6 +369,13 @@ class DataLog:
             The vehicle to track.
         controller : Controller
             The controller to track.
+        other_vars : Iterable[str], optional
+            Names of other variables to log, which `log` takes as keyword arguments.
+
+        Raises
+        ------
+        AttributeError
+            If a name in ``other_vars`` is an attribute of the log.
         """
         self._arrayed = False
         self._states = []
@@ -342,20 +402,33 @@ class DataLog:
         self.controller = controller
 
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: slice) -> None:
+        """
+        Not finished: a slice of the log.
+
+        Parameters
+        ----------
+        item : slice
+            The slice.
+        """
         if isinstance(item, slice):
             d = DataLog(other_vars=self._args)
             pass
         # TODO: Finish. Return a DataLog with the requested slice
 
         
-    def log(self, **kwargs):
+    def log(self, **kwargs: Any) -> None:
         """
         Add the state and action variables from the Multirotor and Controller.
         Any keyword arguments should already have been registered in `track()`
         and their values are now appended to the list.
 
         >>> DataLog.log(error=5)
+
+        Parameters
+        ----------
+        **kwargs : Any
+            The values of the variables registered as ``other_vars``, by name.
         """
         self._arrayed = False
         if self.vehicle is not None:
@@ -379,7 +452,7 @@ class DataLog:
             getattr(self, '_' + key).append(value)
 
             
-    def done_logging(self):
+    def done_logging(self) -> None:
         """
         Indicate that no more logs are going to be put so the python lists are converted
         to numpy arrays and discarded.
@@ -395,7 +468,18 @@ class DataLog:
         )
 
 
-    def append(self, log: 'DataLog', relative=True):
+    def append(self, log: 'DataLog', relative: bool = True) -> None:
+        """
+        Add another log's records after this one's.
+
+        Parameters
+        ----------
+        log : DataLog
+            The log to add. It must have logged the same other variables.
+        relative : bool
+            Whether the times of ``log`` are relative to its start, so that they are offset by
+            the last time of this log.
+        """
         assert set(self._args) == set(log._args), 'Inconsistent logged variables'
         old_len = len(self)
         self._states.extend(log._states)
@@ -440,7 +524,7 @@ class DataLog:
                 self.times[old_len:] += last_time
 
             
-    def _make_arrays(self, relative_to=None):
+    def _make_arrays(self, relative_to: Optional[np.ndarray] = None) -> None:
         """
         Convert python list to array and put up a flag that all arrays are up
         to date.
@@ -457,7 +541,8 @@ class DataLog:
         self._arrayed = True
 
 
-    def __len__(self):
+    def __len__(self) -> int:
+        "The number of steps logged."
         if len(self._states)==0:
             if self.states is not None:
                 return len(self.states)
@@ -465,41 +550,52 @@ class DataLog:
 
         
     @property
-    def t(self):
+    def t(self) -> np.ndarray:
+        "The time of each step."
         self._make_arrays()
         return self.times
     @property
-    def position(self):
+    def position(self) -> np.ndarray:
+        "The position at each step, shape (n, 3)."
         self._make_arrays()
         return self.states[:, 0:3]
     @property
-    def x(self):
+    def x(self) -> np.ndarray:
+        "The x-position at each step."
         return self.position[:, 0].reshape(-1)
     @property
-    def y(self):
+    def y(self) -> np.ndarray:
+        "The y-position at each step."
         return self.position[:, 1].reshape(-1)
     @property
-    def z(self):
+    def z(self) -> np.ndarray:
+        "The z-position at each step."
         return self.position[:, 2].reshape(-1)
     @property
-    def velocity(self):
+    def velocity(self) -> np.ndarray:
+        "The body-frame velocity at each step, shape (n, 3)."
         self._make_arrays()
         return self.states[:, 3:6]
     @property
-    def orientation(self):
+    def orientation(self) -> np.ndarray:
+        "The roll, pitch and yaw at each step, shape (n, 3)."
         self._make_arrays()
         return self.states[:, 6:9]
     @property
-    def roll(self):
+    def roll(self) -> np.ndarray:
+        "The roll at each step."
         return self.orientation[:, 0].reshape(-1)
     @property
-    def pitch(self):
+    def pitch(self) -> np.ndarray:
+        "The pitch at each step."
         return self.orientation[:, 1].reshape(-1)
     @property
-    def yaw(self):
+    def yaw(self) -> np.ndarray:
+        "The yaw at each step."
         return self.orientation[:, 2].reshape(-1)
     @property
-    def angular_rate(self):
+    def angular_rate(self) -> np.ndarray:
+        "The body angular rate at each step, shape (n, 3)."
         self._make_arrays()
         return self.states[:, 9:12]
     # TODO: add properties for controller state

@@ -22,6 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 control = ["control"]
+# Differentiable closed-loop rollouts (multirotor.rollout, built for JAX)
+jax = ["jax"]
 
 [dependency-groups]
 dev = [
@@ -44,6 +46,8 @@ default-groups = ["dev"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: compiles or differentiates a whole rollout (minutes); deselected by default, run with -m slow or -m \"\""]
+addopts = "-m 'not slow'"
 
 [tool.uv.build-backend]
 module-name = "multirotor"

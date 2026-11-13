@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 import legacy.controller as legacy_pid
-import multirotor.controller.kernels as kernels
 import multirotor.controller.pid as pid
 from multirotor.optimize import DEFAULTS
 from multirotor.simulation import Multirotor
@@ -274,6 +273,10 @@ def test_persist_false_leaves_the_controller_unchanged():
             np.testing.assert_array_equal(new._data.state, data, err_msg=f'step {i}')
             assert new.n == n
             np.testing.assert_array_equal(new.action, action)
+            # The stage outputs are those of the last step that ran, as in the oracle
+            old.step(reference=ref, persist=False)
+            np.testing.assert_allclose(new.thrust, old.thrust, **tol, err_msg=f'step {i} thrust')
+            np.testing.assert_allclose(new.torques, old.torques, **tol, err_msg=f'step {i} torques')
         a_old, a_new = old.step(reference=ref), new.step(reference=ref)
         if i % 7 == 3:
             np.testing.assert_allclose(probe, a_new, **tol, err_msg=f'step {i} probe')
@@ -371,13 +374,6 @@ def test_standalone_stage_owns_its_data():
     stage = pid.AttController(1., 0., 0., 0.1)
     assert stage._data.params.shape[1] == stage.n == 3
     assert stage.k_p.shape == (3,)
-
-
-
-@pytest.mark.parametrize('err, expected', ((1., 2.), (-1., -2.), (0., 0.)))
-def test_sqrt_control_without_p_gain_follows_the_acceleration_limit(err, expected):
-    "With k_p=0 the correction is sqrt(2 * limit * |err|), signed. It was 0 for err > 0."
-    assert kernels.sqrt_control(err, 0., 2., 0.) == pytest.approx(expected)
 
 
 

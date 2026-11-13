@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 try:
@@ -33,8 +33,8 @@ class Trajectory:
 
     def __init__(
         self, vehicle: Multirotor, points: np.ndarray, proximity: float=None,
-        resolution: float=None    
-    ):
+        resolution: float=None
+    ) -> None:
         """
         Parameters
         ----------
@@ -62,26 +62,68 @@ class Trajectory:
         self.ref = None
 
 
-    def __len__(self):
+    def __len__(self) -> int:
+        "The number of points, after the waypoints are segmented."
         return len(self._points)
 
 
-    def __getitem__(self, i: int):
+    def __getitem__(self, i: int) -> np.ndarray:
+        """
+        A point of the segmented trajectory.
+
+        Parameters
+        ----------
+        i : int
+            The index.
+
+        Returns
+        -------
+        np.ndarray
+            The 3D point.
+        """
         return self._points[i]
 
 
-    def get_params(self):
+    def get_params(self) -> Dict[str, Optional[float]]:
+        """
+        The trajectory's parameters.
+
+        Returns
+        -------
+        dict
+            The ``proximity`` and the ``resolution``.
+        """
         return dict(
             proximity=self.proximity, resolution=self.resolution
         )
 
 
-    def set_params(self, **params):
+    def set_params(self, **params: Optional[float]) -> None:
+        """
+        Set the trajectory's parameters.
+
+        Parameters
+        ----------
+        **params : float, optional
+            ``proximity`` and ``resolution``, as in the constructor. A name that is not given
+            keeps its value.
+        """
         self.proximity = params.get('proximity', self.proximity)
         self.proximity = params.get('resolution', self.resolution)
 
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Tuple[np.ndarray, None]]:
+        """
+        Iterate over the points of the trajectory, from the vehicle's position.
+
+        Yields
+        ------
+        ref : np.ndarray
+            The current target point. With a ``proximity`` the same point is yielded until
+            the vehicle is within it.
+        None
+            No velocity: this trajectory gives none. `GuidedTrajectory` gives the velocity.
+        """
         self._points = self.generate_trajectory(self.vehicle.position)
         if self.proximity is not None:
             for i in range(1, len(self)):
@@ -94,7 +136,20 @@ class Trajectory:
                 yield self.ref, None
 
 
-    def generate_trajectory(self, curr_pos=None):
+    def generate_trajectory(self, curr_pos: Optional[np.ndarray] = None) -> List[np.ndarray]:
+        """
+        Segment the waypoints into points ``resolution`` apart.
+
+        Parameters
+        ----------
+        curr_pos : np.ndarray, optional
+            The point to start from, put before the waypoints.
+
+        Returns
+        -------
+        list of np.ndarray
+            The 3D points. The waypoints themselves if there is no ``resolution``.
+        """
         if curr_pos is not None:
             points = [curr_pos, *self.points]
         else:
@@ -120,20 +175,46 @@ class Trajectory:
         return _points
 
 
-    def add_waypoint(self, point: np.ndarray):
+    def add_waypoint(self, point: np.ndarray) -> None:
+        """
+        Not implemented.
+
+        Parameters
+        ----------
+        point : np.ndarray
+            The waypoint.
+        """
         pass
 
 
-    def next_waypoint(self):
+    def next_waypoint(self) -> None:
+        "Not implemented."
         pass
 
 
     def reached(self, wp: np.ndarray) -> bool:
+        """
+        Whether the vehicle is within ``proximity`` of a point.
+
+        Parameters
+        ----------
+        wp : np.ndarray
+            The point.
+
+        Returns
+        -------
+        bool
+            True if it is.
+        """
         return np.linalg.norm(self.vehicle.position - wp) <= self.proximity
 
 
 
 class GuidedTrajectory:
+    """
+    Iterate over waypoints, replanning an S-curve trajectory to each one as the vehicle flies,
+    and yielding the target and the velocity along the plan.
+    """
     # Guided mode call stack overview
     # https://ardupilot.org/dev/docs/apmcopter-code-overview.html
     # Square-root controller for pos control, sets P value
@@ -142,6 +223,28 @@ class GuidedTrajectory:
     def __init__(self, vehicle: Multirotor, waypoints: Iterable[np.ndarray],
         steps: int=10, proximity: float=2., max_velocity: float=7., max_acceleration: float=3.,
         max_jerk: float=100, turn_factor: float=(1/np.sqrt(2))) -> None:
+        """
+        Parameters
+        ----------
+        vehicle : Multirotor
+            The vehicle to track.
+        waypoints : Iterable[np.ndarray]
+            The waypoints (x, y, z).
+        steps : int
+            The number of simulation steps between replans.
+        proximity : float
+            The distance (m) from a waypoint at which it counts as reached.
+        max_velocity, max_acceleration, max_jerk : float
+            The limits of the plan.
+        turn_factor : float
+            How much of the maximum velocity the plan keeps at a waypoint, scaled by how
+            little the path turns there.
+
+        Raises
+        ------
+        ImportError
+            If the planner, ``pyscurve``, is not installed.
+        """
         if not ScurvePlanner:
             raise ImportError('Py-Scurve is not installed.')
         self.vehicle = vehicle
@@ -156,14 +259,25 @@ class GuidedTrajectory:
         self.trajs = []
 
 
-    def _setup(self):
+    def _setup(self) -> None:
+        "Set the steps between replans to run at 100 Hz, if it is not set."
         if self.steps is None:
             dt = self.vehicle.simulation.dt
             # default run at 100Hz
             self.steps = int(max(1, 0.01 / dt))
 
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Iterate over the waypoints, planning as the vehicle flies.
+
+        Yields
+        ------
+        ref : np.ndarray
+            The target: the point on the plan, the waypoint's z, and a yaw of 0.
+        velocity : np.ndarray
+            The planned xy-velocity.
+        """
         # https://www.youtube.com/watch?v=MQiNDJGJDWs
         self._setup()
         i = 0 # steps since beginning of trajectory
@@ -232,6 +346,19 @@ class GuidedTrajectory:
 
 
     def reached(self, wp: np.ndarray) -> bool:
+        """
+        Whether the vehicle is within ``proximity`` of a point.
+
+        Parameters
+        ----------
+        wp : np.ndarray
+            The point.
+
+        Returns
+        -------
+        bool
+            True if it is.
+        """
         return np.linalg.norm(self.vehicle.position - wp) <= self.proximity
 
 

@@ -46,25 +46,13 @@ def fleet_rhs_body(
     Rate of change of the body states of every vehicle under forces and torques
     that are fixed over the time step. `multirotor.dynamics.rhs_body` for the fleet.
 
-    Parameters
-    ----------
-    t : float
-        Time.
-    x : np.ndarray
-        The body states of all vehicles, flat (see the module docstring), shape (K * 12,).
-    forces, torques : np.ndarray
-        Forces (N) and torques (N m) in each body frame, shape (K, 3).
-    g : float
-        Gravitational acceleration.
-    mass : np.ndarray
-        Mass of each vehicle, shape (K,).
-    inertia_matrix, inertia_matrix_inverse : np.ndarray
-        Inertia matrix of each vehicle and its inverse, shape (K, 3, 3).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``, flat, shape (K * 12,).
+    ``x``: The body states of all vehicles, flat (see the module docstring), shape (K *
+      12,).
+    ``forces``, ``torques``: Forces (N) and torques (N m) in each body frame, shape (K, 3).
+    ``mass``: Mass of each vehicle, shape (K,).
+    ``inertia_matrix``, ``inertia_matrix_inverse``: Inertia matrix of each vehicle and its
+      inverse, shape (K, 3, 3).
+    Returns: The rate of change of ``x``, flat, shape (K * 12,).
     """
     k_vehicles = forces.shape[0]
     states = x.reshape(k_vehicles, 12)
@@ -88,37 +76,19 @@ def fleet_rhs_body_with_motors(
     Rate of change of the body and the motors of every vehicle.
     `multirotor.dynamics.rhs_body_with_motors` for the fleet.
 
-    Parameters
-    ----------
-    t : float
-        Time.
-    x : np.ndarray
-        The integrated state of all vehicles, flat, shape (K * (12 + n),).
-    u : np.ndarray
-        Speed signals, shape (K, n).
-    max_voltage : np.ndarray
-        The maximum voltage the power source of each vehicle can supply, shape (K,).
-    disturbance : np.ndarray
-        External forces and torques in each body frame, shape (K, 6).
-    g : float
-        Gravitational acceleration.
-    mass : np.ndarray
-        Mass of each vehicle, shape (K,).
-    inertia_matrix, inertia_matrix_inverse : np.ndarray
-        Inertia matrix of each vehicle and its inverse, shape (K, 3, 3).
-    prop_params : np.ndarray
-        Propeller parameters, shape (K, N_PROP_PARAMS, n).
-    motor_params : np.ndarray
-        Motor parameters, shape (K, N_MOTOR_PARAMS, n).
-    clockwise : np.ndarray
-        Direction of rotation of each propeller, shape (K, n).
-    positions : np.ndarray
-        Position of each propeller relative to the center of mass, shape (K, 3, n).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``, flat.
+    ``x``: The integrated state of all vehicles, flat, shape (K * (12 + n),).
+    ``u``: Speed signals, shape (K, n).
+    ``max_voltage``: The maximum voltage the power source of each vehicle can supply, shape
+      (K,).
+    ``disturbance``: External forces and torques in each body frame, shape (K, 6).
+    ``mass``: Mass of each vehicle, shape (K,).
+    ``inertia_matrix``, ``inertia_matrix_inverse``: Inertia matrix of each vehicle and its
+      inverse, shape (K, 3, 3).
+    ``prop_params``: Propeller parameters, shape (K, N_PROP_PARAMS, n).
+    ``motor_params``: Motor parameters, shape (K, N_MOTOR_PARAMS, n).
+    ``clockwise``: Direction of rotation of each propeller, shape (K, n).
+    ``positions``: Position of each propeller relative to the center of mass, shape (K, 3,
+      n).
     """
     k_vehicles, n = u.shape
     states = x.reshape(k_vehicles, 12 + n)
@@ -145,25 +115,15 @@ def fleet_rhs_body_with_motors_and_battery(
     Rate of change of the body, the motors and the battery of every vehicle.
     `multirotor.dynamics.rhs_body_with_motors_and_battery` for the fleet.
 
-    Parameters
-    ----------
-    t, x, u, disturbance, g, mass, inertia_matrix, inertia_matrix_inverse, prop_params, motor_params, clockwise, positions
-        As in `fleet_rhs_body_with_motors`. Each vehicle's integrated state has
-        one more element: the charge drawn during the step. ``x`` has shape
-        (K * (12 + n + 1),).
-    cutoff : np.ndarray
-        Whether each battery has cut off the motors, shape (K,).
-    battery_params : np.ndarray
-        Battery parameters, shape (K, N_BATTERY_PARAMS).
-    ocv_soc, ocv_voltage : np.ndarray
-        The open-circuit voltage tables, shape (K, m).
-    charge_drawn : np.ndarray
-        Charge (C) drawn from each battery before the step, shape (K,).
-
-    Returns
-    -------
-    np.ndarray
-        The rate of change of ``x``, flat.
+    ``t``, ``x``, ``u``, ``disturbance``, ``g``, ``mass``, ``inertia_matrix``,
+      ``inertia_matrix_inverse``, ``prop_params``, ``motor_params``, ``clockwise``,
+      ``positions``: As in `fleet_rhs_body_with_motors`. Each vehicle's integrated state has
+      one more element: the charge drawn during the step. ``x`` has shape (K * (12 + n +
+      1),).
+    ``cutoff``: Whether each battery has cut off the motors, shape (K,).
+    ``battery_params``: Battery parameters, shape (K, N_BATTERY_PARAMS).
+    ``ocv_soc``, ``ocv_voltage``: The open-circuit voltage tables, shape (K, m).
+    ``charge_drawn``: Charge (C) drawn from each battery before the step, shape (K,).
     """
     k_vehicles, n = u.shape
     states = x.reshape(k_vehicles, 12 + n + 1)
@@ -187,21 +147,12 @@ def fleet_forces_torques(
     Total force and torque on the body of every vehicle.
     `multirotor.physics.forces_torques` for the fleet.
 
-    Parameters
-    ----------
-    speeds : np.ndarray
-        Propeller speeds (rad/s), shape (K, n).
-    prop_params : np.ndarray
-        Propeller parameters, shape (K, N_PROP_PARAMS, n).
-    clockwise : np.ndarray
-        Direction of rotation of each propeller, shape (K, n).
-    positions : np.ndarray
-        Position of each propeller relative to the center of mass, shape (K, 3, n).
-
-    Returns
-    -------
-    tuple
-        The forces (N) and torques (N m), each shape (K, 3).
+    ``speeds``: Propeller speeds (rad/s), shape (K, n).
+    ``prop_params``: Propeller parameters, shape (K, N_PROP_PARAMS, n).
+    ``clockwise``: Direction of rotation of each propeller, shape (K, n).
+    ``positions``: Position of each propeller relative to the center of mass, shape (K, 3,
+      n).
+    Returns: The forces (N) and torques (N m), each shape (K, 3).
     """
     k_vehicles = speeds.shape[0]
     forces = np.empty((k_vehicles, 3))
@@ -223,16 +174,10 @@ def fleet_motor_electrical(
     Voltage and current of every motor, written to ``voltage`` and ``current``.
     `multirotor.physics.motor_electrical` for the fleet.
 
-    Parameters
-    ----------
-    speed, u : np.ndarray
-        Motor speeds (rad/s) and speed signals, shape (K, n).
-    max_voltage : np.ndarray
-        The maximum voltage of each vehicle's power source, shape (K,).
-    motor_params : np.ndarray
-        Motor parameters, shape (K, N_MOTOR_PARAMS, n).
-    voltage, current : np.ndarray
-        Outputs, shape (K, n).
+    ``speed``, ``u``: Motor speeds (rad/s) and speed signals, shape (K, n).
+    ``max_voltage``: The maximum voltage of each vehicle's power source, shape (K,).
+    ``motor_params``: Motor parameters, shape (K, N_MOTOR_PARAMS, n).
+    ``voltage``, ``current``: Outputs, shape (K, n).
     """
     for k in range(speed.shape[0]):
         v, i = motor_electrical(speed[k], u[k], max_voltage[k], motor_params[k])
@@ -253,22 +198,15 @@ def fleet_battery_end_step(
     Update every battery after an integrated time step.
     `multirotor.physics.battery_end_step` for the fleet.
 
-    Parameters
-    ----------
-    charge : np.ndarray
-        Charge (C) drawn during the step, as integrated, shape (K,).
-    charge_drawn, cutoff, overload, voltage, current : np.ndarray
-        The batteries' state, shape (K,). Updated in place.
-    motor_speeds, u : np.ndarray
-        Motor speeds at the end of the step and the speed signals, shape (K, n).
-    motor_params : np.ndarray
-        Motor parameters, shape (K, N_MOTOR_PARAMS, n).
-    battery_params, ocv_soc, ocv_voltage : np.ndarray
-        As in `fleet_rhs_body_with_motors_and_battery`.
-    dt : float
-        The time step (s).
-    motor_voltage_limit : np.ndarray
-        Output: the motors' voltage limit for the next step, shape (K,).
+    ``charge``: Charge (C) drawn during the step, as integrated, shape (K,).
+    ``charge_drawn``, ``cutoff``, ``overload``, ``voltage``, ``current``: The batteries'
+      state, shape (K,). Updated in place.
+    ``motor_speeds``, ``u``: Motor speeds at the end of the step and the speed signals,
+      shape (K, n).
+    ``motor_params``: Motor parameters, shape (K, N_MOTOR_PARAMS, n).
+    ``dt``: The time step (s).
+    ``motor_voltage_limit``: Output: the motors' voltage limit for the next step, shape
+      (K,).
     """
     for k in range(charge.shape[0]):
         drawn, i, v, cut, over, limit = battery_end_step(
@@ -288,15 +226,8 @@ def fleet_euler_rate(state: np.ndarray) -> np.ndarray:
     """
     Rate of change of the roll, pitch and yaw of every vehicle.
 
-    Parameters
-    ----------
-    state : np.ndarray
-        The body states, shape (K, 12).
-
-    Returns
-    -------
-    np.ndarray
-        The Euler rates, shape (K, 3).
+    ``state``: The body states, shape (K, 12).
+    Returns: The Euler rates, shape (K, 3).
     """
     rate = np.empty((state.shape[0], 3))
     for k in range(state.shape[0]):
@@ -310,15 +241,8 @@ def fleet_inertial_velocity(state: np.ndarray) -> np.ndarray:
     """
     Velocity of every vehicle in the inertial frame.
 
-    Parameters
-    ----------
-    state : np.ndarray
-        The body states, shape (K, 12).
-
-    Returns
-    -------
-    np.ndarray
-        The inertial velocities, shape (K, 3).
+    ``state``: The body states, shape (K, 12).
+    Returns: The inertial velocities, shape (K, 3).
     """
     velocity = np.empty((state.shape[0], 3))
     for k in range(state.shape[0]):
