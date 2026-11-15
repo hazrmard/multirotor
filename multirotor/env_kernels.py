@@ -28,38 +28,14 @@ def reward_and_flags(
     the bounding box, and subtracts a share of ``bonus`` that grows with the
     distance left when the time runs out.
 
-    Parameters
-    ----------
-    state : np.ndarray
-        The vehicle's 12 body states before the step. Position is ``[0:3]`` and
-        orientation ``[6:9]``.
-    nstate : np.ndarray
-        The vehicle's 12 body states after the step.
-    des_unit_vec : np.ndarray
-        Unit vector from the start position to the origin, shape (3,).
-    t : float
-        The vehicle's time (s) after the step.
-    dt : float
-        The time step (s).
-    bounding_box : float
-        Side of the cube centered at the origin in which the vehicle must stay (m).
-    proximity : float
-        Distance from the origin at which the vehicle has reached it (m).
-    max_angle : float
-        Roll or pitch angle above which the vehicle has tipped (rad).
-    period : float
-        The maximum duration of the episode (s).
-    motion_reward_scaling : float
-        Scale of the advance, drift and yaw terms.
-    bonus : float
-        The size of the terminal reward or penalty.
-
-    Returns
-    -------
-    Tuple[float, bool, bool, bool, bool]
-        The reward, then whether the vehicle reached the origin, left the
-        bounding box (judged on the state before the step), ran out of time, and
-        tipped (judged on the state before the step).
+    ``des_unit_vec``: Unit vector from the start position to the origin, shape (3,).
+    ``t``: The vehicle's time (s) after the step.
+    ``dt``: The time step (s).
+    ``bounding_box``: Side of the cube centered at the origin in which the vehicle must stay
+      (m).
+    ``proximity``: Distance from the origin at which the vehicle has reached it (m).
+    ``max_angle``: Roll or pitch angle above which the vehicle has tipped (rad).
+    ``period``: The maximum duration of the episode (s).
     """
     dist = np.sqrt(nstate[0]**2 + nstate[1]**2 + nstate[2]**2)
     reached = dist <= proximity

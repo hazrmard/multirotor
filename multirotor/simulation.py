@@ -1,4 +1,4 @@
-from typing import Callable, List, NamedTuple, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 from copy import deepcopy
 
 import numpy as np
@@ -18,6 +18,8 @@ from .dynamics import (
     rhs_body_with_motors_blade_element, rhs_motor_only, N_BODY_STATES
 )
 from .helpers import control_allocation_matrix
+from .tuples import (
+    BatteryVehicle, BodyVehicle, MotorsVehicle, VehicleState, body_arguments, rhs_arguments)
 
 
 Integrator = Callable[[Callable, np.ndarray, float, tuple], np.ndarray]
@@ -55,25 +57,6 @@ def odeint_integrator(
 
 
 
-class KernelParams(NamedTuple):
-    """
-    float64 copies of a vehicle's parameters, in the order the right-hand sides
-    in `multirotor.dynamics` take them after their per-step arguments.
-    """
-    g: float
-    mass: float
-    inertia_matrix: np.ndarray
-    inertia_matrix_inverse: np.ndarray
-    prop_params: np.ndarray
-    "The `PropellerData.params` matrix."
-    motor_params: np.ndarray
-    "The `MotorData.params` matrix, or None without motors."
-    clockwise: np.ndarray
-    positions: np.ndarray
-    "Position of each propeller relative to the center of mass, shape (3, n)."
-
-
-
 class Propeller:
     """
     Models the thrust and aerodynamics of the propeller blades spinning at a
@@ -108,26 +91,7 @@ class Propeller:
         cls, data: PropellerData, i: int, params: PropellerParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> 'Propeller':
-        """
-        Create a propeller over an existing data object, at index ``i``.
-
-        Parameters
-        ----------
-        data : PropellerData
-            The shared data object.
-        i : int
-            The index of this propeller in ``data``.
-        params : PropellerParams
-            The parameters of this propeller.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The solver used to advance the motor, if any.
-
-        Returns
-        -------
-        Propeller
-        """
+        """Create a propeller over an existing data object, at index ``i``."""
         propeller = cls.__new__(cls)
         propeller._attach(data, i, params, simulation, integrator)
         return propeller
@@ -137,6 +101,7 @@ class Propeller:
         self, data: PropellerData, i: int, params: PropellerParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
+        """Make this propeller a view of column ``i`` of ``data``."""
         self.params: PropellerParams = params
         self.simulation: SimulationParams = simulation
         self._data: PropellerData = data
@@ -161,17 +126,18 @@ class Propeller:
         "Radians per second"
         return float(self._data.speed[self._i])
     @speed.setter
-    def speed(self, speed: float):
+    def speed(self, speed: float) -> None:
         self._data.speed[self._i] = speed
 
 
-    def reset(self):
+    def reset(self) -> None:
+        "Stop the propeller, and its motor."
         self.speed = 0.
         if self.motor is not None:
             self.motor.reset()
 
 
-    def apply_speed(self, u: float, **kwargs) -> float:
+    def apply_speed(self, u: float, **kwargs: Any) -> float:
         """
         Calculate the speed of the propeller after the speed signal takes effect.
         This method is *pure*: it leaves the state of the propeller unchanged.
@@ -181,6 +147,8 @@ class Propeller:
         ----------
         u : float
             Radians per second speed command
+        **kwargs : Any
+            Passed to `Motor.apply_speed`, if there is a motor.
 
         Returns
         -------
@@ -192,7 +160,7 @@ class Propeller:
         return u
 
 
-    def step(self, u: float, **kwargs) -> float:
+    def step(self, u: float, **kwargs: Any) -> float:
         """
         Step through the speed command. This method changes the state of the
         propeller.
@@ -201,6 +169,8 @@ class Propeller:
         ----------
         u : float
             Speed command in radians per second.
+        **kwargs : Any
+            Passed to `Motor.step`, if there is a motor.
 
         Returns
         -------
@@ -214,13 +184,28 @@ class Propeller:
         return self.speed
 
 
-    def _thrust_constant(self, speed,airstream_velocity: np.ndarray=np.zeros(3)) -> float:
+    def _thrust_constant(
+        self, speed: float, airstream_velocity: np.ndarray = np.zeros(3)
+    ) -> float:
+        """
+        Thrust that is ``k_thrust * speed**2``.
+
+        ``speed``: The propeller's speed (rad/s).
+        Returns: The thrust (N).
+        """
         return self.params.k_thrust * speed**2
 
 
     def _thrust_blade_element_model(
-        self, speed, airstream_velocity: np.ndarray=np.zeros(3)
+        self, speed: float, airstream_velocity: np.ndarray = np.zeros(3)
     ) -> float:
+        """
+        Thrust from the blade-element model.
+
+        ``speed``: The propeller's speed (rad/s).
+        ``airstream_velocity``: The airstream velocity at the propeller, shape (3,).
+        Returns: The thrust (N).
+        """
         p = self.params
         return thrust_blade_element_model(
             speed, airstream_velocity,
@@ -230,11 +215,13 @@ class Propeller:
 
     @property
     def state(self) -> float:
+        "The propeller's state: its speed (rad/s)."
         return self.speed
 
 
     @property
     def rpm(self) -> float:
+        "The propeller's speed in revolutions per minute."
         return self.speed * 60. / (2. * np.pi)
 
 
@@ -273,26 +260,7 @@ class Motor:
         cls, data: MotorData, i: int, params: MotorParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> 'Motor':
-        """
-        Create a motor over an existing data object, at index ``i``.
-
-        Parameters
-        ----------
-        data : MotorData
-            The shared data object.
-        i : int
-            The index of this motor in ``data``.
-        params : MotorParams
-            The parameters of this motor.
-        simulation : SimulationParams
-            The simulation parameters.
-        integrator : Integrator
-            The solver used to advance the motor speed.
-
-        Returns
-        -------
-        Motor
-        """
+        """Create a motor over an existing data object, at index ``i``."""
         motor = cls.__new__(cls)
         motor._attach(data, i, params, simulation, integrator)
         return motor
@@ -302,6 +270,7 @@ class Motor:
         self, data: MotorData, i: int, params: MotorParams,
         simulation: SimulationParams, integrator: Integrator
     ) -> None:
+        """Make this motor a view of column ``i`` of ``data``."""
         self.params: MotorParams = params
         self.simulation: SimulationParams = simulation
         self.integrator: Integrator = integrator
@@ -314,27 +283,37 @@ class Motor:
         "Radians per second"
         return float(self._data.speed[self._i])
     @speed.setter
-    def speed(self, speed: float):
+    def speed(self, speed: float) -> None:
         self._data.speed[self._i] = speed
 
 
     @property
     def voltage(self) -> float:
+        "The voltage (V) across the motor at the last step."
         return float(self._data.voltage[self._i])
     @voltage.setter
-    def voltage(self, voltage: float):
+    def voltage(self, voltage: float) -> None:
         self._data.voltage[self._i] = voltage
 
 
     @property
     def current(self) -> float:
+        "The current (A) through the motor at the last step."
         return float(self._data.current[self._i])
     @current.setter
-    def current(self, current: float):
+    def current(self, current: float) -> None:
         self._data.current[self._i] = current
 
 
     def reset(self) -> float:
+        """
+        Stop the motor, with no voltage and no current.
+
+        Returns
+        -------
+        float
+            The motor's speed, 0.
+        """
         self.speed = 0.
         self.voltage = 0.
         self.current = 0.
@@ -412,7 +391,9 @@ class Motor:
     def _integrate(self, u: float, max_voltage: float) -> np.ndarray:
         """
         Speed of this motor after one time step, without changing its state.
-        Returns an array of shape (1,).
+
+        ``max_voltage``: The voltage limit (V).
+        Returns: The speed (rad/s), shape (1,).
         """
         speed = self._data.speed[self._i:self._i + 1].copy()
         args = (np.asarray([u], dtype=float), float(max_voltage), self._params_column())
@@ -435,6 +416,14 @@ class Battery:
 
 
     def __init__(self, params: BatteryParams, simulation: SimulationParams) -> None:
+        """
+        Parameters
+        ----------
+        params : BatteryParams
+            The battery's parameters. A battery without a model has a constant voltage.
+        simulation : SimulationParams
+            The simulation parameters.
+        """
         self.params = deepcopy(params)
         self.simulation = simulation
         self.voltage: float = None
@@ -490,10 +479,20 @@ class Battery:
         return 0. if self.cutoff else self.voltage
 
 
-    def open_circuit_voltage(self, charge_drawn: float=None) -> float:
+    def open_circuit_voltage(self, charge_drawn: Optional[float] = None) -> float:
         """
         Open-circuit voltage (V) after drawing ``charge_drawn`` coulombs from a
         full battery. By default, the charge drawn so far.
+
+        Parameters
+        ----------
+        charge_drawn : float, optional
+            The charge (C) drawn from a full battery.
+
+        Returns
+        -------
+        float
+            The open-circuit voltage (V).
         """
         if not self.has_model:
             return self.params.max_voltage
@@ -502,7 +501,7 @@ class Battery:
         return battery_ocv(soc, self._ocv_soc, self._ocv_voltage)
 
 
-    def reset(self):
+    def reset(self) -> float:
         """
         Return the battery to full charge.
 
@@ -521,10 +520,11 @@ class Battery:
 
     @property
     def state(self) -> float:
+        "The battery's state: its terminal voltage (V)."
         return self.voltage
 
 
-    def step(self, load: float=None):
+    def step(self, load: Optional[float] = None) -> None:
         """
         Draw a constant current from the battery for one time step. Without a
         load, or without a battery model, this does nothing.
@@ -553,11 +553,6 @@ class Battery:
         return self._params_vector[BATTERY_CAPACITY] - self.charge_drawn
 
 
-    def _kernel_params(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The battery's arguments for `dynamics.rhs_body_with_motors_and_battery`."""
-        return self._params_vector, self._ocv_soc, self._ocv_voltage
-
-
     def _end_step(
         self, charge: float, motor_speeds: np.ndarray, u: np.ndarray,
         motor_params: np.ndarray
@@ -565,21 +560,7 @@ class Battery:
         """
         Update the battery after `Multirotor` integrated one time step.
 
-        Parameters
-        ----------
-        charge : float
-            Charge (C) drawn during the step.
-        motor_speeds : np.ndarray
-            Motor speeds at the end of the step.
-        u : np.ndarray
-            Speed signals during the step.
-        motor_params : np.ndarray
-            The `MotorData.params` matrix.
-
-        Returns
-        -------
-        float
-            The motors' voltage limit at the end of the step.
+        ``charge``: Charge (C) drawn during the step.
         """
         (self.charge_drawn, self.current, self.voltage, self.cutoff, self.overload,
          motor_voltage_limit) = battery_end_step(
@@ -591,7 +572,7 @@ class Battery:
 
     def _check_cutoff(self) -> None:
         """Cut off the motors if the terminal voltage is below min_voltage."""
-        if self.voltage < self.params.min_voltage:
+        if self.voltage < self._params_vector[BATTERY_MIN_VOLTAGE]:
             self.cutoff = True
 
 
@@ -663,17 +644,30 @@ class Multirotor:
             self._rhs = rhs_body_with_motors
         else:
             self._rhs = rhs_body_with_motors_blade_element
-        # Copied before reset() casts the parameters to the vehicle's dtype
-        self._kernel_params = KernelParams(
-            g=float(self.simulation.g),
-            mass=float(self.params.mass),
-            inertia_matrix=self.params.inertia_matrix.astype(float),
-            inertia_matrix_inverse=self.params.inertia_matrix_inverse.astype(float),
+        # float64 copies of the parameters, made before reset() casts them to the vehicle's
+        # dtype. The arrays of the propellers, motors and battery are the live ones. The
+        # voltage limit and the disturbance of a vehicle with motors are placeholders: a step
+        # passes the current ones, and `rollout_params` fills in the voltage limit.
+        fields = dict(
+            g=float(self.simulation.g), mass=float(self.params.mass),
+            inertia=self.params.inertia_matrix.astype(float),
+            inertia_inverse=self.params.inertia_matrix_inverse.astype(float),
             prop_params=self._data.params,
-            motor_params=None if self._data.motors is None else self._data.motors.params,
             clockwise=np.asarray(self.params.clockwise, dtype=float),
-            positions=self.params.propeller_vectors.astype(float),
-        )
+            positions=self.params.propeller_vectors.astype(float))
+        if self._data.motors is None:
+            self._vehicle = BodyVehicle(**fields)
+        else:
+            fields.update(
+                motor_params=self._data.motors.params,
+                max_voltage=float(self.battery.motor_voltage_limit), disturbance=np.zeros(6))
+            if self.battery.has_model:
+                b = self.battery
+                self._vehicle = BatteryVehicle(
+                    **fields, battery_params=b._params_vector, ocv_soc=b._ocv_soc,
+                    ocv_voltage=b._ocv_voltage)
+            else:
+                self._vehicle = MotorsVehicle(**fields)
         self.alloc, self.alloc_inverse = control_allocation_matrix(self.params)
         self.reset()
 
@@ -706,7 +700,7 @@ class Multirotor:
 
 
     @property
-    def position(self):
+    def position(self) -> np.ndarray:
         """Position in the inertial frame."""
         return self.state[0:3]
 
@@ -739,6 +733,88 @@ class Multirotor:
         return a_inertial
 
 
+    def rollout_params(self) -> Union[BodyVehicle, MotorsVehicle, BatteryVehicle]:
+        """
+        The parameters of this vehicle as the tuple that `multirotor.rollout` takes,
+        with float64 copies of the arrays: `BodyVehicle`, `MotorsVehicle` (with motors) or
+        `BatteryVehicle` (with motors and a battery model). The type says which of
+        ``closed_loop_body``, ``closed_loop_motors`` and ``closed_loop_motors_battery``
+        takes it (`multirotor.tuples.kind_of`).
+
+        Returns
+        -------
+        BodyVehicle, MotorsVehicle or BatteryVehicle
+            The parameters.
+
+        Raises
+        ------
+        ValueError
+            For blade-element thrust, which the rollout does not support.
+        """
+        if not self._data.use_thrust_constant:
+            raise ValueError('Blade-element thrust is not supported.')
+        v = self._vehicle
+        copy = type(v)(*(float(f) if np.ndim(f) == 0 else np.array(f, float) for f in v))
+        if self._data.motors is not None:
+            copy = copy._replace(max_voltage=float(self.battery.motor_voltage_limit))
+        return copy
+
+
+    def rollout_state(self) -> VehicleState:
+        """
+        The state of this vehicle as the `multirotor.tuples.VehicleState` that
+        `multirotor.rollout` starts from, with float64 copies of the arrays.
+
+        Returns
+        -------
+        VehicleState
+            The state.
+        """
+        x = np.array(self.state, float)
+        aux = np.zeros(3)
+        if self._data.motors is not None:
+            x = np.concatenate((x, self._data.motors.speed.astype(float)))
+            if self.battery.has_model:
+                b = self.battery
+                aux = np.array((b.charge_drawn, float(b.cutoff), float(b.overload)))
+        return VehicleState(x, aux, np.array(self.acceleration, float), float(self.t))
+
+
+    def set_rollout_state(self, state: VehicleState) -> None:
+        """
+        Continue from a `multirotor.tuples.VehicleState`, such as the one a rollout returns.
+
+        The motors' voltages and currents and the battery's voltage and current are outputs
+        of a step, not state. They are updated by the next step.
+
+        Parameters
+        ----------
+        state : VehicleState
+            The state to continue from.
+
+        Raises
+        ------
+        ValueError
+            If the state is not that of this kind of vehicle.
+        """
+        x = np.asarray(state.x, float)
+        expected = self.rollout_state().x.shape
+        if x.shape != expected:
+            raise ValueError(f'The vehicle state has shape {x.shape}; expected {expected}.')
+        n_body = self.state.shape[0]
+        self.state = x[:n_body].astype(self.dtype)
+        self._dxdt[3:6] = np.asarray(state.acceleration, float)
+        self.t = float(state.t)
+        if self._data.motors is not None:
+            self._data.motors.speed[:] = x[n_body:]
+            if self.battery.has_model:
+                battery = self.battery
+                battery.charge_drawn = float(state.aux[0])
+                battery.cutoff, battery.overload = bool(state.aux[1]), bool(state.aux[2])
+                battery.current = 0.
+                battery.voltage = 0. if battery.empty else battery.open_circuit_voltage()
+
+
 
     @property
     def orientation(self) -> np.ndarray:
@@ -760,6 +836,7 @@ class Multirotor:
 
     @property
     def weight(self) -> float:
+        "The vehicle's weight (N)."
         return self.simulation.g * self.params.mass
 
 
@@ -799,7 +876,7 @@ class Multirotor:
         """Propeller speeds (rad/s). A copy, not a view of the internal array."""
         return np.array(self._data.speed, self.dtype)
     @speeds.setter
-    def speeds(self, speeds: np.ndarray):
+    def speeds(self, speeds: np.ndarray) -> None:
         self._step_propellers(speeds)
 
 
@@ -807,6 +884,9 @@ class Multirotor:
         """
         Speeds of all motors after one time step under speed signals ``u``,
         integrating the motors on their own, without changing their state.
+
+        ``u``: The speed signals, shape (n,).
+        Returns: The motor speeds (rad/s), shape (n,).
         """
         motors = self._data.motors
         args = (
@@ -822,6 +902,9 @@ class Multirotor:
         Propeller speeds after one time step under speed signals ``u``, without
         changing the state of the propellers. Without motors, speed signals take
         effect instantaneously.
+
+        ``u``: The speed signals, shape (n,).
+        Returns: The propeller speeds (rad/s), shape (n,).
         """
         if self._data.motors is None:
             return np.asarray(u)
@@ -834,6 +917,10 @@ class Multirotor:
         """
         Set motor speeds, and the voltages and currents at those speeds under
         speed signals ``u`` and voltage limit ``max_voltage``.
+
+        ``speed``: The motor speeds (rad/s), shape (n,).
+        ``u``: The speed signals, shape (n,).
+        ``max_voltage``: The voltage limit (V).
         """
         motors = self._data.motors
         motors.speed[:] = speed
@@ -846,6 +933,8 @@ class Multirotor:
         """
         Advance all propellers (and motors) by one time step under speed signals
         ``u``, on their own.
+
+        ``u``: The speed signals, shape (n,).
         """
         if self._data.motors is None:
             self._data.speed[:] = u
@@ -858,29 +947,15 @@ class Multirotor:
         """
         Thrust (N) of each propeller.
 
-        Parameters
-        ----------
-        speeds : np.ndarray
-            Propeller speeds (rad/s), shape (n,).
-        airstream_velocities : np.ndarray
-            Airstream velocity at each propeller, shape (3, n). Only used by the
-            blade-element thrust model.
-
-        Returns
-        -------
-        np.ndarray
-            Thrust of each propeller, shape (n,).
+        ``speeds``: Propeller speeds (rad/s), shape (n,).
+        ``airstream_velocities``: Airstream velocity at each propeller, shape (3, n). Only used
+          by the blade-element thrust model.
+        Returns: Thrust of each propeller, shape (n,).
         """
         if self._data.use_thrust_constant:
             return self._data.params[PROP_K_THRUST] * speeds**2
         return thrusts_blade_element_model(
             speeds, airstream_velocities, self._data.params, self.simulation.rho)
-
-
-    def _body_kernel_params(self) -> Tuple[float, float, np.ndarray, np.ndarray]:
-        """Gravity, mass, inertia matrix and its inverse: the parameters `rhs_body` takes."""
-        p = self._kernel_params
-        return p.g, p.mass, p.inertia_matrix, p.inertia_matrix_inverse
 
 
     def get_forces_torques(self, speeds: np.ndarray, state: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -918,7 +993,9 @@ class Multirotor:
         return forces, torques.astype(self.dtype)
 
 
-    def dxdt_dynamics(self, t: float, x: np.ndarray, u: np.ndarray, params=None):
+    def dxdt_dynamics(
+        self, t: float, x: np.ndarray, u: np.ndarray, params: Optional[dict] = None
+    ) -> np.ndarray:
         """
         Calculate the rate of change of state given the dynamics (forces, torques)
         acting on the system.
@@ -931,6 +1008,9 @@ class Multirotor:
             State of the vehicle.
         u : np.ndarray
             A 6-vector of forces and torques.
+        params : dict, optional
+            Ignored. Present so that the method has the signature that the ``control``
+            library calls.
 
         Returns
         -------
@@ -945,13 +1025,14 @@ class Multirotor:
         # forces, torques = self.get_forces_torques(u, x)
         u = np.asarray(u, dtype=float)
         return rhs_body(
-            t, np.asarray(x, dtype=float), u[:3], u[3:], *self._body_kernel_params())
+            t, np.asarray(x, dtype=float), u[:3], u[3:], *body_arguments(self._vehicle))
 
 
     def dxdt_speeds(
         self, t: float, x: np.ndarray, u: np.ndarray,
-        disturb_forces: np.ndarray=0., disturb_torques: np.ndarray=0., params=None
-    ):
+        disturb_forces: np.ndarray=0., disturb_torques: np.ndarray=0.,
+        params: Optional[dict] = None
+    ) -> np.ndarray:
         """
         Calculate the rate of change of state given the propeller speeds on the
         system (rad/s).
@@ -975,6 +1056,9 @@ class Multirotor:
             Disturbing x,y,z forces in the vehicle's local frame, by default 0.
         disturb_torques : np.ndarray, optional
             Disturbing x,y,z torques in the vehicle's local frame, by default 0.
+        params : dict, optional
+            Ignored. Present so that the method has the signature that the ``control``
+            library calls.
 
         Returns
         -------
@@ -989,7 +1073,7 @@ class Multirotor:
             t, np.asarray(x, dtype=float),
             forces.astype(float) + disturb_forces,
             torques.astype(float) + disturb_torques,
-            *self._body_kernel_params())
+            *body_arguments(self._vehicle))
 
 
     def step_dynamics(self, u: np.ndarray) -> np.ndarray:
@@ -1010,7 +1094,7 @@ class Multirotor:
         """
         self.t += self.simulation.dt
         u = np.asarray(u, dtype=float)
-        args = (u[:3], u[3:]) + self._body_kernel_params()
+        args = (u[:3], u[3:]) + body_arguments(self._vehicle)
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
@@ -1067,19 +1151,12 @@ class Multirotor:
         fixed over the step, so they are calculated once instead of at every
         evaluation of the derivative.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals (rad/s).
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
+        ``u``: Speed signals (rad/s).
         """
         forces, torques = self.get_forces_torques(u, self.state)
         forces = forces.astype(float) + disturb_forces
         torques = torques.astype(float) + disturb_torques
-        args = (forces, torques) + self._body_kernel_params()
+        args = (forces, torques) + body_arguments(self._vehicle)
         x0 = self.state.astype(float)
         self._dxdt = self._rhs_body(self.t, x0, *args).astype(self.dtype)
         self.state = self.integrator(
@@ -1097,14 +1174,7 @@ class Multirotor:
         time step. Thrust depends on the airstream, so forces are recalculated
         at every evaluation of the derivative.
 
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals (rad/s).
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
+        ``u``: Speed signals (rad/s).
         """
         x0 = self.state.astype(float)
         self._dxdt = self.dxdt_speeds(
@@ -1125,15 +1195,6 @@ class Multirotor:
         """
         Advance the body and the motors by one time step, integrating them
         together.
-
-        Parameters
-        ----------
-        u : np.ndarray
-            Speed signals.
-        disturb_forces : np.ndarray
-            Disturbing x,y,z forces in the vehicle's local frame.
-        disturb_torques : np.ndarray
-            Disturbing x,y,z torques in the vehicle's local frame.
         """
         motors = self._data.motors
         battery = self.battery
@@ -1145,15 +1206,16 @@ class Multirotor:
         if battery.has_model:
             # One more state: the charge drawn during this step
             x0 = np.append(x0, 0.)
-            args = (u, battery.cutoff, disturbance) + self._kernel_params \
-                   + battery._kernel_params() + (battery.charge_drawn,)
+            args = rhs_arguments(self._vehicle, u, battery.cutoff, disturbance) \
+                   + (battery.charge_drawn,)
         elif self._data.use_thrust_constant:
-            args = (u, float(battery.motor_voltage_limit), disturbance) \
-                   + self._kernel_params
+            args = rhs_arguments(
+                self._vehicle, u, float(battery.motor_voltage_limit), disturbance)
         else:
             # Blade-element thrust also needs the air density
-            args = (u, float(battery.motor_voltage_limit), disturbance) \
-                   + self._kernel_params + (float(self.simulation.rho),)
+            args = rhs_arguments(
+                self._vehicle, u, float(battery.motor_voltage_limit), disturbance) \
+                   + (float(self.simulation.rho),)
         self._dxdt = self._rhs(self.t, x0, *args)[:N_BODY_STATES].astype(self.dtype)
         x = self.integrator(self._rhs, x0, self.simulation.dt, args)
 
@@ -1194,7 +1256,7 @@ class Multirotor:
     def nonlinear_dynamics_controls_system(
         self, linearize: bool=False, perturbation: float=1e-1,
         about_state: np.ndarray=0, about_action: np.ndarray=0
-    ):
+    ) -> Any:
         """
         Create a system representation using the python controls library. The
         system takes net forces and torques as input.
@@ -1234,7 +1296,7 @@ class Multirotor:
     def nonlinear_speeds_controls_system(
         self, linearize: bool=False, perturbation: float=1e-1,
         about_state: np.ndarray=0, about_action: np.ndarray=0
-    ):
+    ) -> Any:
         """
         Create a system representation using the python controls library. The
         system takes propeller speed signals as input.

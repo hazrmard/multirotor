@@ -217,7 +217,9 @@ class PosController(PIDController):
         # if leash is very small such that vehicle will cover that distance under
         # current velocity, then a leash is not needed. It is more useful for
         # larger errors and bigger speeds.
-        leash = np.inf if leash <= (vel_mag * self.vehicle.simulation.dt) else leash
+        # A leash below 1e-6 m is rounding noise of a vehicle at rest (see
+        # `multirotor.controller.cascade.LEASH_FLOOR`).
+        leash = np.inf if leash <= (vel_mag * self.vehicle.simulation.dt + 1e-6) else leash
         return leash
 
 
@@ -232,8 +234,8 @@ class PosController(PIDController):
             err_unit = err / (err_len + 1e-6)
             err_len = min(err_len, self.leash)
             err = err_unit * err_len
-            if persist: self.err = err
-            velocity = self.err_p = self.k_p * err
+            # The oracle used to store the leashed error as the previous error here,
+            # before the PID law below read it; fixed together with the kernel.
         if err_len > 0. and self.square_root_scaling:
             velocity = np.zeros_like(self.k_p)
             velocity[0] = sqrt_control(err[0], self.k_p[0], self.max_acceleration, dt)

@@ -31,7 +31,8 @@ class MotorParams:
     "Max allowed current"
 
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        "Fill in whichever of the torque and back-EMF constants is missing from the other."
         # See: https://www.motioncontroltips.com/faq-difference-between-torque-back-emf-motor-constant/
         # For an ideal square-wave motor, torque and back-emf constants are same
         self.k_torque = self.k_torque or self.k_emf
@@ -67,7 +68,8 @@ class PropellerParams:
     motor: MotorParams = None
     "The parameters of the motor to simulate speed, otherwise instantaneous."
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        "Derive the radius, area and blade angles from the diameter and pitch."
         # ensure torque function gets floats so adding float + int in the njit
         # torque function is not ignored
         self.moment_of_inertia = float(self.moment_of_inertia)
@@ -111,7 +113,18 @@ class BatteryParams:
     zero until it is reset. 0 disables the cutoff."""
 
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """
+        Check the battery's parameters.
+
+        Raises
+        ------
+        ValueError
+            If only one of ``ocv_soc`` and ``ocv_voltage`` is given, if they are not 1D, of
+            equal length and increasing, if the capacity is not positive, the internal
+            resistance is negative, or a battery model has neither a finite ``max_voltage``
+            nor a table.
+        """
         if (self.ocv_soc is None) != (self.ocv_voltage is None):
             raise ValueError('Give both ocv_soc and ocv_voltage, or neither.')
         if self.ocv_soc is not None:
@@ -151,7 +164,8 @@ class VehicleParams:
     "The battery parameters"
 
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        "Derive the propellers' positions and the inverse inertia matrix, and alternate their spin."
         self.nprops = len(self.propellers)
         "Number of propellers"
         self.distances = self.distances.astype(float)

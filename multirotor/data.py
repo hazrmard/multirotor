@@ -82,6 +82,7 @@ class MotorData:
 
 
     def __len__(self) -> int:
+        "The number of motors."
         return self.speed.shape[0]
 
 
@@ -159,6 +160,7 @@ class PropellerData:
 
 
     def __len__(self) -> int:
+        "The number of propellers."
         return self.speed.shape[0]
 
 

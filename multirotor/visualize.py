@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import time
 
 import numpy as np
@@ -15,9 +15,11 @@ from .helpers import DataLog
 
 
 
-def plot_datalog(log: DataLog, figsize=(21,10.5),
-    plots=('pos', 'vel', 'ctrl', 'traj'),
-    nrows=2, ncols=None) -> Dict[str, plt.Axes]:
+def plot_datalog(
+    log: DataLog, figsize: Tuple[float, float] = (21, 10.5),
+    plots: Sequence[str] = ('pos', 'vel', 'ctrl', 'traj'),
+    nrows: Optional[int] = 2, ncols: Optional[int] = None
+) -> Dict[str, plt.Axes]:
     """
     Plot recorded values from a Multirotor's flight. Including:
 
@@ -34,10 +36,15 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
         The datalog, where `datalog.done_logging()` has been called.
     figsize : tuple, optional
         The x/y dimensions of the figure, by default (21,10.5)
-    
+    plots : Sequence[str], optional
+        Which plots to draw: any of ``'pos'``, ``'vel'``, ``'ctrl'`` and ``'traj'``.
+    nrows, ncols : int, optional
+        The number of rows and columns of the grid of plots. Give one and the other is
+        chosen to fit the plots.
+
     Returns
     -------
-    Dict : Dict[str, plt.Axes]
+    Dict[str, plt.Axes]
         A dictionary of plot names mapping to Axes
     """
     nplots = len(plots)
@@ -129,7 +136,9 @@ def plot_datalog(log: DataLog, figsize=(21,10.5),
 
 
 
-def get_wind_quiver(heading: str, ax: plt.Axes, n=5, dim=2):
+def get_wind_quiver(
+    heading: str, ax: plt.Axes, n: int = 5, dim: int = 2
+) -> Tuple[Union[float, np.ndarray], ...]:
     """
     Create arrays of x,y,z coordinates for a quiver plot of wind.
 
@@ -228,7 +237,7 @@ class VehicleDrawing:
         return time.time() - start
 
 
-    def reset(self):
+    def reset(self) -> None:
         """Clear vehicle's trajectory, and place vehicle at its current position.
         """
         self.trajectory = [[], [], []]
@@ -239,10 +248,6 @@ class VehicleDrawing:
         """
         Add vehicle and trajectory lines to plot by initializing the Artist objects
         in `self.axis`.
-
-        Returns
-        -------
-        Tuple[Line3d]
         """
         for l in self.arm_lines:
             self.axis.add_line(l)
@@ -257,7 +262,7 @@ class VehicleDrawing:
 
 
 def make_drawing(
-        params: VehicleParams, body_axes: bool=False, make_2d: bool=False, scale_arms=1.
+        params: VehicleParams, body_axes: bool=False, make_2d: bool=False, scale_arms: float = 1.
     ) -> Tuple[List[Union[Line2D, Line3D]], np.ndarray, Union[Line2D, Line3D], List[Union[Line2D, Line3D]], np.ndarray]:
     """
     Create Atrist objects for vehicle arms, trajectory, body-frame axes. These will
@@ -271,7 +276,7 @@ def make_drawing(
         Whether to draw body-frame x/y/z axes, by default False
     make_2d : bool, optional
         Whether to return 2D lines (if using these for some 2D plot), by default False
-    scale_arms : _type_, optional
+    scale_arms : float, optional
         Factor by which to scale arm lengths. Useful when a small vehicle must be made
         visible in a plot with large bounds, by default 1.
 
@@ -382,15 +387,17 @@ def make_fig(
         xlim: Tuple[float, float],
         ylim: Tuple[float, float],
         zlim: Tuple[float, float],
-        **fig_kwargs
+        **fig_kwargs: Any
     ) -> Tuple[plt.Figure, Axes3D]:
     """
     Convenience function for creating a 3D axis.
 
     Parameters
     ----------
-    xlim/ylim/zlim : Tuple[float, float]
+    xlim, ylim, zlim : Tuple[float, float]
         Min/max coordinates in plot
+    **fig_kwargs : Any
+        Passed to `plt.figure`.
 
     Returns
     -------

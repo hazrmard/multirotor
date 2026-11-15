@@ -1,6 +1,6 @@
 import copy
 from argparse import Namespace
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 import optuna
@@ -65,7 +65,7 @@ def get_study(study_name: str=None, seed: int=0) -> optuna.Study:
 
 
 def run_sim(
-    env, traj: Trajectory,
+    env: DynamicsMultirotorEnv, traj: Trajectory,
     ctrl: Controller
 ) -> DataLog:
     """
@@ -105,7 +105,9 @@ def run_sim(
 
 
 
-def get_controller(m: Multirotor, scurve=False, args: Namespace=DEFAULTS) -> Controller:
+def get_controller(
+    m: Multirotor, scurve: bool = False, args: Namespace = DEFAULTS
+) -> Controller:
     """
     Create a `multirotor.controller.Controller` object with default values.
 
@@ -191,7 +193,9 @@ def get_fleet_controller(fleet: Fleet, args: Namespace=DEFAULTS) -> FleetControl
 
 
 
-def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, prefix='') -> dict:
+def make_controller_from_trial(
+    trial: optuna.Trial, args: Namespace = DEFAULTS, prefix: str = ''
+) -> dict:
     """
     Makes a dictionary of parameters which can be used with the `Controller.set_params()`
 
@@ -202,7 +206,7 @@ def make_controller_from_trial(trial: optuna.Trial, args: Namespace=DEFAULTS, pr
     args : Namespace, optional
         Namespace of optimization arguments, by default DEFAULTS
     prefix : str, optional
-        _description_, by default ''
+        A prefix for the names of the trial's parameters, by default ''
 
     Returns
     -------
@@ -407,6 +411,20 @@ def make_trial_controller(
     Make the controller that a trial or the final scoring flies: a copy of `ctrl`,
     or a `get_controller()` controller if `ctrl` is None, made for the vehicle of
     `env`. The caller's `ctrl` keeps its vehicle and parameters.
+
+    Parameters
+    ----------
+    env : DynamicsMultirotorEnv
+        The environment whose vehicle the controller flies.
+    ctrl : Controller, optional
+        The controller to copy.
+    args : Namespace, optional
+        The default settings, by default DEFAULTS
+
+    Returns
+    -------
+    Controller
+        The controller.
     """
     if ctrl is None:
         return get_controller(env.vehicle, args.scurve, args)
@@ -442,7 +460,22 @@ def make_objective(
     if starts is None:
         starts, _ = make_scenario_suites(args, seed, sp.dtype or np.float32)
 
-    def objective(trial: optuna.Trial, ctrl=ctrl):
+    def objective(trial: optuna.Trial, ctrl: Optional[Controller] = ctrl) -> float:
+        """
+        The score of the controller that a trial suggests.
+
+        Parameters
+        ----------
+        trial : optuna.Trial
+            The trial.
+        ctrl : Controller, optional
+            The controller to copy and set the trial's parameters on.
+
+        Returns
+        -------
+        float
+            The score to minimize: see `run_scenarios`.
+        """
         # objective is to navigate to origin from the initial positions
         ctrl_params = make_controller_from_trial(trial=trial, args=args)
         env = make_env(vp, sp, args)
@@ -460,7 +493,7 @@ def optimize(
     study_name: str=None,
     n_jobs: int=1,
     timeout: float=None,
-    verbosity=optuna.logging.WARNING
+    verbosity: int = optuna.logging.WARNING
 ) -> optuna.Study:
     """
     Search over parameter space to optimize controller parameters in `make_controller_from_trial()`.
@@ -484,7 +517,7 @@ def optimize(
         Number of parallel optimization jobs to run. If -1, sets to number of processors. By default 1
     timeout: float, optional
         Number of seconds to run the study for. By default, run until n_trials reached
-    verbosity : _type_, optional
+    verbosity : int, optional
         Logging level of `optuna.optimize()`, by default optuna.logging.WARNING
 
     Returns
