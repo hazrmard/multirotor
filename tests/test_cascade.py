@@ -169,6 +169,38 @@ def test_leashed_position_stage_does_not_use_the_leashed_error_as_the_previous_e
 
 
 
+def level_body_state(velocity, acceleration_noise=None):
+    "A level vehicle's body state with the given velocity, and its acceleration."
+    body_state = np.zeros(12)
+    body_state[3:6] = velocity
+    return body_state, np.zeros(3) if acceleration_noise is None else acceleration_noise
+
+
+
+@pytest.mark.parametrize('scale', (1e-17, 1e-14, 1e-10, 1e-8))
+def test_the_leash_is_off_for_a_vehicle_at_rest_whatever_the_rounding_noise(scale):
+    """
+    At rest a vehicle's speed and acceleration are rounding noise, and the leash compares
+    two quantities of that size. Whichever way the noise falls, the leash must be off, so
+    that two builds (or two integrators) that differ in the last digits fly alike.
+    """
+    rng = np.random.default_rng(3)
+    for _ in range(200):
+        body_state, acceleration = level_body_state(
+            rng.normal(size=3) * scale, rng.normal(size=3) * scale)
+        assert cascade.leash_distance(20., body_state, acceleration, .01) == np.inf
+
+
+
+def test_the_leash_still_applies_to_a_moving_vehicle():
+    "A fast vehicle that accelerates has a finite leash, shorter than its stopping distance."
+    body_state, acceleration = level_body_state([3., 0., 0.], np.array([1., 0., 0.]))
+    leash = cascade.leash_distance(2., body_state, acceleration, .01)
+    assert 0. < leash < np.inf
+    assert leash == pytest.approx(1. / 8. + 9. / 2.)
+
+
+
 def test_a_bare_pid_stage_applies_the_pid_law():
     params = np.zeros((K.N_PID_PARAMS, 1))
     params[K.PID_K_P], params[K.PID_K_I], params[K.PID_K_D] = 2., .5, .25

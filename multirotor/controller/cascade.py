@@ -108,6 +108,12 @@ from .data import (
 INF = float('inf')
 EPS = 1e-6
 "Added to a length that is divided by, so that a zero length gives zero."
+LEASH_FLOOR = 1e-6
+"""
+Below this distance (m) a leash is too short to mean anything, and is ignored. A vehicle that
+is level and at rest has a speed and acceleration of rounding-error size (1e-14 or less), and
+a leash of that size is decided by the noise, not by the vehicle.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +502,8 @@ def leash_distance(
     """
     The largest horizontal position error that the position controller acts on,
     given the vehicle's speed and acceleration. Infinite if the vehicle would
-    cover it in one simulation step anyway.
+    cover it in one simulation step anyway, or if it is shorter than `LEASH_FLOOR`
+    (a vehicle at rest, whose speed and acceleration are only noise).
 
     ``acceleration``: The vehicle's body-frame acceleration, shape (3,).
     Returns: The distance (m).
@@ -509,8 +516,9 @@ def leash_distance(
     vel_mag = _length2(vel)
     leash = xp.abs(acc_mag / (2 * k_p**2) + vel_mag**2 / (2 * acc_mag + EPS))
     # Skip the leash when the vehicle covers it within one time step at its
-    # current speed. The leash matters for large errors and high speeds.
-    return xp.select(leash <= vel_mag * sim_dt, INF, leash)
+    # current speed, or when it is too short to be more than noise. The leash matters
+    # for large errors and high speeds.
+    return xp.select(leash <= vel_mag * sim_dt + LEASH_FLOOR, INF, leash)
 
 
 

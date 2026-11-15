@@ -217,7 +217,9 @@ class PosController(PIDController):
         # if leash is very small such that vehicle will cover that distance under
         # current velocity, then a leash is not needed. It is more useful for
         # larger errors and bigger speeds.
-        leash = np.inf if leash <= (vel_mag * self.vehicle.simulation.dt) else leash
+        # A leash below 1e-6 m is rounding noise of a vehicle at rest (see
+        # `multirotor.controller.cascade.LEASH_FLOOR`).
+        leash = np.inf if leash <= (vel_mag * self.vehicle.simulation.dt + 1e-6) else leash
         return leash
 
 

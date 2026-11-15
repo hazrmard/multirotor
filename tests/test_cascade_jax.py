@@ -21,6 +21,20 @@ JAX = build(cascade.SOURCE, cascade.NAMES, 'jax', {**vars(cascade), **vars(JAX_C
 
 
 
+def test_jax_leash_matches_numba_at_rest_and_in_motion():
+    rng = np.random.default_rng(4)
+    for velocity, acceleration in (
+            (rng.normal(size=3) * 1e-14, rng.normal(size=3) * 1e-14),
+            (np.array([3., 0., 0.]), np.array([1., 0., 0.])),
+            (np.array([.5, -.2, 0.]), np.array([.1, .3, 0.]))):
+        body_state = np.zeros(12)
+        body_state[3:6] = velocity
+        expected = cascade.leash_distance(2., body_state, acceleration, .01)
+        got = float(JAX.leash_distance(2., jnp.asarray(body_state), jnp.asarray(acceleration), .01))
+        assert got == pytest.approx(expected, rel=1e-12)
+
+
+
 def test_jax_matches_numba():
     rng = np.random.default_rng(1)
     for leashing, sqrt_pos, sqrt_att, feed_forward, steps in OPTIONS[::3]:
