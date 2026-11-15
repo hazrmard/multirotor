@@ -122,6 +122,8 @@ a leash of that size is decided by the noise, not by the vehicle.
 # They serve the layers of the controller, from the bottom: the scalar PID law of one
 # channel (`_pid_scalar`), a channel function that adapts it to `xp.map_rows`, a stage
 # that maps a channel function over its channels, and the cascade that runs the stages.
+# The ones that several functions share are here; one that is the input of a single
+# function or pair of branches is defined above it.
 
 
 class ChannelState(NamedTuple):
@@ -154,39 +156,6 @@ class ChannelInput(NamedTuple):
     dt: float
 
 
-class ClimbChannelInput(NamedTuple):
-    """
-    The input to the climb stage's channel function: a `ChannelInput`, with the vehicle's roll,
-    pitch, yaw, mass and weight.
-    """
-    channel: ChannelInput
-    orientation: np.ndarray
-    mass: float
-    weight: float
-
-
-class ChannelWithError(NamedTuple):
-    """
-    The input to `_pid_terms` and `_sqrt_terms`, between which ``xp.cond`` chooses: a
-    `ChannelInput` and the error of the stage, already computed. The square-root controller
-    takes the error, and the PID law takes the measurement.
-    """
-    channel: ChannelInput
-    err: np.ndarray
-
-
-class LeashInput(NamedTuple):
-    """
-    The input to `_leashed` and `_unleashed`, which shorten the position error: the position
-    stage's PID parameters, its error, and the vehicle's body state and acceleration.
-    """
-    pid_params: np.ndarray
-    err: np.ndarray
-    body_state: np.ndarray
-    acceleration: np.ndarray
-    sim_dt: float
-
-
 class CascadeStepInputs(NamedTuple):
     """
     The input to a controller step, besides the controller's state, memo and step count.
@@ -212,17 +181,6 @@ class CascadeStepInputs(NamedTuple):
     leashing: bool
     square_root_position: bool
     square_root_attitude: bool
-
-
-class StageBranchInput(NamedTuple):
-    """
-    The input to a branch of the controller step, which runs a group of stages or skips them:
-    the controller's state matrix ``x``, its `multirotor.tuples.Memo`, and the
-    `CascadeStepInputs`. A branch returns the new ``(x, memo)``.
-    """
-    x: np.ndarray
-    memo: Memo
-    inputs: CascadeStepInputs
 
 
 def _clip(value: float, limit: float) -> float:
@@ -302,6 +260,17 @@ def _velocity_channel(i: int, c: ChannelInput) -> ChannelState:
 
 
 
+class ClimbChannelInput(NamedTuple):
+    """
+    The input to the climb stage's channel function: a `ChannelInput`, with the vehicle's roll,
+    pitch, yaw, mass and weight.
+    """
+    channel: ChannelInput
+    orientation: np.ndarray
+    mass: float
+    weight: float
+
+
 def _climb_channel(i: int, c: ClimbChannelInput) -> ChannelState:
     """
     The channel function of the climb stage: the PID law as a thrust force, tilted to
@@ -342,6 +311,16 @@ def sqrt_control(err: float, k_p: float, derr_dt2_lim: float, dt: float) -> floa
     bound = xp.select(dt != 0., xp.abs(err) / xp.select(dt == 0., 1., dt), INF)
     return xp.minimum(xp.maximum(-bound, rate), bound)
 
+
+
+class ChannelWithError(NamedTuple):
+    """
+    The input to `_pid_terms` and `_sqrt_terms`, between which ``xp.cond`` chooses: a
+    `ChannelInput` and the error of the stage, already computed. The square-root controller
+    takes the error, and the PID law takes the measurement.
+    """
+    channel: ChannelInput
+    err: np.ndarray
 
 
 def _sqrt_channel(i: int, c: ChannelWithError) -> ChannelState:
@@ -522,6 +501,18 @@ def leash_distance(
 
 
 
+class LeashInput(NamedTuple):
+    """
+    The input to `_leashed` and `_unleashed`, which shorten the position error: the position
+    stage's PID parameters, its error, and the vehicle's body state and acceleration.
+    """
+    pid_params: np.ndarray
+    err: np.ndarray
+    body_state: np.ndarray
+    acceleration: np.ndarray
+    sim_dt: float
+
+
 def _leashed(op: LeashInput) -> Tuple[np.ndarray, float]:
     """
     The position error shortened to the leash.
@@ -575,6 +566,17 @@ def position_stage(
 
 # ---------------------------------------------------------------------------
 # The cascade. A branch takes a `StageBranchInput` and returns the new `(x, memo)`.
+
+class StageBranchInput(NamedTuple):
+    """
+    The input to a branch of the controller step, which runs a group of stages or skips them:
+    the controller's state matrix ``x``, its `multirotor.tuples.Memo`, and the
+    `CascadeStepInputs`. A branch returns the new ``(x, memo)``.
+    """
+    x: np.ndarray
+    memo: Memo
+    inputs: CascadeStepInputs
+
 
 def _skip(op: StageBranchInput) -> Tuple[np.ndarray, Memo]:
     """

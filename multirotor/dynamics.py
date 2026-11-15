@@ -6,9 +6,9 @@ returns ``dx/dt`` for the whole integrated state ``x``.
 This module is the only code that knows the layout of ``x``. It slices ``x``,
 calls the subsystem equations in `multirotor.physics`, and stacks their results.
 
-The small functions and local named tuples here (``_no_current``, ``_supplying``,
-``MotorSupply``) are the branches of an ``xp.cond`` and their input; the reasons are
-given in `multirotor.physics`.
+The small functions ``_no_current`` and ``_supplying`` are the branches of an
+``xp.cond``, and `multirotor.tuples.MotorSupply` is their input; the reasons are given
+in `multirotor.physics`.
 
 The state ``x`` and the functions each right-hand side calls, for following the
 order of execution. An arrow goes from a caller to the function it calls. Every
@@ -60,6 +60,7 @@ import numpy as np
 
 from . import xp_numba as xp
 from .lazy import build
+from .tuples import MotorSupply
 
 from .coords import rotating_frame_derivative
 from .physics import (
@@ -70,28 +71,6 @@ from .physics import (
 
 N_BODY_STATES = 12
 "The first 12 elements of the integrated state are the body states."
-
-
-class BatteryState(NamedTuple):
-    """
-    The output of `battery_state`: the terminal voltage, the battery current, and the motors'
-    voltage limit.
-    """
-    terminal_voltage: float
-    current: float
-    voltage_limit: float
-
-
-class MotorSupply(NamedTuple):
-    """
-    The battery's supply to the motors: its source voltage, and the motors' speeds, signals
-    and parameters. The input to `_no_current` and `_supplying`.
-    """
-    open_circuit_voltage: float
-    speeds: np.ndarray
-    u: np.ndarray
-    motor_params: np.ndarray
-    battery_params: np.ndarray
 
 
 def rhs_body(
@@ -166,6 +145,16 @@ def rhs_body_with_motors(
             inertia_matrix, inertia_matrix_inverse),
         motor_acc(speeds, u, max_voltage, motor_params)))
 
+
+
+class BatteryState(NamedTuple):
+    """
+    The output of `battery_state`: the terminal voltage, the battery current, and the motors'
+    voltage limit.
+    """
+    terminal_voltage: float
+    current: float
+    voltage_limit: float
 
 
 def _no_current(op: MotorSupply) -> BatteryState:

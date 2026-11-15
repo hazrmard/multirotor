@@ -46,76 +46,14 @@ Rhs = Callable[[float, np.ndarray, tuple], np.ndarray]
 "A right-hand side ``f(t, x, args)`` of ``dx/dt``, with the arguments as one tuple."
 
 
-class BodyRhsArgs(NamedTuple):
-    """
-    The right-hand side arguments of a body-only vehicle: the inputs of `rhs_body` after ``t``
-    and ``x``.
-    """
-    forces: np.ndarray
-    torques: np.ndarray
-    g: float
-    mass: float
-    inertia: np.ndarray
-    inertia_inverse: np.ndarray
-
-
-class MotorsRhsArgs(NamedTuple):
-    """
-    The right-hand side arguments of a vehicle with motors: the inputs of
-    `rhs_body_with_motors` after ``t`` and ``x``.
-    """
-    u: np.ndarray
-    max_voltage: float
-    disturbance: np.ndarray
-    g: float
-    mass: float
-    inertia: np.ndarray
-    inertia_inverse: np.ndarray
-    prop_params: np.ndarray
-    motor_params: np.ndarray
-    clockwise: np.ndarray
-    positions: np.ndarray
-
-
-class BatteryRhsArgs(NamedTuple):
-    """
-    The right-hand side arguments of a vehicle with motors and a battery: the inputs of
-    `rhs_body_with_motors_and_battery` after ``t`` and ``x``.
-    """
-    u: np.ndarray
-    cutoff: bool
-    disturbance: np.ndarray
-    g: float
-    mass: float
-    inertia: np.ndarray
-    inertia_inverse: np.ndarray
-    prop_params: np.ndarray
-    motor_params: np.ndarray
-    clockwise: np.ndarray
-    positions: np.ndarray
-    battery_params: np.ndarray
-    ocv_soc: np.ndarray
-    ocv_voltage: np.ndarray
-    charge_drawn: float
-
-
-class Rk4Substep(NamedTuple):
-    """
-    One RK4 substep: the right-hand side, its start time, the substep length and the right-
-    hand side arguments. The input to `_substep`.
-    """
-    f: Rhs
-    t: float
-    h: float
-    args: tuple
-
-
 class RolloutSetup(NamedTuple):
     """
-    The setup of a rollout, which does not change from step to step: the vehicle's and the
+    The setup of a rollout, which does not change from step to step: the step function of
+    the vehicle (`step_body`, `step_motors` or `step_motors_battery`), the vehicle's and the
     controller's parameters, the targets, the time step, the RK4 substeps per step, and the
     number of controller steps taken before the rollout. The constant input to the loop.
     """
+    step: Callable
     vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]
     ctrl: ControllerParams
     targets: np.ndarray
@@ -157,6 +95,17 @@ def rk4_step(
 
 
 
+class Rk4Substep(NamedTuple):
+    """
+    One RK4 substep: the right-hand side, its start time, the substep length and the right-
+    hand side arguments. The input to `_substep`.
+    """
+    f: Rhs
+    t: float
+    h: float
+    args: tuple
+
+
 def integrate(
     f: Rhs, t: float, x: np.ndarray, dt: float, substeps: int, args: tuple
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -173,17 +122,50 @@ def _substep(x: np.ndarray, i: int, c: Rk4Substep) -> np.ndarray:
 
 
 
+class BodyRhsArgs(NamedTuple):
+    """
+    The right-hand side arguments of a vehicle without motors: the forces and torques of the
+    step, and the vehicle's parameters. The input to `_rhs_body` after ``t`` and ``x``.
+    """
+    forces: np.ndarray
+    torques: np.ndarray
+    vehicle: BodyVehicle
+
+
+class MotorsRhsArgs(NamedTuple):
+    """
+    The right-hand side arguments of a vehicle with motors: the speed signals of the step,
+    and the vehicle's parameters. The input to `_rhs_motors` after ``t`` and ``x``.
+    """
+    u: np.ndarray
+    vehicle: MotorsVehicle
+
+
+class BatteryRhsArgs(NamedTuple):
+    """
+    The right-hand side arguments of a vehicle with motors and a battery: the speed signals
+    of the step, whether the battery was cut off and the charge drawn before the step, and
+    the vehicle's parameters. The input to `_rhs_battery` after ``t`` and ``x``.
+    """
+    u: np.ndarray
+    cutoff: bool
+    charge_drawn: float
+    vehicle: BatteryVehicle
+
+
 def _rhs_body(t: float, x: np.ndarray, a: BodyRhsArgs) -> np.ndarray:
     """`rhs_body` with its arguments after ``t`` and ``x`` as one `BodyRhsArgs`."""
-    return rhs_body(t, x, a.forces, a.torques, a.g, a.mass, a.inertia, a.inertia_inverse)
+    v = a.vehicle
+    return rhs_body(t, x, a.forces, a.torques, v.g, v.mass, v.inertia, v.inertia_inverse)
 
 
 
 def _rhs_motors(t: float, x: np.ndarray, a: MotorsRhsArgs) -> np.ndarray:
     """`rhs_body_with_motors` with its arguments after ``t`` and ``x`` as one `MotorsRhsArgs`."""
+    v = a.vehicle
     return rhs_body_with_motors(
-        t, x, a.u, a.max_voltage, a.disturbance, a.g, a.mass, a.inertia, a.inertia_inverse,
-        a.prop_params, a.motor_params, a.clockwise, a.positions)
+        t, x, a.u, v.max_voltage, v.disturbance, v.g, v.mass, v.inertia, v.inertia_inverse,
+        v.prop_params, v.motor_params, v.clockwise, v.positions)
 
 
 
@@ -192,10 +174,11 @@ def _rhs_battery(t: float, x: np.ndarray, a: BatteryRhsArgs) -> np.ndarray:
     `rhs_body_with_motors_and_battery` with its arguments after ``t`` and ``x`` as one
     `BatteryRhsArgs`.
     """
+    v = a.vehicle
     return rhs_body_with_motors_and_battery(
-        t, x, a.u, a.cutoff, a.disturbance, a.g, a.mass, a.inertia, a.inertia_inverse,
-        a.prop_params, a.motor_params, a.clockwise, a.positions, a.battery_params, a.ocv_soc,
-        a.ocv_voltage, a.charge_drawn)
+        t, x, a.u, a.cutoff, v.disturbance, v.g, v.mass, v.inertia, v.inertia_inverse,
+        v.prop_params, v.motor_params, v.clockwise, v.positions, v.battery_params, v.ocv_soc,
+        v.ocv_voltage, a.charge_drawn)
 
 
 
@@ -212,9 +195,7 @@ def step_body(
         u, vehicle.prop_params, vehicle.clockwise, vehicle.positions)
     x, dxdt = integrate(
         _rhs_body, state.t, state.x, dt, substeps,
-        BodyRhsArgs(
-            forces, torques, vehicle.g, vehicle.mass, vehicle.inertia,
-            vehicle.inertia_inverse))
+        BodyRhsArgs(forces, torques, vehicle))
     return VehicleState(x, state.aux, dxdt[3:6], state.t + dt)
 
 
@@ -228,10 +209,7 @@ def step_motors(
     """
     x, dxdt = integrate(
         _rhs_motors, state.t, state.x, dt, substeps,
-        MotorsRhsArgs(
-            u, vehicle.max_voltage, vehicle.disturbance, vehicle.g, vehicle.mass,
-            vehicle.inertia, vehicle.inertia_inverse, vehicle.prop_params,
-            vehicle.motor_params, vehicle.clockwise, vehicle.positions))
+        MotorsRhsArgs(u, vehicle))
     return VehicleState(x, state.aux, dxdt[3:6], state.t + dt)
 
 
@@ -248,11 +226,7 @@ def step_motors_battery(
     x_ext = xp.concatenate((x, xp.array((0.,))))
     x_new, dxdt = integrate(
         _rhs_battery, state.t, x_ext, dt, substeps,
-        BatteryRhsArgs(
-            u, cutoff, vehicle.disturbance, vehicle.g, vehicle.mass, vehicle.inertia,
-            vehicle.inertia_inverse, vehicle.prop_params, vehicle.motor_params,
-            vehicle.clockwise, vehicle.positions, vehicle.battery_params, vehicle.ocv_soc,
-            vehicle.ocv_voltage, charge_drawn))
+        BatteryRhsArgs(u, cutoff, charge_drawn, vehicle))
     n = x.shape[0]
     end = battery_end_step(
         x_new[n], charge_drawn, cutoff, overload, x_new[N_BODY_STATES:n], u,
@@ -310,31 +284,15 @@ def _record(state: VehicleState, action: np.ndarray) -> np.ndarray:
 
 
 
-def _loop_step_body(carry: LoopState, i: int, c: RolloutSetup) -> Tuple[LoopState, np.ndarray]:
+def _loop_step(carry: LoopState, i: int, c: RolloutSetup) -> Tuple[LoopState, np.ndarray]:
     """
-    One step of a rollout of a vehicle without motors, as `multirotor.xp_numba.scan` takes
-    it: the controller drives, then the vehicle steps.
+    One step of a rollout, as `multirotor.xp_numba.scan` takes it: the controller drives,
+    then the vehicle steps with ``c.step``.
 
     Returns: The row of the trajectory, shape (16,).
     """
     drive = _drive(carry, i, c)
-    state = step_body(carry.state, drive.u, c.vehicle, c.dt, c.substeps)
-    return LoopState(drive.x, drive.memo, state), _record(state, drive.action)
-
-
-
-def _loop_step_motors(carry: LoopState, i: int, c: RolloutSetup) -> Tuple[LoopState, np.ndarray]:
-    "`_loop_step_body` for a vehicle with motors. The arguments and results are the same."
-    drive = _drive(carry, i, c)
-    state = step_motors(carry.state, drive.u, c.vehicle, c.dt, c.substeps)
-    return LoopState(drive.x, drive.memo, state), _record(state, drive.action)
-
-
-
-def _loop_step_motors_battery(carry: LoopState, i: int, c: RolloutSetup) -> Tuple[LoopState, np.ndarray]:
-    "`_loop_step_body` for a vehicle with motors and a battery. The arguments and results are the same."
-    drive = _drive(carry, i, c)
-    state = step_motors_battery(carry.state, drive.u, c.vehicle, c.dt, c.substeps)
+    state = c.step(carry.state, drive.u, c.vehicle, c.dt, c.substeps)
     return LoopState(drive.x, drive.memo, state), _record(state, drive.action)
 
 
@@ -351,6 +309,23 @@ def _carry0(state0: VehicleState, start: Optional[ControllerState]) -> Tuple[Loo
 def _result(carry: LoopState, n0: int, steps: int) -> Tuple[ControllerState, VehicleState]:
     """The final controller and vehicle states, as the tuples that a rollout starts from."""
     return ControllerState(carry.x, carry.memo, n0 + steps), carry.state
+
+
+
+def _closed_loop(
+    step: Callable, state0: VehicleState, vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle],
+    ctrl: ControllerParams, targets: np.ndarray, dt: float, substeps: int,
+    start: Optional[ControllerState]
+) -> Tuple[Tuple[ControllerState, VehicleState], np.ndarray]:
+    """
+    The rollout that the three ``closed_loop_*`` functions share: they differ in the step
+    function of the vehicle, ``step``. The other arguments and the results are theirs.
+    """
+    carry0, n0 = _carry0(state0, start)
+    carry, trajectory = xp.scan(
+        _loop_step, carry0, targets.shape[0],
+        RolloutSetup(step, vehicle, ctrl, targets, dt, substeps, n0))
+    return _result(carry, n0, targets.shape[0]), trajectory
 
 
 
@@ -392,11 +367,7 @@ def closed_loop_body(
         Per step, the vehicle's 12 body states after the step and the 4 controller
         outputs (thrust and torques) that drove it, shape (n, 16).
     """
-    carry0, n0 = _carry0(state0, start)
-    carry, trajectory = xp.scan(
-        _loop_step_body, carry0, targets.shape[0],
-        RolloutSetup(vehicle, ctrl, targets, dt, substeps, n0))
-    return _result(carry, n0, targets.shape[0]), trajectory
+    return _closed_loop(step_body, state0, vehicle, ctrl, targets, dt, substeps, start)
 
 
 
@@ -420,11 +391,7 @@ def closed_loop_motors(
     trajectory : np.ndarray
         The body states and controller outputs of each step, shape (n, 16).
     """
-    carry0, n0 = _carry0(state0, start)
-    carry, trajectory = xp.scan(
-        _loop_step_motors, carry0, targets.shape[0],
-        RolloutSetup(vehicle, ctrl, targets, dt, substeps, n0))
-    return _result(carry, n0, targets.shape[0]), trajectory
+    return _closed_loop(step_motors, state0, vehicle, ctrl, targets, dt, substeps, start)
 
 
 
@@ -448,18 +415,14 @@ def closed_loop_motors_battery(
     trajectory : np.ndarray
         The body states and controller outputs of each step, shape (n, 16).
     """
-    carry0, n0 = _carry0(state0, start)
-    carry, trajectory = xp.scan(
-        _loop_step_motors_battery, carry0, targets.shape[0],
-        RolloutSetup(vehicle, ctrl, targets, dt, substeps, n0))
-    return _result(carry, n0, targets.shape[0]), trajectory
+    return _closed_loop(step_motors_battery, state0, vehicle, ctrl, targets, dt, substeps, start)
 
 
 
 NAMES = (
     'rk4_step', 'integrate', '_substep', '_rhs_body', '_rhs_motors', '_rhs_battery', 'step_body', 'step_motors',
-    'step_motors_battery', '_speed', 'allocate', '_drive', '_record', '_loop_step_body', '_loop_step_motors',
-    '_loop_step_motors_battery', '_carry0', '_result', 'closed_loop_body', 'closed_loop_motors',
+    'step_motors_battery', '_speed', 'allocate', '_drive', '_record', '_loop_step', '_carry0', '_result',
+    '_closed_loop', 'closed_loop_body', 'closed_loop_motors',
     'closed_loop_motors_battery')
 SOURCE = {name: globals()[name] for name in NAMES}
 NOT_INLINED = ('step_body', 'step_motors', 'step_motors_battery')   # large, and called once per step

@@ -41,8 +41,8 @@ function per branch or loop body (``_empty`` and ``_interpolate`` are the two si
 one ``if``; ``_voltage`` is the body of a loop over the motors), and a named tuple as
 its input (``OcvCurve``, ``BatteryLoad``, ``MotorDrive``), built by the parent function
 from its locals. Both backends compile them to what the plain ``if`` or ``for`` would
-be. Such an input is named for what it holds and for what it is the input of, is local to
-the functions that use it, and is not exported. A result that callers use
+be. Such an input is named for what it holds and for what it is the input of, is defined
+above the functions that use it, and is not exported. A result that callers use
 (``Terminal``, ``OperatingPoint``, ``BatteryEnd``) is named so that both sides of a
 branch return the same type. The tuples that cross modules, such as the
 vehicle and the controller's parameters, are in `multirotor.tuples`.
@@ -62,6 +62,7 @@ from scipy.optimize import fsolve
 
 from . import xp_numba as xp
 from .lazy import build
+from .tuples import MotorSupply
 
 
 
@@ -193,9 +194,8 @@ def thrusts_blade_element_model(
 
 
 
-# Named tuples that the kernels below hand to each other, in place of tuples that the
-# receiver would unpack by position. Both backends treat them as free (see
-# `multirotor.tuples`).
+# The equations. A named tuple is defined above the first function that takes or returns
+# it; both backends treat them as free (see `multirotor.tuples`).
 
 
 class MotorDrive(NamedTuple):
@@ -207,107 +207,6 @@ class MotorDrive(NamedTuple):
     u: np.ndarray
     max_voltage: float
     motor_params: np.ndarray
-
-
-class PropellerForces(NamedTuple):
-    """
-    The forces of the propellers and their layout: thrusts, drag torques, spin directions and
-    positions. The input to the per-propeller loop body `_add_torque`.
-    """
-    thrusts: np.ndarray
-    drag_torques: np.ndarray
-    clockwise: np.ndarray
-    positions: np.ndarray
-
-
-class Terminal(NamedTuple):
-    """
-    The output of `battery_terminal`: the terminal voltage, and whether the battery can
-    deliver the power.
-    """
-    voltage: float
-    ok: bool
-
-
-class OperatingPoint(NamedTuple):
-    """
-    The output of `battery_operating_point`: the terminal voltage, the power the motors draw,
-    and whether the battery can deliver it.
-    """
-    terminal_voltage: float
-    power: float
-    ok: bool
-
-
-class BatteryEnd(NamedTuple):
-    """
-    The output of `battery_end_step`: the charge drawn, the battery current, the terminal
-    voltage, whether the battery has cut off, whether it was overloaded, and the motors'
-    voltage limit for the next step.
-    """
-    charge_drawn: float
-    current: float
-    voltage: float
-    cutoff: bool
-    overload: bool
-    voltage_limit: float
-
-
-class OcvCurve(NamedTuple):
-    """
-    The open-circuit-voltage curve of the battery and the state of charge to read it at. The
-    input to `_empty` and `_interpolate`.
-    """
-    soc: float
-    ocv_soc: np.ndarray
-    ocv_voltage: np.ndarray
-
-
-class BatteryLoad(NamedTuple):
-    """
-    The load on the battery: the power drawn, and the battery's source voltage and resistance.
-    The input to `_ideal` and `_loaded`.
-    """
-    power: float
-    open_circuit_voltage: float
-    internal_resistance: float
-
-
-class TerminalQuadratic(NamedTuple):
-    """
-    The quadratic that gives the terminal voltage: the source voltage and its discriminant.
-    The input to `_overloaded` and `_delivering`.
-    """
-    open_circuit_voltage: float
-    discriminant: float
-
-
-class OperatingPointSearch(NamedTuple):
-    """
-    The search for the battery's operating point: the operating point if no motor is voltage
-    limited, and the motors and the battery that a limited one is solved from. The input to
-    `_unlimited`, `_limited` and `_balance`.
-    """
-    point: OperatingPoint
-    speed: np.ndarray
-    u: np.ndarray
-    open_circuit_voltage: float
-    internal_resistance: float
-    motor_params: np.ndarray
-
-
-class BatteryAfterStep(NamedTuple):
-    """
-    The battery after a step, before its cutoff and overload are updated: its `BatteryEnd` as
-    it is for a battery that supplies nothing (``end.voltage`` is the open-circuit voltage and
-    ``end.voltage_limit`` is 0), and the motors and battery that a live one is updated from.
-    The input to `_dead` and `_live`.
-    """
-    end: BatteryEnd
-    motor_speeds: np.ndarray
-    u: np.ndarray
-    motor_params: np.ndarray
-    battery_params: np.ndarray
 
 
 def _voltage(i: int, c: MotorDrive) -> float:
@@ -407,6 +306,16 @@ def motor_power(
 
 
 
+class OcvCurve(NamedTuple):
+    """
+    The open-circuit-voltage curve of the battery and the state of charge to read it at. The
+    input to `_empty` and `_interpolate`.
+    """
+    soc: float
+    ocv_soc: np.ndarray
+    ocv_voltage: np.ndarray
+
+
 def _empty(op: OcvCurve) -> float:
     """The voltage of an empty battery: none."""
     return 0.
@@ -437,6 +346,25 @@ def battery_ocv(soc: float, ocv_soc: np.ndarray, ocv_voltage: np.ndarray) -> flo
 
 
 
+class Terminal(NamedTuple):
+    """
+    The output of `battery_terminal`: the terminal voltage, and whether the battery can
+    deliver the power.
+    """
+    voltage: float
+    ok: bool
+
+
+class BatteryLoad(NamedTuple):
+    """
+    The load on the battery: the power drawn, and the battery's source voltage and resistance.
+    The input to `_ideal` and `_loaded`.
+    """
+    power: float
+    open_circuit_voltage: float
+    internal_resistance: float
+
+
 def _ideal(op: BatteryLoad) -> Terminal:
     """A battery without resistance: the terminal voltage is the source voltage."""
     return Terminal(op.open_circuit_voltage, True)
@@ -450,6 +378,15 @@ def _loaded(op: BatteryLoad) -> Terminal:
         discriminant < 0., _overloaded, _delivering,
         TerminalQuadratic(op.open_circuit_voltage, discriminant))
 
+
+
+class TerminalQuadratic(NamedTuple):
+    """
+    The quadratic that gives the terminal voltage: the source voltage and its discriminant.
+    The input to `_overloaded` and `_delivering`.
+    """
+    open_circuit_voltage: float
+    discriminant: float
 
 
 def _overloaded(op: TerminalQuadratic) -> Terminal:
@@ -486,6 +423,30 @@ def battery_terminal(
         internal_resistance == 0., _ideal, _loaded,
         BatteryLoad(power, open_circuit_voltage, internal_resistance))
 
+
+
+class OperatingPoint(NamedTuple):
+    """
+    The output of `battery_operating_point`: the terminal voltage, the power the motors draw,
+    and whether the battery can deliver it.
+    """
+    terminal_voltage: float
+    power: float
+    ok: bool
+
+
+class OperatingPointSearch(NamedTuple):
+    """
+    The search for the battery's operating point: the operating point if no motor is voltage
+    limited, and the motors and the battery that a limited one is solved from. The input to
+    `_unlimited`, `_limited` and `_balance`.
+    """
+    point: OperatingPoint
+    speed: np.ndarray
+    u: np.ndarray
+    open_circuit_voltage: float
+    internal_resistance: float
+    motor_params: np.ndarray
 
 
 def _unlimited(op: OperatingPointSearch) -> OperatingPoint:
@@ -553,6 +514,31 @@ def battery_operating_point(
 
 
 
+class BatteryEnd(NamedTuple):
+    """
+    The output of `battery_end_step`: the charge drawn, the battery current, the terminal
+    voltage, whether the battery has cut off, whether it was overloaded, and the motors'
+    voltage limit for the next step.
+    """
+    charge_drawn: float
+    current: float
+    voltage: float
+    cutoff: bool
+    overload: bool
+    voltage_limit: float
+
+
+class BatteryAfterStep(NamedTuple):
+    """
+    The battery after a step, before its cutoff and overload are updated: its `BatteryEnd` as
+    it is for a battery that supplies nothing (``end.voltage`` is the open-circuit voltage and
+    ``end.voltage_limit`` is 0), and the `multirotor.tuples.MotorSupply` that a live one is
+    updated from. The input to `_dead` and `_live`.
+    """
+    end: BatteryEnd
+    supply: MotorSupply
+
+
 def _dead(op: BatteryAfterStep) -> BatteryEnd:
     """A battery that is cut off or empty supplies nothing."""
     return op.end
@@ -563,12 +549,13 @@ def _live(op: BatteryAfterStep) -> BatteryEnd:
     """
     A battery that supplies the motors: its voltage, and whether it cuts off or is overloaded.
     """
-    end = op.end
+    end, supply = op.end, op.supply
     point = battery_operating_point(
-        op.motor_speeds, op.u, end.voltage,
-        op.battery_params[BATTERY_INTERNAL_RESISTANCE], op.motor_params)
+        supply.speeds, supply.u, supply.open_circuit_voltage,
+        supply.battery_params[BATTERY_INTERNAL_RESISTANCE], supply.motor_params)
     # The cutoff takes effect from the next step
-    cutoff = end.cutoff | (point.terminal_voltage < op.battery_params[BATTERY_MIN_VOLTAGE])
+    cutoff = end.cutoff | (
+        point.terminal_voltage < supply.battery_params[BATTERY_MIN_VOLTAGE])
     return BatteryEnd(
         end.charge_drawn, end.current, point.terminal_voltage, cutoff,
         xp.logical_not(point.ok), point.terminal_voltage)
@@ -609,8 +596,19 @@ def battery_end_step(
         cutoff | (soc <= 0.), _dead, _live,
         BatteryAfterStep(
             BatteryEnd(charge_drawn, current, open_circuit_voltage, cutoff, overload, 0.),
-            motor_speeds, u, motor_params, battery_params))
+            MotorSupply(open_circuit_voltage, motor_speeds, u, motor_params, battery_params)))
 
+
+
+class PropellerForces(NamedTuple):
+    """
+    The forces of the propellers and their layout: thrusts, drag torques, spin directions and
+    positions. The input to the per-propeller loop body `_add_torque`.
+    """
+    thrusts: np.ndarray
+    drag_torques: np.ndarray
+    clockwise: np.ndarray
+    positions: np.ndarray
 
 
 def _add_torque(

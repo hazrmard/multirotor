@@ -1,5 +1,6 @@
 """
-The named tuples that `multirotor.rollout` takes and returns.
+The named tuples that `multirotor.rollout` takes and returns, and the ones that the
+kernel modules share (`MotorSupply`).
 
 Both backends read them as they are: numba types a named tuple as a value on the
 stack, and JAX treats it as a pytree that it can differentiate, and returns the
@@ -29,6 +30,21 @@ leaves the dynamics with the old inverse, and the gradient is silently wrong.
 from typing import NamedTuple, Union
 
 import numpy as np
+
+
+class MotorSupply(NamedTuple):
+    """
+    The battery's supply to the motors: its open-circuit voltage, and the motors' speeds,
+    speed signals and parameters. The input to the branches that tell a battery that supplies
+    the motors from one that is cut off or empty, during a step
+    (`multirotor.dynamics.battery_state`) and at its end
+    (`multirotor.physics.battery_end_step`).
+    """
+    open_circuit_voltage: float
+    speeds: np.ndarray
+    u: np.ndarray
+    motor_params: np.ndarray
+    battery_params: np.ndarray
 
 
 class BodyVehicle(NamedTuple):
