@@ -1,16 +1,23 @@
 """
-Transforms between the vehicle's coordinate frames and rates.
-
-The functions are written once, against the array namespace ``xp``, and built for
-numba here (see `multirotor.lazy`). `multirotor.controller.cascade` builds them again
-for JAX, so that the controller can be differentiated. Orientations are the
+Transforms between the vehicle's coordinate frames and rates. Orientations are the
 roll, pitch and yaw angles (rad) of the vehicle, in that order.
-"""
-import numpy as np
-from numba import njit
 
-from . import xp_numba as xp
-from .lazy import build
+The functions work on numpy and on JAX arrays, and return what they are given: the
+equations call them with JAX arrays inside compiled code, and the classes
+(`multirotor.simulation.Multirotor`) call them with numpy arrays for their properties.
+"""
+from types import ModuleType
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+
+
+def _namespace(*values: Any) -> ModuleType:
+    """``jax.numpy`` if any of the values is a JAX array, else ``numpy``."""
+    return jnp if any(isinstance(v, jax.Array) for v in values) else np
 
 
 
@@ -69,6 +76,7 @@ def direction_cosine_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray
     np.ndarray
         The direction cosine matrix, shape (3, 3).
     """
+    xp = _namespace(roll, pitch, yaw)
     cr, sr = xp.cos(roll), xp.sin(roll)     # phi
     cp, sp = xp.cos(pitch), xp.sin(pitch)   # theta
     cy, sy = xp.cos(yaw), xp.sin(yaw)       # psi
@@ -95,6 +103,7 @@ def angular_to_euler_rate(angular_velocity: np.ndarray, orientation: np.ndarray)
     np.ndarray
         The rates of change of roll, pitch and yaw (rad/s), shape (3,).
     """
+    xp = _namespace(angular_velocity, orientation)
     roll, pitch = orientation[0], orientation[1]
     p, q, r = angular_velocity[0], angular_velocity[1], angular_velocity[2]
     return xp.array((
@@ -120,6 +129,7 @@ def euler_to_angular_rate(euler_velocity: np.ndarray, orientation: np.ndarray) -
     np.ndarray
         The body angular rates (rad/s), shape (3,).
     """
+    xp = _namespace(euler_velocity, orientation)
     roll, pitch = orientation[0], orientation[1]
     cr, cp = xp.cos(roll), xp.cos(pitch)
     sr, sp = xp.sin(roll), xp.sin(pitch)
@@ -131,21 +141,12 @@ def euler_to_angular_rate(euler_velocity: np.ndarray, orientation: np.ndarray) -
 
 
 
-NAMES = (
-    'body_to_inertial', 'inertial_to_body', 'direction_cosine_matrix',
-    'angular_to_euler_rate', 'euler_to_angular_rate')
-SOURCE = {name: globals()[name] for name in NAMES}
-globals().update(vars(build(SOURCE, NAMES, 'numba', globals())))
-
-
-
-@njit
 def rotating_frame_derivative(
     value: np.ndarray, local_derivative: np.ndarray, omega: np.ndarray
 ) -> np.ndarray:
     """
-    The rate of change of a vector in a rotating frame, as seen from a fixed one. Not built
-    for JAX: only the blade-element thrust model uses it.
+    The rate of change of a vector in a rotating frame, as seen from a fixed one. For numpy
+    arrays only: the blade-element thrust model uses it.
 
     Parameters
     ----------

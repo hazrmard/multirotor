@@ -3,11 +3,13 @@
 state. The whole controller is tested against the legacy oracle in
 ``test_controller.py`` and ``test_fleet_controller.py``; this tests the functions
 themselves: that they change none of their arguments, what a stage that does not run
-repeats, and the stages' edge cases. The JAX build is tested in ``test_cascade_jax.py``.
+repeats, the stages' edge cases, and the gradient of a closed loop with respect to the gains.
 """
 import copy
 import itertools
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -212,3 +214,46 @@ def test_a_bare_pid_stage_applies_the_pid_law():
     np.testing.assert_allclose(action, 2. * err + .5 * integral + .25 * (err - .5) / .1)
     np.testing.assert_allclose(new_x[K.PID_REFERENCE], 3.)
     np.testing.assert_allclose(new_x[K.PID_ACTION], action)
+
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('steps,flags', (
+    ((1, 1, 1), (False, False, False)), ((3, 2, 5), (True, True, True)),
+    ((3, 2, 5), (True, False, True))))
+def test_gradient_through_a_rollout_matches_finite_differences(steps, flags):
+    "Multi-rate steps, the leash and square-root control, carried through lax.scan."
+    rng = np.random.default_rng(2)
+    leashing, sqrt_pos, sqrt_att = flags
+    params = make_params(rng)
+    params[K.PID_MAX_ERR_I] = 2.
+    targets = jnp.tile(jnp.array([.5, -.3, .4, .2]), (40, 1))
+
+    def rollout(p):
+        def body(carry, n_ref):
+            x, memo, state = carry
+            n, reference = n_ref
+            x, memo, action = cascade.cascaded_step(x, memo, make_inputs(
+                p, (reference, state, jnp.zeros(3), jnp.zeros(2)), steps, False, leashing,
+                sqrt_pos, sqrt_att, feedforward_weight=0.), n)
+            # a toy vehicle that closes the loop
+            state = state.at[2].add(1e-3 * (action[0] - WEIGHT) / MASS)
+            return (x, memo, state.at[6:9].add(1e-3 * action[1:])), action
+        carry = (jnp.zeros((K.N_PID_STATES, 12)),
+                 Memo(jnp.zeros(2), jnp.zeros(1), jnp.zeros(3)), jnp.zeros(12))
+        return jax.lax.scan(body, carry, (jnp.arange(40), targets))[1]
+
+    scale = float(jnp.mean(rollout(params)**2))
+    loss = jax.jit(lambda p: jnp.mean(rollout(p)**2) / scale)
+    grad = np.asarray(jax.grad(loss)(jnp.asarray(params)))
+    assert np.isfinite(grad).all()
+    entries = [(r, c) for r in (K.PID_K_P, K.PID_K_I, K.PID_K_D, K.PID_LIMIT)
+               for c in (0, 2, 4, 7, 10, 11)]
+    largest = max(abs(grad[e]) for e in entries)
+    for entry in entries:
+        h = 1e-5 * max(abs(params[entry]), 1.)
+        up, down = params.copy(), params.copy()
+        up[entry] += h
+        down[entry] -= h
+        fd = (float(loss(jnp.asarray(up))) - float(loss(jnp.asarray(down)))) / (2 * h)
+        assert abs(grad[entry] - fd) < 1e-3 * largest, entry

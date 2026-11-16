@@ -40,7 +40,7 @@ def main(argv=None) -> int:
     for tag, d in (('baseline', a), ('candidate', b)):
         m = d['meta']
         print(f'{tag:<10} {d["label"]}  {m["git_sha"][:8]}{"+dirty" if m["git_dirty"] else ""}'
-              f'  {m["cpu"]}  py{m["python"]} numpy{m["numpy"]} numba{m["numba"]}')
+              f'  {m["cpu"]}  py{m["python"]} numpy{m["numpy"]} {"jax" + m["jax"] if "jax" in m else "numba" + m["numba"]}')
     if a['meta']['cpu'] != b['meta']['cpu']:
         print('WARNING: different CPUs; timing deltas are not meaningful.')
     if a.get('quick') or b.get('quick'):

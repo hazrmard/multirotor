@@ -37,7 +37,7 @@ def _cpu_model() -> str:
 
 def environment_metadata() -> Dict:
     """Facts needed to judge whether two result files are comparable."""
-    import numba
+    import jax
     import numpy
     import scipy
     return dict(
@@ -48,7 +48,7 @@ def environment_metadata() -> Dict:
         python=platform.python_version(),
         numpy=numpy.__version__,
         scipy=scipy.__version__,
-        numba=numba.__version__,
+        jax=jax.__version__,
         platform=platform.platform(),
         cpu=_cpu_model(),
         cpu_count=os.cpu_count(),

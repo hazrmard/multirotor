@@ -38,7 +38,9 @@ def run_parity(n, thrust_model, motor, steps, dtype, excite=True):
         settle_at_hover(v, speed)
     hover = hover_signals(vp, sp)
     us = schedule(hover, EXCITE_FRAC[thrust_model], steps) if excite else np.tile(hover, (steps, 1))
-    atol = atol_for(dtype)
+    # With blade-element thrust the two integrators evaluate fsolve (tolerance 1e-4) at
+    # different states, and the oracle integrates with LSODA (see `common.make_pair`)
+    atol = atol_for(dtype) if thrust_model == 'quadratic' else 1e-3
     assert_snapshots_close(snapshot(new), snapshot(old), atol, 'initial')
     for i, u in enumerate(us):
         f_new, t_new = new.get_forces_torques(u, new.state)
@@ -93,7 +95,7 @@ def test_apply_speed_and_dxdt_are_pure(motor):
 @pytest.mark.parametrize('n', (4, 6, 8))
 def test_fixed_forces_path_matches_oracle(n, excite):
     # Vehicles without motors and with quadratic thrust calculate forces once
-    # per step. Their trajectories match the oracle's to float64 rounding.
+    # per step. Their trajectories match the tightly integrated oracle's to the error of RK4.
     vp, sp = make_params(n, 'quadratic', False, np.float64)
     new, old = make_pair(n, 'quadratic', False, np.float64)
     assert new._forces_fixed_over_step
@@ -105,9 +107,9 @@ def test_fixed_forces_path_matches_oracle(n, excite):
     for i in range(200):
         u = us[i % N_SCHEDULE]
         np.testing.assert_allclose(
-            new.step_speeds(u), old.step_speeds(u), rtol=0, atol=1e-12, err_msg=f'step {i}')
+            new.step_speeds(u), old.step_speeds(u), rtol=0, atol=1e-9, err_msg=f'step {i}')
         np.testing.assert_allclose(
-            new.acceleration, old.acceleration, rtol=0, atol=1e-12, err_msg=f'step {i}')
+            new.acceleration, old.acceleration, rtol=0, atol=1e-9, err_msg=f'step {i}')
 
 
 

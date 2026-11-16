@@ -37,8 +37,11 @@ others run every ``period_a`` seconds.
 from __future__ import annotations
 from typing import Any, Dict, Optional, Union
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
+from .._compile import step_function
 from ..simulation import Multirotor
 from .cascade import CascadeStepInputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
@@ -46,7 +49,7 @@ from ..tuples import ControllerParams, ControllerState, Memo, Steps
 from .data import (
     ControllerData, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
     PID_MAX_ACCELERATION, PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE,
-    PID_ACTION, PID_INTEGRAL
+    PID_ACTION, PID_INTEGRAL, N_PID_STATES, N_CASCADE_CHANNELS
 )
 
 # See more:
@@ -59,6 +62,52 @@ from .data import (
 
 Gain = Union[float, np.ndarray]
 "A parameter of a stage: one number for all its channels, or one per channel."
+
+
+# The compiled steps. Each takes the state it advances first (see
+# `multirotor._compile.step_function`) and returns one array, so that a step converts one
+# array to numpy.
+
+@step_function
+def _pid_stage(
+    x: jax.Array, pid_params: jax.Array, reference: jax.Array, measurement: jax.Array,
+    dt: float
+) -> jax.Array:
+    """`pid_stage`. Returns the stage's new state, whose ``PID_ACTION`` row is the action."""
+    return pid_stage(pid_params, x, reference, measurement, dt)[1]
+
+
+N_CONTROLLER_STATE = N_PID_STATES * N_CASCADE_CHANNELS + 6
+"The length of a controller's state as one array: the state matrix, raveled, and the memo."
+
+
+def _cascaded_step(inputs: jax.Array, fixed: CascadeStepInputs) -> jax.Array:
+    """
+    `cascaded_step`, with what changes at every step as one array.
+
+    ``inputs``: The controller's state matrix (raveled), then the memo's velocity reference
+      (2), thrust (1) and torques (3), which together are the first `N_CONTROLLER_STATE`
+      elements; then the reference (4), the vehicle's body state (12) and acceleration (3),
+      the feed-forward velocity (2), whether to use it (1, as a float), and the number of
+      steps taken (1, as a float).
+    ``fixed``: The other inputs, which change only when the controller's parameters do. Its
+      fields for the inputs in ``inputs`` are ignored.
+    Returns: The first `N_CONTROLLER_STATE` elements of ``inputs`` after the step, then the
+      action (4).
+    """
+    size = N_PID_STATES * N_CASCADE_CHANNELS
+    x = inputs[:size].reshape(N_PID_STATES, N_CASCADE_CHANNELS)
+    memo = Memo(inputs[size:size + 2], inputs[size + 2:size + 3], inputs[size + 3:size + 6])
+    moving = inputs[N_CONTROLLER_STATE:]
+    step_inputs = fixed._replace(
+        reference=moving[:4], body_state=moving[4:16], acceleration=moving[16:19],
+        feed_forward=moving[19:21], use_feed_forward=moving[21] > .5)
+    x, memo, action = cascaded_step(x, memo, step_inputs, moving[22].astype(int))
+    return jnp.concatenate((x.ravel(), memo.ref_vel, memo.thrust, memo.torques, action))
+
+
+_compiled_cascaded_step = step_function(_cascaded_step)
+_leash_distance = step_function(leash_distance)
 
 
 def _vector(x: Union[float, np.ndarray]) -> np.ndarray:
@@ -259,11 +308,11 @@ class PIDController(PIDStage):
             else np.array(np.broadcast_to(_vector(measurement), shape))
         columns = slice(self._start, self._stop)
         state = self._data.state[:, columns]
-        action, new_state = pid_stage(
-            self._data.params[:, columns], state, ref, mea, float(dt))
+        new_state = np.asarray(_pid_stage(
+            state, self._data.params[:, columns], ref, mea, float(dt)))
         if persist:
             state[:] = new_state
-        return action
+        return new_state[PID_ACTION].copy()
 
 
 
@@ -558,7 +607,33 @@ class Controller:
         for stage in stages:
             stage._adopt(self._data, start)
             start += stage.n
+        self._fixed_inputs: Optional[CascadeStepInputs] = None
+        self._fixed_key: tuple = ()
         self.reset()
+
+
+    def _inputs(self) -> CascadeStepInputs:
+        """
+        The inputs of a step that change only when a parameter does, as JAX arrays. They are
+        made again when a parameter, a period or an option has changed since the last step,
+        so that a step does not convert them every time.
+        """
+        vehicle = self.vehicle
+        key = (
+            self.steps_p, self.steps_a, self.steps_z, float(self.feedforward_weight),
+            bool(self.ctrl_p.leashing), bool(self.ctrl_p.square_root_scaling),
+            bool(self.ctrl_a.square_root_scaling), float(vehicle.params.mass),
+            float(vehicle.weight), float(vehicle.simulation.dt))
+        if key != self._fixed_key or not np.array_equal(self._data.params, self._fixed_params):
+            steps_p, steps_a, steps_z, weight, leashing, sqrt_p, sqrt_a, mass, weight_n, dt = key
+            self._fixed_params = self._data.params.copy()
+            self._fixed_key = key
+            self._fixed_inputs = jax.tree_util.tree_map(jnp.asarray, CascadeStepInputs(
+                self._fixed_params, np.zeros(4), np.zeros(12), np.zeros(3),
+                np.asarray(vehicle.params.inertia_matrix, dtype=np.float64), mass, weight_n,
+                dt, Steps(steps_p, steps_a, steps_z), np.zeros(2), False, weight, leashing,
+                sqrt_p, sqrt_a))
+        return self._fixed_inputs
 
 
     def reset(self) -> np.ndarray:
@@ -696,9 +771,9 @@ class Controller:
         "The largest horizontal position error that is acted on, given the vehicle's motion."
         if not self.ctrl_p.leashing:
             return np.inf
-        return leash_distance(
+        return float(_leash_distance(
             float(self.ctrl_p.k_p[0]), _state64(self.vehicle),
-            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt)
+            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt))
 
 
     def step(
@@ -744,21 +819,19 @@ class Controller:
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
-        inputs = CascadeStepInputs(
-            self._data.params, target, _state64(vehicle), _vector(vehicle.acceleration),
-            np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
-            float(vehicle.params.mass), float(vehicle.weight), float(vehicle.simulation.dt),
-            Steps(self.steps_p, self.steps_a, self.steps_z), feed_forward, use_feed_forward,
-            float(self.feedforward_weight), self.ctrl_p.leashing,
-            self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling)
-        state, memo, action = cascaded_step(
-            self._data.state, Memo(self._ref_vel, self._thrust, self._torques), inputs, self.n)
-        action = action.astype(self.dtype)
+        inputs = np.concatenate((
+            self._data.state.ravel(), self._ref_vel, self._thrust, self._torques, target,
+            vehicle.state, vehicle.acceleration, feed_forward, (use_feed_forward, self.n)),
+            dtype=float)
+        out = np.asarray(_compiled_cascaded_step(inputs, self._inputs()))
+        size = self._data.state.size
+        action = out[size + 6:].astype(self.dtype)
         # The outputs of the stages are kept even if the state is not, as `thrust` and
         # `torques` report the last step that ran, probe or not.
-        self._ref_vel, self._thrust, self._torques = memo
+        self._ref_vel, self._thrust, self._torques = (
+            out[size:size + 2], out[size + 2:size + 3], out[size + 3:size + 6])
         if persist:
-            self._data.state[:] = state
+            self._data.state[:] = out[:size].reshape(self._data.state.shape)
             self.n += 1
             self.t = vehicle.t
             self.action = action

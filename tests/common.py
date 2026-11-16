@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Tuple
 
 import numpy as np
+from scipy.integrate import solve_ivp
 
 from multirotor.helpers import find_nominal_speed, vehicle_params_factory
 from multirotor.models.tarott18 import MP, PP
@@ -72,10 +73,22 @@ def make_params(
 
 
 
+def tight_integrator(fun, x0, dt, args=()):
+    """
+    An integrator for the frozen oracle whose error is far below what the tests look for
+    (DOP853, rtol 1e-12). The oracle's own default, LSODA at rtol 1e-4, is less accurate than
+    the RK4 of the current implementation.
+    """
+    return solve_ivp(
+        lambda t, x: fun(t, x, *args), (0, dt), x0, method='DOP853', rtol=1e-12,
+        atol=1e-13).y[:, -1]
+
+
+
 def make_pair(*args, **kwargs) -> Tuple[Multirotor, LegacyMultirotor]:
     """
     Make the same vehicle twice: with the current implementation and with the
-    frozen oracle. Arguments are passed to `make_params`.
+    frozen oracle, integrated tightly. Arguments are passed to `make_params`.
 
     Returns
     -------
@@ -83,7 +96,11 @@ def make_pair(*args, **kwargs) -> Tuple[Multirotor, LegacyMultirotor]:
         The current and the legacy vehicle.
     """
     vp, sp = make_params(*args, **kwargs)
-    return Multirotor(vp, sp), LegacyMultirotor(vp, sp)
+    # The blade-element model solves for thrust at every evaluation, with a tolerance of its
+    # own (fsolve, 1e-4): a tight integrator would take very long and gain nothing.
+    if not vp.propellers[0].use_thrust_constant:
+        return Multirotor(vp, sp), LegacyMultirotor(vp, sp)
+    return Multirotor(vp, sp), LegacyMultirotor(vp, sp, integrator=tight_integrator)
 
 
 
@@ -145,9 +162,10 @@ def settle_at_hover(vehicle, speed: float) -> None:
 
 def atol_for(dtype: type) -> float:
     """
-    Tolerance for comparing a current and a legacy vehicle.
+    Tolerance for comparing a current and a legacy vehicle: float32 storage, or the error
+    of RK4 over the tests' few hundred steps.
     """
-    return 1e-6 if dtype == np.float32 else 1e-10
+    return 1e-6 if dtype == np.float32 else 1e-8
 
 
 

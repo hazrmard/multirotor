@@ -1,19 +1,18 @@
 """
-Compiled kernels of the environments in `multirotor.env`. The environment classes
-call them; they hold no state of their own, as the kernels of `multirotor.physics`
-and `multirotor.controller.kernels` hold none.
+The reward of the environments in `multirotor.env`, as a function of the vehicle's state.
+The environment classes call it; it holds no state of its own. It is plain Python on
+numbers: an environment calls it once per step.
 
-``reward_and_flags`` is the only kernel. `BaseMultirotorEnv.reward` calls it
+``reward_and_flags`` is the only function. `BaseMultirotorEnv.reward` calls it
 once per step.
 """
+from math import sqrt
 from typing import Tuple
 
 import numpy as np
-from numba import njit
 
 
 
-@njit
 def reward_and_flags(
     state: np.ndarray, nstate: np.ndarray, des_unit_vec: np.ndarray,
     t: float, dt: float, bounding_box: float, proximity: float, max_angle: float,
@@ -37,7 +36,7 @@ def reward_and_flags(
     ``max_angle``: Roll or pitch angle above which the vehicle has tipped (rad).
     ``period``: The maximum duration of the episode (s).
     """
-    dist = np.sqrt(nstate[0]**2 + nstate[1]**2 + nstate[2]**2)
+    dist = sqrt(nstate[0]**2 + nstate[1]**2 + nstate[2]**2)
     reached = dist <= proximity
     outofbounds = False
     tipped = False
@@ -46,12 +45,12 @@ def reward_and_flags(
         tipped = tipped or abs(state[6 + i]) > max_angle
     outoftime = t >= period
     dx, dy, dz = nstate[0] - state[0], nstate[1] - state[1], nstate[2] - state[2]
-    advance = np.sqrt(dx**2 + dy**2 + dz**2)
+    advance = sqrt(dx**2 + dy**2 + dz**2)
     # Length of the cross product of the displacement and the desired direction
     cx = dy * des_unit_vec[2] - dz * des_unit_vec[1]
     cy = dz * des_unit_vec[0] - dx * des_unit_vec[2]
     cz = dx * des_unit_vec[1] - dy * des_unit_vec[0]
-    drift = np.sqrt(cx**2 + cy**2 + cz**2)
+    drift = sqrt(cx**2 + cy**2 + cz**2)
     delta_turn = abs(nstate[8]) - abs(state[8])
     reward = (advance - drift - delta_turn) * motion_reward_scaling - dt
     if reached:
