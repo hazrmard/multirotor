@@ -9,29 +9,60 @@ propellers, motors or batteries; their state is in arrays.
 
 Compared with ``K`` separate `Multirotor` vehicles, a `Fleet`:
 
-* integrates all vehicles with one call of the integrator, so the cost of the
-  call is shared.
+* advances all vehicles with one compiled call, which maps the step of a single
+  vehicle over the fleet (``jax.vmap``), so the cost of the call is shared.
 * needs vehicles of a homogeneous configuration: the same number of propellers,
   motors on all or on none, and a battery model on all or on none. Masses,
   inertia, propeller, motor and battery parameter values can differ.
-* can differ from separate vehicles by the integrator's tolerance (Note: with the
-  default integrator, the vehicles share one step size).
+* matches separate vehicles to rounding: both use the same fixed-step integrator.
 * supports propellers with ``k_thrust * speed**2`` thrust. Blade-element thrust
   needs a numerical solution at every evaluation of the derivative and is not
   supported.
 """
-from typing import List, Sequence, Union
+from functools import partial
+from typing import List, Optional, Sequence, Union
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
+from ._compile import step_function
+from .coords import angular_to_euler_rate, direction_cosine_matrix
 from .dynamics import N_BODY_STATES
-from .fleet_kernels import (
-    fleet_battery_end_step, fleet_euler_rate, fleet_forces_torques,
-    fleet_inertial_velocity, fleet_motor_electrical, fleet_rhs_body,
-    fleet_rhs_body_with_motors, fleet_rhs_body_with_motors_and_battery
-)
-from .simulation import Integrator, Multirotor, odeint_integrator
+from .simulation import (
+    Multirotor, _step_body, _step_forces, _step_motors, _step_motors_battery)
+from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle
 from .vehicle import SimulationParams, VehicleParams
+
+
+# The steps of `multirotor.simulation`, mapped over the vehicles. The inputs and the
+# vehicle's parameters have the vehicle as their first axis, and so has the result.
+
+Vehicle = Union[BodyVehicle, MotorsVehicle, BatteryVehicle]
+
+
+@partial(step_function, static_argnames=('substeps',))
+def _fleet_step_forces(inputs: jax.Array, vehicle: Vehicle, dt: float, substeps: int) -> jax.Array:
+    """`multirotor.simulation._step_forces` for every vehicle."""
+    return jax.vmap(lambda i, v: _step_forces.plain(i, v, dt, substeps))(inputs, vehicle)
+
+
+@partial(step_function, static_argnames=('substeps',))
+def _fleet_step_body(inputs: jax.Array, vehicle: Vehicle, dt: float, substeps: int) -> jax.Array:
+    """`multirotor.simulation._step_body` for every vehicle."""
+    return jax.vmap(lambda i, v: _step_body.plain(i, v, dt, substeps))(inputs, vehicle)
+
+
+@partial(step_function, static_argnames=('substeps',))
+def _fleet_step_motors(inputs: jax.Array, vehicle: Vehicle, dt: float, substeps: int) -> jax.Array:
+    """`multirotor.simulation._step_motors` for every vehicle."""
+    return jax.vmap(lambda i, v: _step_motors.plain(i, v, dt, substeps))(inputs, vehicle)
+
+
+@partial(step_function, static_argnames=('substeps',))
+def _fleet_step_motors_battery(inputs: jax.Array, vehicle: Vehicle, dt: float, substeps: int) -> jax.Array:
+    """`multirotor.simulation._step_motors_battery` for every vehicle."""
+    return jax.vmap(lambda i, v: _step_motors_battery.plain(i, v, dt, substeps))(inputs, vehicle)
 
 
 
@@ -41,14 +72,14 @@ class Fleet:
     `Multirotor`: `step_speeds()`, `step_dynamics()` and `allocate_control()`.
     Every state quantity and every input has one row per vehicle.
 
-    Note: results can differ from those of separate `Multirotor` vehicles by the
-    integrator's tolerance. The vehicles must have a homogeneous configuration
+    The results match those of separate `Multirotor` vehicles to rounding. The vehicles
+    must have a homogeneous configuration
     (the same propeller, motor and battery setup), but parameter values can vary.
     """
 
     def __init__(
         self, params: Sequence[VehicleParams], simulation: SimulationParams,
-        integrator: Integrator = odeint_integrator
+        substeps: Optional[int] = None
     ) -> None:
         """
         Parameters
@@ -58,10 +89,8 @@ class Fleet:
             Changing them afterwards does not affect the fleet.
         simulation : SimulationParams
             The simulation parameters, shared by all vehicles.
-        integrator : Integrator, optional
-            The solver that advances the state of all vehicles by one time step
-            in `step_speeds()` and `step_dynamics()`. By default
-            `odeint_integrator`.
+        substeps : int, optional
+            RK4 steps per simulation time step, as for `Multirotor`.
 
         Raises
         ------
@@ -74,12 +103,12 @@ class Fleet:
         if len(params) == 0:
             raise ValueError('A fleet needs at least one vehicle.')
         self.simulation: SimulationParams = simulation
-        self.integrator: Integrator = integrator
         # The derived values (kernel parameters, control allocation, battery
         # tables) come from `Multirotor`, which defines them. Only their arrays
         # are kept.
-        vehicles = [Multirotor(p, simulation, integrator) for p in params]
+        vehicles = [Multirotor(p, simulation, substeps) for p in params]
         first = vehicles[0]
+        self.substeps: int = first.substeps
         self.params: List[VehicleParams] = [v.params for v in vehicles]
         self.dtype = first.dtype
         self._check_alike(vehicles)
@@ -89,6 +118,10 @@ class Fleet:
         self._motors: bool = first._data.motors is not None
         self._battery: bool = first.battery.has_model
         kernel = [v._vehicle for v in vehicles]
+        # The parameters of all vehicles as one tuple, each field with the vehicle as its
+        # first axis: what the compiled steps map over
+        self._vehicle = type(kernel[0])(*(jnp.asarray(np.stack(field), float) for field in zip(*kernel)))
+        self._dt = jnp.asarray(float(simulation.dt))
         self._g = float(simulation.g)
         self._mass = np.asarray([k.mass for k in kernel])
         self._inertia = np.stack([k.inertia for k in kernel])
@@ -112,10 +145,9 @@ class Fleet:
             [v.battery.params.max_voltage for v in vehicles], float)
 
         # The integrated state, one row per vehicle: the 12 body states, then
-        # with motors their speeds, then with a battery model the charge drawn
-        # during the step. The state is float64 whatever the dtype, which only
+        # with motors their speeds. The state is float64 whatever the dtype, which only
         # sets the precision that is kept: see `step_speeds`.
-        self._width = N_BODY_STATES + (n if self._motors else 0) + int(self._battery)
+        self._width = N_BODY_STATES + (n if self._motors else 0)
         self._x = np.zeros((len(vehicles), self._width))
         # The body states, float64 whatever the dtype. The public properties
         # return copies of them in the dtype of the simulation.
@@ -225,7 +257,9 @@ class Fleet:
     @property
     def inertial_velocity(self) -> np.ndarray:
         """Velocities in the inertial frame, shape (K, 3)."""
-        return fleet_inertial_velocity(np.ascontiguousarray(self._state)).astype(self.dtype)
+        # One direction cosine matrix per vehicle, on the last axis, shape (3, 3, K)
+        dcm = direction_cosine_matrix(*self._state[:, 6:9].T)
+        return np.einsum('jik,kj->ki', dcm, self._state[:, 3:6]).astype(self.dtype)
 
 
     @property
@@ -249,7 +283,8 @@ class Fleet:
     @property
     def euler_rate(self) -> np.ndarray:
         """Rate of change of roll, pitch and yaw, shape (K, 3)."""
-        return fleet_euler_rate(np.ascontiguousarray(self._state)).astype(self.dtype)
+        return angular_to_euler_rate(
+            self._state[:, 9:12].T, self._state[:, 6:9].T).T.astype(self.dtype)
 
 
     @property
@@ -341,9 +376,7 @@ class Fleet:
         return disturbance
 
 
-    def _body_args(self) -> tuple:
-        "Gravity, mass, inertia matrix and its inverse: the parameters of `fleet_rhs_body`."
-        return self._g, self._mass, self._inertia, self._inertia_inverse
+
 
 
     def _round_state(self) -> None:
@@ -368,12 +401,11 @@ class Fleet:
             The new states, shape (K, 12).
         """
         self.t += self.simulation.dt
-        u = np.ascontiguousarray(np.asarray(u, dtype=float))
-        args = (u[:, :3].copy(), u[:, 3:].copy()) + self._body_args()
-        x0 = np.ascontiguousarray(self._state).reshape(-1)
-        self._dxdt[:] = fleet_rhs_body(self.t, x0, *args).reshape(len(self), -1)
-        x = self.integrator(fleet_rhs_body, x0, self.simulation.dt, args)
-        self._state[:] = x.reshape(len(self), N_BODY_STATES)
+        inputs = np.concatenate((self._state, u), axis=1, dtype=float)
+        out = np.asarray(_fleet_step_forces(
+            inputs, self._vehicle, self._dt, substeps=self.substeps))
+        self._state[:] = out[:, :N_BODY_STATES]
+        self._dxdt[:] = out[:, N_BODY_STATES:]
         self._round_state()
         return self.state
 
@@ -429,14 +461,11 @@ class Fleet:
         ``u``: The speed signals, shape (K, n).
         ``disturbance``: The disturbing forces and torques, shape (K, 6).
         """
-        forces, torques = fleet_forces_torques(
-            u, self._prop_params, self._clockwise, self._positions)
-        args = (forces + disturbance[:, :3], torques + disturbance[:, 3:]) \
-            + self._body_args()
-        x0 = self._x.reshape(-1).copy()
-        self._dxdt[:] = fleet_rhs_body(self.t, x0, *args).reshape(len(self), -1)
-        x = self.integrator(fleet_rhs_body, x0, self.simulation.dt, args)
-        self._x[:] = x.reshape(len(self), -1)
+        inputs = np.concatenate((self._state, u, disturbance), axis=1)
+        out = np.asarray(_fleet_step_body(
+            inputs, self._vehicle, self._dt, substeps=self.substeps))
+        self._state[:] = out[:, :N_BODY_STATES]
+        self._dxdt[:] = out[:, N_BODY_STATES:]
         self._speed[:] = u
 
 
@@ -448,38 +477,29 @@ class Fleet:
         ``u``: The speed signals, shape (K, n).
         ``disturbance``: The disturbing forces and torques, shape (K, 6).
         """
-        k_vehicles = len(self)
-        common = (self._g, self._mass, self._inertia, self._inertia_inverse,
-                  self._prop_params, self._motor_params, self._clockwise, self._positions)
+        n, width = self.n_propellers, self._width
         if self._battery:
-            # The last column of the state integrates the charge drawn during this
-            # step. It is zero between steps (see below), so each step starts at 0.
-            rhs = fleet_rhs_body_with_motors_and_battery
-            args = (u, self._battery_cutoff.copy(), disturbance) + common \
-                + (self._battery_params, self._ocv_soc, self._ocv_voltage,
-                   self._battery_charge_drawn.copy())
+            inputs = np.concatenate((
+                self._x, u, disturbance, self._battery_charge_drawn[:, None],
+                self._battery_cutoff[:, None], self._battery_overload[:, None]), axis=1,
+                dtype=float)
+            out = np.asarray(_fleet_step_motors_battery(
+                inputs, self._vehicle, self._dt, substeps=self.substeps))
+            electrical = width + N_BODY_STATES + 6
+            (self._battery_charge_drawn[:], self._battery_current[:],
+             self._battery_voltage[:], cutoff, overload, self._motor_voltage_limit[:]) = \
+                out[:, width + N_BODY_STATES:electrical].T
+            self._battery_cutoff[:], self._battery_overload[:] = cutoff > .5, overload > .5
         else:
-            rhs = fleet_rhs_body_with_motors
-            args = (u, self._motor_voltage_limit.copy(), disturbance) + common
-        x0 = self._x.reshape(-1).copy()
-        self._dxdt[:] = rhs(self.t, x0, *args).reshape(k_vehicles, -1)[:, :N_BODY_STATES]
-        x = self.integrator(rhs, x0, self.simulation.dt, args).reshape(k_vehicles, -1)
-
-        self._x[:] = x
-        # The motor speeds are columns of the state: contiguous copies give the
-        # kernels the array layout that a single vehicle's motors have
-        speeds = np.ascontiguousarray(self._speed)
-        if self._battery:
-            self._x[:, -1] = 0. # the charge is kept in `_battery_charge_drawn`
-            fleet_battery_end_step(
-                x[:, -1].copy(), self._battery_charge_drawn, self._battery_cutoff,
-                self._battery_overload, self._battery_voltage, self._battery_current,
-                speeds, u, self._motor_params, self._battery_params,
-                self._ocv_soc, self._ocv_voltage, self.simulation.dt,
-                self._motor_voltage_limit)
-        fleet_motor_electrical(
-            speeds, u, self._motor_voltage_limit, self._motor_params,
-            self._voltage, self._current)
+            inputs = np.concatenate(
+                (self._x, u, disturbance, self._motor_voltage_limit[:, None]), axis=1)
+            out = np.asarray(_fleet_step_motors(
+                inputs, self._vehicle, self._dt, substeps=self.substeps))
+            electrical = width + N_BODY_STATES
+        self._x[:] = out[:, :width]
+        self._dxdt[:] = out[:, width:width + N_BODY_STATES]
+        self._voltage[:] = out[:, electrical:electrical + n]
+        self._current[:] = out[:, electrical + n:]
 
 
     def allocate_control(self, thrust: np.ndarray, torques: np.ndarray) -> np.ndarray:

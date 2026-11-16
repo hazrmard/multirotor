@@ -129,9 +129,8 @@ N_SCHEDULE = 64
 def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
     """Deterministic schedule of inputs, ``base * (1 +- frac)``, cycled per step.
 
-    A vehicle fed exactly its hover inputs sits at equilibrium, where ``odeint``
-    takes the fewest model evaluations. Perturbed inputs make it work for its
-    answer.
+    A vehicle fed exactly its hover inputs sits at equilibrium. Perturbed inputs move it
+    away from it.
     """
     rng = np.random.default_rng(seed)
     noise = rng.uniform(-frac, frac, size=(N_SCHEDULE, *np.shape(base)))
@@ -139,22 +138,18 @@ def excitation(base: np.ndarray, frac: float, seed: int = 0) -> np.ndarray:
 
 
 def vehicle_points(v: Multirotor) -> List[ScopePoint]:
-    """Scope points for a vehicle: its step methods, integrator, model and propellers.
+    """Scope points for a vehicle: its step methods, model and propellers.
 
-    ``dxdt_speeds``, ``dxdt_dynamics``, ``_rhs_body`` and ``_rhs`` all become the
-    scope ``model``; only the ones the case calls record anything.
+    A step is one compiled call, so the integrator and the model evaluations inside it are
+    not separate scopes. ``dxdt_speeds`` and ``dxdt_dynamics`` become the scope ``model``
+    for the vehicles that evaluate them in Python (blade-element thrust).
     """
     pts = [ScopePoint(Level.COARSE, v, 'step_speeds', 'step_speeds'),
            ScopePoint(Level.COARSE, v, 'step_dynamics', 'step_dynamics'),
-           ScopePoint(Level.FINE, v, 'integrator', 'integrator'),
            ScopePoint(Level.FINE, v, 'dxdt_speeds', 'model'),
            ScopePoint(Level.FINE, v, 'dxdt_dynamics', 'model'),
-           ScopePoint(Level.FINE, v, '_rhs_body', 'model'),
            ScopePoint(Level.FINE, v, 'get_forces_torques', 'forces_torques')]
     pts.append(ScopePoint(Level.FINE, v, '_step_propellers', 'propeller'))
-    if v._rhs is not None:
-        # Vehicles with motors integrate the body and motors with this kernel
-        pts.append(ScopePoint(Level.FINE, v, '_rhs', 'model'))
     return pts
 
 

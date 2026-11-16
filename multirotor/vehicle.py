@@ -70,8 +70,7 @@ class PropellerParams:
 
     def __post_init__(self) -> None:
         "Derive the radius, area and blade angles from the diameter and pitch."
-        # ensure torque function gets floats so adding float + int in the njit
-        # torque function is not ignored
+        # A float, whatever the type of the given value
         self.moment_of_inertia = float(self.moment_of_inertia)
         self.R = self.diameter * 0.0254 # inches to metres
         "Radius in metres"

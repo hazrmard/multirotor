@@ -61,7 +61,7 @@ def worker_time(name: str, params: dict, repeats: int, scopes: bool) -> dict:
     build_s = time.perf_counter() - t0
     steps = params['steps']
 
-    # Warmup: numba JIT, caches, first-call allocations. Timed separately.
+    # Warmup: compilation, caches, first-call allocations. Timed separately.
     runner.reset()
     t0 = time.perf_counter()
     runner.run(min(WARMUP_STEPS, steps))

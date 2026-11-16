@@ -1605,8 +1605,8 @@ version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "gymnasium" },
+    { name = "jax" },
     { name = "matplotlib" },
-    { name = "numba" },
     { name = "numpy" },
     { name = "optuna" },
     { name = "scipy" },
@@ -1616,13 +1616,11 @@ dependencies = [
 control = [
     { name = "control" },
 ]
-jax = [
-    { name = "jax" },
-]
 
 [package.dev-dependencies]
 dev = [
     { name = "jupyter" },
+    { name = "numba" },
     { name = "pytest" },
 ]
 docs = [
@@ -1640,18 +1638,18 @@ docs = [
 requires-dist = [
     { name = "control", marker = "extra == 'control'" },
     { name = "gymnasium" },
-    { name = "jax", marker = "extra == 'jax'" },
+    { name = "jax" },
     { name = "matplotlib" },
-    { name = "numba" },
     { name = "numpy" },
     { name = "optuna" },
     { name = "scipy" },
 ]
-provides-extras = ["control", "jax"]
+provides-extras = ["control"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "jupyter" },
+    { name = "numba" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 docs = [

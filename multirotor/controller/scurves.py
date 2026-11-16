@@ -1,5 +1,4 @@
 import numpy as np
-from numba import njit
 from typing import Any, Dict, Optional, Union
 
 from .pid import Controller
@@ -240,7 +239,6 @@ def acc_1d(
 
 
 
-# @njit
 def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float) -> float:
     """Solve a 1d kinematics problem, without a time step."""
     sign = np.sign(disp)
@@ -319,7 +317,6 @@ def _acc_1d(amax: float, vmax: float, v0: float, v1: float, disp: float) -> floa
 
 
 
-# @njit
 def acc_to_target_3d(
     amax: np.ndarray, vmax: np.ndarray, v0_vec: np.ndarray, v1_vec: np.ndarray,
     disp: np.ndarray, dt: float = 1e-2
@@ -350,7 +347,6 @@ def acc_to_target_3d(
     acc_xyz = np.asarray([acc_x, acc_y, acc_z])
     acc = acc_xyz * amax / (np.linalg.norm(acc_xyz) + 1e-6)
     return acc
-# @njit
 def acc_to_target_2d(
     amax: float, vmax: float, v0_vec: np.ndarray, v1_vec: np.ndarray, disp: np.ndarray,
     dt: float = 1e-2
@@ -383,7 +379,6 @@ def acc_to_target_2d(
 
 
 
-# @njit
 def compute_accel_2d(
     amax: float,
     vmax: float,

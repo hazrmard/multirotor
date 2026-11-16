@@ -2,7 +2,7 @@
 Passive containers that hold the parameters and state of a vehicle's propellers
 and motors as arrays, one column or element per propeller. They compute nothing
 and advance nothing: the classes in `multirotor.simulation` read and write them,
-and the kernels in `multirotor.physics` and `multirotor.dynamics` take their
+and the equations in `multirotor.physics` and `multirotor.dynamics` take their
 arrays as inputs.
 
 How the two classes relate:
@@ -17,7 +17,7 @@ Parameter matrices have shape ``(n_parameters, n)``: one row per parameter, one
 column per component. The ``PROP_*`` and ``MOTOR_*`` constants in `multirotor.physics`
 name the rows. A row such as ``params[PROP_K_THRUST]`` is a contiguous
 array with one value per propeller, which lines up element by element with
-``speed``, so kernels can write ``params[PROP_K_THRUST] * speed**2``.
+``speed``, so the equations can write ``params[PROP_K_THRUST] * speed**2``.
 """
 from typing import List
 

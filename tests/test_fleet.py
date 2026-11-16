@@ -2,19 +2,16 @@
 Tests for `Fleet`: it must reproduce separate `Multirotor` vehicles, and reject
 fleets that it cannot hold in arrays.
 
-The kernels are compared with a tight-tolerance integrator on both sides, so that
-the comparison does not depend on the solver's error. With the default
-integrator the fleet's vehicles share a step size, so the results can differ from
-those of separate vehicles by the solver's tolerance. The main test runs with both.
+A fleet runs the step of a single vehicle for every vehicle at once (``jax.vmap``), with the
+same fixed-step integrator, so it matches separate vehicles to rounding.
 """
 from dataclasses import replace
 
 import numpy as np
 import pytest
-from scipy.integrate import odeint
 
 from multirotor.fleet import Fleet
-from multirotor.simulation import Multirotor, odeint_integrator
+from multirotor.simulation import Multirotor
 from multirotor.vehicle import BatteryParams
 
 from common import hover_signals, make_params, schedule
@@ -29,13 +26,6 @@ CONFIGS = {
     'motors and battery': dict(motor=True, battery=BATTERY),
 }
 config = pytest.mark.parametrize('kwargs', CONFIGS.values(), ids=CONFIGS.keys())
-
-
-
-def tight(fun, x0, dt, args=()):
-    "An integrator whose error is far below the differences that the tests look for."
-    return odeint(fun, x0, (0, dt), args=args, rtol=1e-9, atol=1e-9, tfirst=True,
-                  mxstep=20000)[-1]
 
 
 
@@ -76,16 +66,11 @@ def stacked(singles, attribute):
 
 
 @config
-@pytest.mark.parametrize('integrator, atol', (
-    (tight, 1e-7),
-    # The fleet's vehicles share a step size, so with the default integrator
-    # (rtol = atol = 1e-4) they match separate vehicles to its tolerance
-    (odeint_integrator, 5e-4),
-), ids=('tight', 'default'))
-def test_fleet_matches_separate_vehicles(kwargs, integrator, atol):
+def test_fleet_matches_separate_vehicles(kwargs):
+    atol = 1e-9
     plist, sp = make_fleet_params(**kwargs)
-    singles = [Multirotor(p, sp, integrator) for p in plist]
-    fleet = Fleet(plist, sp, integrator)
+    singles = [Multirotor(p, sp) for p in plist]
+    fleet = Fleet(plist, sp)
     for u in signals(plist, sp):
         step_both(singles, fleet, u)
         np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=atol)
@@ -112,8 +97,8 @@ def test_fleet_matches_separate_vehicles(kwargs, integrator, atol):
 
 def test_step_dynamics_matches_separate_vehicles():
     plist, sp = make_fleet_params(motor=True)
-    singles = [Multirotor(p, sp, tight) for p in plist]
-    fleet = Fleet(plist, sp, tight)
+    singles = [Multirotor(p, sp) for p in plist]
+    fleet = Fleet(plist, sp)
     rng = np.random.default_rng(0)
     for _ in range(STEPS):
         u = rng.normal(0, 1, (K, 6)) + np.asarray([0, 0, 30, 0, 0, 0])
@@ -126,8 +111,8 @@ def test_step_dynamics_matches_separate_vehicles():
 
 def test_disturbances_reach_each_vehicle():
     plist, sp = make_fleet_params()
-    singles = [Multirotor(p, sp, tight) for p in plist]
-    fleet = Fleet(plist, sp, tight)
+    singles = [Multirotor(p, sp) for p in plist]
+    fleet = Fleet(plist, sp)
     force = np.arange(K * 3, dtype=float).reshape(K, 3) / 10
     torque = np.full((K, 3), 0.01)
     for vehicle, f, t in zip(singles, force, torque):
@@ -194,8 +179,8 @@ def test_battery_cutoff_and_empty_batteries_match_separate_vehicles():
     large = BatteryParams(max_voltage=22.2, capacity=16., internal_resistance=0.05)
     for params, battery in zip(plist, (small, sagging, large)):
         params.battery = battery
-    singles = [Multirotor(p, sp, tight) for p in plist]
-    fleet = Fleet(plist, sp, tight)
+    singles = [Multirotor(p, sp) for p in plist]
+    fleet = Fleet(plist, sp)
     for u in signals(plist, sp, 60):
         step_both(singles, fleet, u)
         np.testing.assert_allclose(fleet.state, stacked(singles, 'state'), atol=1e-6)

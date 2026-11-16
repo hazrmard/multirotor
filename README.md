@@ -9,8 +9,10 @@ Simulation of multi-rotor unmanned aerial vehicles in python.
 `multirotor` simulates the airframe, propellers, motors and battery of a UAV. It
 includes a PID flight controller with automatic gain search, waypoint
 trajectories, and [Gymnasium](https://gymnasium.farama.org) environments for
-reinforcement learning. The physics runs in compiled [numba](https://numba.pydata.org)
-kernels, so a simulation step takes microseconds.
+reinforcement learning. The physics and the controller are written for
+[JAX](https://docs.jax.dev): they are compiled, a simulation step takes microseconds, a
+fleet is stepped in one call, and a closed-loop simulation can be differentiated with
+respect to any parameter.
 
 ## What you can do with it
 
@@ -135,7 +137,7 @@ These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
 functions call which, and how the integrated state is laid out. Those of
 `multirotor/controller/pid.py` and `multirotor/controller/cascade.py` do the same
-for the controller. `multirotor/rollout.py` is the functional closed loop that JAX differentiates, and
+for the controller. `multirotor/rollout.py` is the closed loop as pure functions, which run many steps in one compiled call and can be differentiated, and
 `multirotor/tuples.py` holds the named tuples it takes and returns. `Multirotor` and `Controller`
-make them (`rollout_params`, `rollout_state`) and take the state back (`set_rollout_state`). `multirotor/fleet.py` and `multirotor/fleet_kernels.py` show how a fleet's arrays are laid out and which kernels its loops call. The compiled reward of the environments is in
+make them (`rollout_params`, `rollout_state`) and take the state back (`set_rollout_state`). `multirotor/fleet.py` shows how a fleet's arrays are laid out; it maps the step of one vehicle over the fleet. `multirotor/integrator.py` is the fixed-step RK4 integrator. The reward of the environments is in
 `multirotor/env_kernels.py`.

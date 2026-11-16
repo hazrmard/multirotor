@@ -8,26 +8,30 @@ rest check that `Multirotor.step_speeds` follows the reference closely.
 """
 from copy import deepcopy
 
+import jax
 import numpy as np
 import pytest
 from scipy.integrate import odeint
 
 import legacy.simulation
 from multirotor.data import MotorData
-from multirotor.dynamics import N_BODY_STATES, rhs_body
+from multirotor.dynamics import N_BODY_STATES, rhs_body, rhs_body_with_motors
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import motor_acc
 from multirotor.simulation import Motor, Multirotor
-from multirotor.tuples import body_arguments, rhs_arguments
 from multirotor.vehicle import BatteryParams, SimulationParams
 
 from common import (
-    N_SCHEDULE, hover_signals, make_pair, make_params, motor_signal,
+    N_SCHEDULE, hover_signals, make_params, motor_signal,
     nominal_speed, schedule, settle_at_hover
 )
 from legacy.simulation import Motor as LegacyMotor, Multirotor as LegacyMultirotor
 
 REFERENCE_TOL = 1e-10
+
+# The right-hand sides, compiled, for integrating them with scipy as a reference
+RHS_BODY = jax.jit(rhs_body)
+RHS_BODY_WITH_MOTORS = jax.jit(rhs_body_with_motors)
 
 
 
@@ -43,11 +47,11 @@ def reference_trajectory(vehicle: Multirotor, us: np.ndarray) -> np.ndarray:
     """
     x = np.concatenate((vehicle.state.astype(float), vehicle._data.motors.speed))
     out = []
+    params, max_voltage = vehicle._compiled_vehicle, float(vehicle.battery.voltage)
     for u in us:
-        args = rhs_arguments(
-            vehicle._vehicle, np.asarray(u, float), float(vehicle.battery.voltage), np.zeros(6))
-        x = odeint(vehicle._rhs, x, (0, vehicle.simulation.dt), args=args,
-                   rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
+        u = np.asarray(u, float)
+        x = odeint(lambda x, t: np.asarray(RHS_BODY_WITH_MOTORS(x, u, max_voltage, params)),
+                   x, (0, vehicle.simulation.dt), rtol=REFERENCE_TOL, atol=REFERENCE_TOL)[-1]
         out.append(x)
     return np.asarray(out)
 
@@ -97,10 +101,10 @@ def test_body_equations_match_oracle(thrust_model):
         body_state = rng.uniform(-0.5, 0.5, 12)
         speeds = nominal_speed(vp, sp) * rng.uniform(0.8, 1.2, 8)
         x = np.concatenate((body_state, speeds))
-        args = rhs_arguments(vehicle._vehicle, speeds, np.inf, np.zeros(6))
         if thrust_model == 'fsolve':
-            args += (float(sp.rho),)
-        dxdt = vehicle._rhs(0., x, *args)
+            dxdt = vehicle._dxdt_with_motors_blade_element(x, speeds, np.inf, np.zeros(6))
+        else:
+            dxdt = np.asarray(RHS_BODY_WITH_MOTORS(x, speeds, np.inf, vehicle._compiled_vehicle))
         np.testing.assert_allclose(
             dxdt[:N_BODY_STATES], oracle.dxdt_speeds(0., body_state, speeds), rtol=0, atol=1e-12)
 
@@ -142,7 +146,8 @@ def test_step_speeds_follows_reference(frac, bounds, dtype):
 
 def test_step_speeds_is_more_accurate_than_oracle():
     vp, sp = make_params(8, 'quadratic', True, dtype=np.float64)
-    new, old = make_pair(8, 'quadratic', True, dtype=np.float64)
+    # The oracle as it was, with its own integrator (LSODA), not the tight one of `make_pair`
+    new, old = Multirotor(vp, sp), LegacyMultirotor(vp, sp)
     for v in (new, old):
         settle_at_hover(v, nominal_speed(vp, sp))
     us = schedule(hover_signals(vp, sp), 0.05, N_SCHEDULE)
@@ -187,7 +192,7 @@ def test_motor_step_response_does_not_overshoot():
     u = motor_signal(params, target)
     motor = Motor(params, sp)
     speeds = np.asarray([motor.step(u) for _ in range(50)])
-    # Monotonic up to the integrator's tolerance (atol=1e-4 per step)
+    # Monotonic, up to rounding
     assert np.all(np.diff(speeds) >= -1e-3), 'speed must rise monotonically'
     assert speeds.max() < target * 1.001
     assert speeds[-1] == pytest.approx(target, rel=1e-3)
@@ -200,8 +205,8 @@ def test_motor_step_response_does_not_overshoot():
 
 def test_small_time_steps_converge(monkeypatch):
     # Hold each speed signal for 10 ms and step at dt = 1 ms and 0.1 ms. The
-    # state is not rounded, so the vehicle moves at small time steps, and the
-    # error shrinks as dt does. (Rounding the state to 4 decimals each step
+    # state is not rounded, so the vehicle moves at small time steps, and stays
+    # on the reference. (Rounding the state to 4 decimals each step
     # froze the vehicle: each step moved it less than 1e-4 m.)
     hold_time = 0.01
     vp, sp = make_params(8, 'quadratic', False, np.float64, dt=hold_time)
@@ -212,9 +217,10 @@ def test_small_time_steps_converge(monkeypatch):
     x, reference = np.zeros(12), []
     for u in us:
         forces, torques = vehicle.get_forces_torques(u, x)
-        args = (forces, torques) + body_arguments(vehicle._vehicle)
-        x = odeint(rhs_body, x, (0, hold_time), args=args,
-                   rtol=REFERENCE_TOL, atol=REFERENCE_TOL, tfirst=True)[-1]
+        forces, torques = forces.astype(float), torques.astype(float)
+        x = odeint(
+            lambda x, t: np.asarray(RHS_BODY(x, forces, torques, vehicle._compiled_vehicle)),
+            x, (0, hold_time), rtol=REFERENCE_TOL, atol=REFERENCE_TOL)[-1]
         reference.append(x[:3])
     reference = np.asarray(reference)
 
@@ -231,8 +237,9 @@ def test_small_time_steps_converge(monkeypatch):
     for dt in (1e-3, 1e-4):
         vp, sp = make_params(8, 'quadratic', False, np.float64, dt=dt)
         error[dt] = position_error(Multirotor(vp, sp), dt)
-    assert error[1e-3] < 1e-5, error
-    assert error[1e-4] < error[1e-3] / 5, error
+    # RK4 is at the reference's own tolerance at both time steps
+    assert error[1e-3] < 1e-8, error
+    assert error[1e-4] < 1e-8, error
 
     # The oracle, with its rounding restored, doesn't move at dt = 1 ms
     monkeypatch.setattr(legacy.simulation, 'np', np)
