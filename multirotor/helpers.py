@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 from scipy.optimize import fsolve
 
-from .vehicle import PropellerParams, VehicleParams, SimulationParams
+from .vehicle import PropellerParams, VehicleParams, SimulationParams, xp_of
 
 
 
@@ -29,19 +29,20 @@ def moment_of_inertia_tensor_from_cooords(
     """
     # TODO: Conditionally calculate the center of mass and transform coordinates
     # about it if a boolean option is provided.
-    coords = np.asarray(coords)
-    masses = np.asarray(point_masses)
+    xp = xp_of((point_masses, coords))
+    coords = xp.asarray(coords)
+    masses = xp.asarray(point_masses)
     x,y,z = coords[:,0], coords[:,1], coords[:,2]
-    Ixx = np.sum(masses * (y**2 + z**2))
-    Iyy = np.sum(masses * (x**2 + z**2))
-    Izz = np.sum(masses * (x**2 + y**2))
-    Ixy = Iyx = -np.sum(x * y * masses)
-    Iyz = Izy = -np.sum(y * z * masses)
-    Ixz = Izx = -np.sum(x * z * masses)
-    return np.asarray([
-        [Ixx, Ixy, Ixz],
-        [Iyx, Iyy, Iyz],
-        [Izx, Izy, Izz]
+    Ixx = xp.sum(masses * (y**2 + z**2))
+    Iyy = xp.sum(masses * (x**2 + z**2))
+    Izz = xp.sum(masses * (x**2 + y**2))
+    Ixy = Iyx = -xp.sum(x * y * masses)
+    Iyz = Izy = -xp.sum(y * z * masses)
+    Ixz = Izx = -xp.sum(x * z * masses)
+    return xp.stack([
+        xp.stack([Ixx, Ixy, Ixz]),
+        xp.stack([Iyx, Iyy, Iyz]),
+        xp.stack([Izx, Izy, Izz]),
     ])
 
 
@@ -76,30 +77,31 @@ def vehicle_params_factory(
     VehicleParams
         The parameters object.
     """
+    xp = xp_of((m_prop, d_prop, m_body, body_size, params))
     angle_spacing = 2 * np.pi / n
     angles = np.arange(angle_spacing / 2, 2 * np.pi, angle_spacing)
-    masses = [m_prop] * n
+    masses = xp.stack([xp.asarray(m_prop, dtype=float)] * n)
     x = np.cos(angles) * d_prop
     y = np.sin(angles) * d_prop
-    z = np.zeros_like(y)
-    coords = np.vstack((x, y, z)).T
+    z = xp.zeros_like(y)
+    coords = xp.stack((x, y, z)).T
     I_prop = moment_of_inertia_tensor_from_cooords(masses, coords)
 
     if body_shape == 'point':
-        I_body = np.asarray(np.zeros((3,3)))
+        I_body = xp.zeros((3,3))
     elif body_shape == 'sphere_solid':
-        I_body = np.asarray(np.eye(3) * 0.4 * m_body * body_size**2)
+        I_body = xp.eye(3) * 0.4 * m_body * body_size**2
     elif body_shape == 'sphere_shell':
-        I_body = np.asarray(np.eye(3) * 2 * m_body * body_size**2 / 3)
+        I_body = xp.eye(3) * 2 * m_body * body_size**2 / 3
     elif body_shape == 'cube':
-        I_body = np.asarray(np.eye(3) * 2 * m_body * body_size**2 / 12)
+        I_body = xp.eye(3) * 2 * m_body * body_size**2 / 12
 
     I = I_body + I_prop
 
     return VehicleParams(
         propellers = [params for _ in range(n)],
         angles = angles,
-        distances=np.ones(n) * d_prop,
+        distances=xp.ones(n) * d_prop,
         mass = n * m_prop + m_body,
         inertia_matrix = I,
     )
@@ -243,15 +245,17 @@ def control_allocation_matrix(params: VehicleParams) -> Tuple[np.ndarray, np.nda
         The allocation matrix and its inverse. If no inverse exists, returns
         the Moore-Penrose Pseudo-inverse.
     """
-    alloc = np.zeros((4, len(params.propellers))) #[Fz, Mx, My, Mz] x n-Propellers
-    x = params.distances * np.cos(params.angles)
-    y = params.distances * np.sin(params.angles)
-    for i, p in enumerate(params.propellers):
-        alloc[0, i] = p.k_thrust                       # vertical force
-        alloc[1, i] = p.k_thrust * y[i]                 # torque about x-axis
-        alloc[2, i] = p.k_thrust * (-x[i])              # torque about y-axis
-        alloc[3, i] = p.k_drag * params.clockwise[i]    # torque about z-axis
-    alloc_inverse = np.linalg.pinv(alloc)
+    xp = xp_of(params)
+    x = params.distances * xp.cos(params.angles)
+    y = params.distances * xp.sin(params.angles)
+    k_thrust = xp.stack([xp.asarray(p.k_thrust, dtype=float) for p in params.propellers])
+    k_drag = xp.stack([xp.asarray(p.k_drag, dtype=float) for p in params.propellers])
+    alloc = xp.stack((
+        k_thrust,                           # vertical force
+        k_thrust * y,                       # torque about x-axis
+        k_thrust * (-x),                    # torque about y-axis
+        k_drag * params.clockwise))         # torque about z-axis
+    alloc_inverse = xp.linalg.pinv(alloc)
     return alloc, alloc_inverse
 
 

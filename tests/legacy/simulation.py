@@ -345,9 +345,9 @@ class Multirotor:
 
         self.alloc = self.alloc.astype(self.dtype)
         self.alloc_inverse = self.alloc_inverse.astype(self.dtype)
-        self.params.propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
+        self._propeller_vectors = self.params.propeller_vectors.astype(self.dtype)
         self.params.inertia_matrix = self.params.inertia_matrix.astype(self.dtype)
-        self.params.inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
+        self._inertia_matrix_inverse = self.params.inertia_matrix_inverse.astype(self.dtype)
         self.state = np.zeros(12, dtype=self.dtype)
         self._dxdt = np.zeros_like(self.state)
         return self.state
@@ -452,7 +452,7 @@ class Multirotor:
         linear_vel_body = state[3:6]
         angular_vel_body = state[9:12]
         airstream_velocity_inertial = rotating_frame_derivative(
-            self.params.propeller_vectors,
+            self._propeller_vectors,
             linear_vel_body,
             angular_vel_body)
 
@@ -471,7 +471,7 @@ class Multirotor:
                 speed, airstream_velocity_inertial[:, i]
             )
             torque_vec[:, i] = torque(
-                self.params.propeller_vectors[:,i], thrust_vec[:,i],
+                self._propeller_vectors[:,i], thrust_vec[:,i],
                 prop.params.moment_of_inertia, angular_acc,
                 prop.params.k_drag, speed,
                 clockwise
@@ -508,7 +508,7 @@ class Multirotor:
         # forces, torques = self.get_forces_torques(u, x)
         dxdt = apply_forces_torques(
             u[:3], u[3:], x.astype(self.dtype), self.simulation.g,
-            self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
+            self.params.mass, self.params.inertia_matrix, self._inertia_matrix_inverse)
         return np.around(dxdt, self.dxdt_decimals)
 
 
@@ -546,7 +546,7 @@ class Multirotor:
         # print('dxdt-x', self.t // self.simulation.dt, x.dtype)
         dxdt = apply_forces_torques(
             forces+disturb_forces, torques+disturb_torques, x.astype(self.dtype), self.simulation.g,
-            self.params.mass, self.params.inertia_matrix, self.params.inertia_matrix_inverse)
+            self.params.mass, self.params.inertia_matrix, self._inertia_matrix_inverse)
         # print('dxdt', self.t // self.simulation.dt, dxdt.dtype)
         return np.around(dxdt, self.dxdt_decimals)
 

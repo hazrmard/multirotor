@@ -12,7 +12,7 @@ keywords = ["multirotor", "simulation", "gymnasium", "reinforcement-learning", "
 dependencies = [
     "numpy",
     "scipy",
-    "numba",
+    "jax",
     "matplotlib",
     "gymnasium",
     "optuna",
@@ -22,13 +22,13 @@ dependencies = [
 
 [project.optional-dependencies]
 control = ["control"]
-# Differentiable closed-loop rollouts (multirotor.rollout, built for JAX)
-jax = ["jax"]
 
 [dependency-groups]
 dev = [
     "jupyter",
     "pytest>=9.1.1",
+    # The frozen reference implementations in tests/legacy are compiled with numba
+    "numba",
 ]
 docs = [
     "sphinx",

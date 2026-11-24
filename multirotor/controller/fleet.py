@@ -2,13 +2,13 @@
 The controllers of a `multirotor.fleet.Fleet`. `FleetController` holds the
 parameters and the state of the cascaded controller of each of ``K`` vehicles as
 arrays with the vehicle as the first axis, and steps all of them with one compiled
-loop over the vehicles (`multirotor.controller.cascade.fleet_step`).
+call, which maps the controller's step over the vehicles (``jax.vmap``).
 
 It is the `Controller` of every vehicle at once. The controllers of the vehicles
 have the same structure: the same periods and options. Their gains and limits can
 differ from vehicle to vehicle.
 
-The arrays follow the layout of `multirotor.controller.data.ControllerData`, with
+The arrays follow the layout of `multirotor.controller.data`, with
 the vehicle in front. A vehicle's slice, such as ``params[k]``, is the matrix of
 one `Controller`: one column per control channel of its six stages. The ``PID_*``
 and ``CASCADE_*`` constants in `multirotor.controller.data` name the rows and
@@ -17,13 +17,32 @@ the first column of each stage.
 from copy import deepcopy
 from typing import Any, Dict, Sequence, Union
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
+from .._compile import step_function
 from ..fleet import Fleet
-from ..tuples import Memo
-from .cascade import fleet_step
+from ..tuples import Memo, Steps
+from .cascade import CascadeStepInputs
 from .data import N_CASCADE_CHANNELS, N_PID_STATES
-from .pid import Controller
+from .pid import Controller, _cascaded_step
+
+
+# Which of the inputs of a controller step that are fixed between steps have the vehicle as
+# their first axis (0), and which are the same for all vehicles (None): the time step, the
+# periods and the options. The inputs that change at every step are in an array of their own.
+_PER_VEHICLE = CascadeStepInputs(
+    pid_params=0, reference=0, body_state=0, acceleration=0, inertia=0, mass=0, weight=0,
+    sim_dt=None, steps=None, feed_forward=0, use_feed_forward=None, feedforward_weight=0,
+    leashing=None, square_root_position=None, square_root_attitude=None)
+
+_fleet_cascaded_step = step_function(
+    jax.vmap(_cascaded_step, in_axes=(0, _PER_VEHICLE)))
+"""
+`multirotor.controller.pid._cascaded_step` for every vehicle: the state and the inputs that
+change at every step have the vehicle as their first axis, and so has the result.
+"""
 
 
 
@@ -86,13 +105,14 @@ class FleetController:
         self._template: Controller = self._copy(first)
 
         self.params: np.ndarray = np.stack(
-            [c._data.params for c in controllers]).astype(float)
+            [c._pid_params for c in controllers]).astype(float)
         "Parameters, shape (K, N_PID_PARAMS, 12)."
         self.state: np.ndarray = np.zeros((k_vehicles, N_PID_STATES, N_CASCADE_CHANNELS))
         "State of the stages, shape (K, N_PID_STATES, 12)."
         self.feedforward_weight: np.ndarray = np.asarray(
             [c.feedforward_weight for c in controllers], float)
         "The weight of the feed-forward velocity in the position stage's output, shape (K,)."
+        self._fixed_inputs = None
         self.reset()
 
 
@@ -116,9 +136,32 @@ class FleetController:
     def _controller_of(self, index: int) -> Controller:
         """A new `Controller` with the parameters of one vehicle's controller."""
         controller = self._copy(self._template)
-        controller._data.params[:] = self.params[index]
+        controller._pid_params[:] = self.params[index]
         controller.feedforward_weight = self.feedforward_weight[index]
         return controller
+
+
+    def _inputs(self) -> CascadeStepInputs:
+        """
+        The inputs of a step that change only when a parameter does, as JAX arrays. They are
+        made again when a parameter has changed since the last step, so that a step does not
+        convert them every time.
+        """
+        fleet = self.fleet
+        if self._fixed_inputs is None or not (
+            np.array_equal(self.params, self._fixed_params)
+            and np.array_equal(self.feedforward_weight, self._fixed_weight)
+        ):
+            k_vehicles = len(fleet)
+            self._fixed_params = self.params.copy()
+            self._fixed_weight = self.feedforward_weight.copy()
+            self._fixed_inputs = jax.tree_util.tree_map(jnp.asarray, CascadeStepInputs(
+                self._fixed_params, np.zeros((k_vehicles, 4)), np.zeros((k_vehicles, 12)),
+                np.zeros((k_vehicles, 3)), fleet._inertia, fleet._mass, fleet.weight,
+                float(fleet.simulation.dt), Steps(self.steps_p, self.steps_a, self.steps_z),
+                np.zeros((k_vehicles, 2)), False, self._fixed_weight, self.leashing,
+                self.square_root_position, self.square_root_attitude))
+        return self._fixed_inputs
 
 
     def reset(self) -> None:
@@ -127,7 +170,7 @@ class FleetController:
         self.state[:] = 0.
         self.action = np.zeros((k_vehicles, 4), self.fleet.dtype)
         self.reference = np.zeros((k_vehicles, 4), self.fleet.dtype)
-        # The memo of `fleet_step`, in float64 like the integrator's state. The
+        # The memo of the cascade, in float64 like the integrator's state. The
         # public `thrust` and `torques` are in the fleet's dtype.
         self._ref_vel = np.zeros((k_vehicles, 2))
         self._thrust = np.zeros((k_vehicles, 1))
@@ -176,7 +219,7 @@ class FleetController:
             raise ValueError(
                 'The periods and options (leashing, square_root_scaling) are the '
                 'same for all vehicles of a fleet.')
-        self.params[index] = scratch._data.params
+        self.params[index] = scratch._pid_params
         self.feedforward_weight[index] = scratch.feedforward_weight
 
 
@@ -240,19 +283,20 @@ class FleetController:
         feed_forward = np.ascontiguousarray(np.broadcast_to(
             np.asarray(feed_forward_velocity, dtype=float)[..., :2], (k_vehicles, 2))) \
             if use_feed_forward else np.zeros((k_vehicles, 2))
-        state, memo, action = fleet_step(
-            self.params, self.state, Memo(self._ref_vel, self._thrust, self._torques), target,
-            np.ascontiguousarray(fleet._state), np.ascontiguousarray(fleet._dxdt[:, 3:6]),
-            fleet._inertia, fleet._mass, fleet.weight, float(fleet.simulation.dt), self.n,
-            self.steps_p, self.steps_a, self.steps_z, feed_forward, use_feed_forward,
-            self.feedforward_weight, self.leashing, self.square_root_position,
-            self.square_root_attitude)
-        action = action.astype(fleet.dtype)
+        inputs = np.concatenate((
+            self.state.reshape(k_vehicles, -1), self._ref_vel, self._thrust, self._torques,
+            target, fleet._state, fleet._dxdt[:, 3:6], feed_forward,
+            np.full((k_vehicles, 1), float(use_feed_forward)),
+            np.full((k_vehicles, 1), float(self.n))), axis=1)
+        out = np.asarray(_fleet_cascaded_step(inputs, self._inputs()))
+        size = N_PID_STATES * N_CASCADE_CHANNELS
+        action = out[:, size + 6:].astype(fleet.dtype)
         # The outputs of the stages are kept even if the state is not, as `thrust` and
         # `torques` report the last step that ran, probe or not.
-        self._ref_vel, self._thrust, self._torques = memo
+        self._ref_vel, self._thrust, self._torques = (
+            out[:, size:size + 2], out[:, size + 2:size + 3], out[:, size + 3:size + 6])
         if persist:
-            self.state[:] = state
+            self.state[:] = out[:, :size].reshape(self.state.shape)
             self.n += 1
             self.t = fleet.t
             self.action = action

@@ -9,8 +9,10 @@ Simulation of multi-rotor unmanned aerial vehicles in python.
 `multirotor` simulates the airframe, propellers, motors and battery of a UAV. It
 includes a PID flight controller with automatic gain search, waypoint
 trajectories, and [Gymnasium](https://gymnasium.farama.org) environments for
-reinforcement learning. The physics runs in compiled [numba](https://numba.pydata.org)
-kernels, so a simulation step takes microseconds.
+reinforcement learning. The physics and the controller are written for
+[JAX](https://docs.jax.dev): they are compiled, a simulation step takes microseconds, a
+fleet is stepped in one call, and a closed-loop simulation can be differentiated with
+respect to any parameter.
 
 ## What you can do with it
 
@@ -79,6 +81,32 @@ plot_datalog(log, figsize=(8, 6))
 plt.show()
 ```
 
+**Differentiate a design.** The parameter dataclasses are JAX pytrees, and the simulation is
+written in JAX, so a flight can be differentiated back to the geometry. Here, the gradient of
+the tracking error with respect to the arm length, for a controller tuned for the vehicle above
+(`controller_model` is what the controller believes about the vehicle's mass and inertia):
+
+```python
+import jax
+import jax.numpy as jnp
+from multirotor.builder import build_vehicle
+from multirotor.rollout import closed_loop_body
+
+state0 = Multirotor(params, sim).rollout_state()          # at rest, at the origin
+tuned = ctrl.rollout_params()
+controller_model = ctrl.rollout_model()
+targets = jnp.tile(jnp.array([2., 0., 2., 0.]), (300, 1))
+
+def tracking_error(arm_length):
+    params = vehicle_params_factory(4, 0.01, arm_length, propeller, 2)   # a VehicleParams
+    plant = build_vehicle(params, sim)                                   # arrays for the simulation
+    trajectory = closed_loop_body(
+        state0, plant, tuned, targets, sim.dt, vehicle.substeps, model=controller_model)[1]
+    return jnp.mean((trajectory[:, :3] - targets[:, :3]) ** 2)
+
+d_error_d_arm_length = jax.grad(tracking_error)(0.3)
+```
+
 The [Quickstart](https://multirotor.readthedocs.io/en/latest/Quickstart.html)
 extends this example with motors and a battery, longer trajectories, and the
 Gymnasium environments. The [Detailed Demo](https://multirotor.readthedocs.io/en/latest/Detailed%20Demo.html)
@@ -135,7 +163,7 @@ These diagrams show the classes a user works with. For developers, the module
 docstrings of `multirotor/physics.py` and `multirotor/dynamics.py` show which
 functions call which, and how the integrated state is laid out. Those of
 `multirotor/controller/pid.py` and `multirotor/controller/cascade.py` do the same
-for the controller. `multirotor/rollout.py` is the functional closed loop that JAX differentiates, and
-`multirotor/tuples.py` holds the named tuples it takes and returns. `Multirotor` and `Controller`
-make them (`rollout_params`, `rollout_state`) and take the state back (`set_rollout_state`). `multirotor/fleet.py` and `multirotor/fleet_kernels.py` show how a fleet's arrays are laid out and which kernels its loops call. The compiled reward of the environments is in
+for the controller. `multirotor/rollout.py` is the closed loop as pure functions, which run many steps in one compiled call and can be differentiated, and
+`multirotor/tuples.py` holds the named tuples it takes and returns. `multirotor/builder.py` makes the vehicle's tuple from a `VehicleParams`, with JAX operations, so it can be differentiated. `Multirotor` and `Controller`
+make them (`rollout_params`, `rollout_state`) and take the state back (`set_rollout_state`). `multirotor/fleet.py` shows how a fleet's arrays are laid out; it maps the step of one vehicle over the fleet. `multirotor/integrator.py` is the fixed-step RK4 integrator. The reward of the environments is in
 `multirotor/env_kernels.py`.

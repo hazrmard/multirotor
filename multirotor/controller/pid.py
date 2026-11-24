@@ -8,7 +8,7 @@ thrust and moments, through six stages that each wrap the same PID law::
 The stages (`PosController`, ...) are passive containers of the PID parameters and
 state of their control channels. They compute nothing and know no vehicle. A
 `Controller` is the executor, as `Multirotor` is for `VehicleParams`: it takes
-over the stages' values into one `ControllerData`, which holds them as matrices
+over the stages' values into matrices
 with one column per control channel, and passes the matrices and its vehicle's
 state to the compiled functions in `multirotor.controller.cascade`.
 
@@ -37,16 +37,21 @@ others run every ``period_a`` seconds.
 from __future__ import annotations
 from typing import Any, Dict, Optional, Union
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
+from .._compile import step_function
 from ..simulation import Multirotor
 from .cascade import CascadeStepInputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
-from ..tuples import ControllerParams, ControllerState, Memo, Steps
+from .gains import (
+    AltGains, AttGains, CascadeGains, ClimbGains, PosGains, RateGains, VelGains)
+from ..tuples import ControllerModel, ControllerParams, ControllerState, Memo, Steps
 from .data import (
-    ControllerData, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
+    new_matrices, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
     PID_MAX_ACCELERATION, PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE,
-    PID_ACTION, PID_INTEGRAL
+    PID_ACTION, PID_INTEGRAL, N_PID_STATES, N_CASCADE_CHANNELS
 )
 
 # See more:
@@ -59,6 +64,52 @@ from .data import (
 
 Gain = Union[float, np.ndarray]
 "A parameter of a stage: one number for all its channels, or one per channel."
+
+
+# The compiled steps. Each takes the state it advances first (see
+# `multirotor._compile.step_function`) and returns one array, so that a step converts one
+# array to numpy.
+
+@step_function
+def _pid_stage(
+    x: jax.Array, pid_params: jax.Array, reference: jax.Array, measurement: jax.Array,
+    dt: float
+) -> jax.Array:
+    """`pid_stage`. Returns the stage's new state, whose ``PID_ACTION`` row is the action."""
+    return pid_stage(pid_params, x, reference, measurement, dt)[1]
+
+
+N_CONTROLLER_STATE = N_PID_STATES * N_CASCADE_CHANNELS + 6
+"The length of a controller's state as one array: the state matrix, raveled, and the memo."
+
+
+def _cascaded_step(inputs: jax.Array, fixed: CascadeStepInputs) -> jax.Array:
+    """
+    `cascaded_step`, with what changes at every step as one array.
+
+    ``inputs``: The controller's state matrix (raveled), then the memo's velocity reference
+      (2), thrust (1) and torques (3), which together are the first `N_CONTROLLER_STATE`
+      elements; then the reference (4), the vehicle's body state (12) and acceleration (3),
+      the feed-forward velocity (2), whether to use it (1, as a float), and the number of
+      steps taken (1, as a float).
+    ``fixed``: The other inputs, which change only when the controller's parameters do. Its
+      fields for the inputs in ``inputs`` are ignored.
+    Returns: The first `N_CONTROLLER_STATE` elements of ``inputs`` after the step, then the
+      action (4).
+    """
+    size = N_PID_STATES * N_CASCADE_CHANNELS
+    x = inputs[:size].reshape(N_PID_STATES, N_CASCADE_CHANNELS)
+    memo = Memo(inputs[size:size + 2], inputs[size + 2:size + 3], inputs[size + 3:size + 6])
+    moving = inputs[N_CONTROLLER_STATE:]
+    step_inputs = fixed._replace(
+        reference=moving[:4], body_state=moving[4:16], acceleration=moving[16:19],
+        feed_forward=moving[19:21], use_feed_forward=moving[21] > .5)
+    x, memo, action = cascaded_step(x, memo, step_inputs, moving[22].astype(int))
+    return jnp.concatenate((x.ravel(), memo.ref_vel, memo.thrust, memo.torques, action))
+
+
+_compiled_cascaded_step = step_function(_cascaded_step)
+_leash_distance = step_function(leash_distance)
 
 
 def _vector(x: Union[float, np.ndarray]) -> np.ndarray:
@@ -75,10 +126,10 @@ def _param(row: int, doc: str) -> property:
     """A property that views one row of the parameter matrix, over a stage's columns."""
     def get(self: PIDStage) -> np.ndarray:
         "The row, over the stage's columns."
-        return self._data.params[row, self._start:self._stop]
+        return self._pid_params[row, self._start:self._stop]
     def set(self: PIDStage, value: Gain) -> None:
         "Set the row, over the stage's columns."
-        self._data.params[row, self._start:self._stop] = value
+        self._pid_params[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
@@ -86,10 +137,10 @@ def _state(row: int, doc: str) -> property:
     """A property that views one row of the state matrix, over a stage's columns."""
     def get(self: PIDStage) -> np.ndarray:
         "The row, over the stage's columns."
-        return self._data.state[row, self._start:self._stop]
+        return self._pid_state[row, self._start:self._stop]
     def set(self: PIDStage, value: Gain) -> None:
         "Set the row, over the stage's columns."
-        self._data.state[row, self._start:self._stop] = value
+        self._pid_state[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
@@ -97,10 +148,10 @@ def _scalar_param(row: int, doc: str) -> property:
     """A property for a parameter of a stage that has one value for all its channels."""
     def get(self: PIDStage) -> float:
         "The value of the first channel."
-        return float(self._data.params[row, self._start])
+        return float(self._pid_params[row, self._start])
     def set(self: PIDStage, value: float) -> None:
         "Set the value of every channel."
-        self._data.params[row, self._start:self._stop] = value
+        self._pid_params[row, self._start:self._stop] = value
     return property(get, set, doc=doc)
 
 
@@ -114,8 +165,8 @@ class PIDStage:
 
         u = k_p * err + k_d * d(err)/dt + k_i * int(err . dt)
 
-    The constants and the state are views of columns of a `ControllerData`. A
-    stage owns one until a `Controller` takes it over.
+    The constants and the state are columns of matrices. A stage owns its matrices until a
+    `Controller` takes it over.
     """
 
     k_p = _param(PID_K_P, "Proportional constant")
@@ -146,33 +197,34 @@ class PIDStage:
         """
         if n is None:
             n = max(np.size(k_p), np.size(k_i), np.size(k_d), 1)
-        self._bind(ControllerData(n), 0, n)
+        self._bind(*new_matrices(n), 0, n)
         self._adopted: bool = False
         self.k_p, self.k_i, self.k_d = k_p, k_i, k_d
         self.max_err_i = np.inf if max_err_i is None else max_err_i
         self._params = ('k_p', 'k_i', 'k_d', 'max_err_i')
 
 
-    def _bind(self, data: ControllerData, start: int, n: int) -> None:
-        """Make this controller a view of ``n`` columns of ``data``, from ``start``."""
-        self._data: ControllerData = data
+    def _bind(self, params: np.ndarray, state: np.ndarray, start: int, n: int) -> None:
+        """Make this stage index ``n`` columns of the matrices, from ``start``."""
+        self._pid_params: np.ndarray = params
+        self._pid_state: np.ndarray = state
         self._start: int = start
         self._stop: int = start + n
         self.n: int = n
 
 
-    def _adopt(self, data: ControllerData, start: int) -> None:
-        """Move this controller, with its values, to columns of ``data`` from ``start``."""
+    def _adopt(self, params: np.ndarray, state: np.ndarray, start: int) -> None:
+        """Move this stage, with its values, to columns of the matrices from ``start``."""
         self._adopted = True
         stop = start + self.n
-        data.params[:, start:stop] = self._data.params[:, self._start:self._stop]
-        data.state[:, start:stop] = self._data.state[:, self._start:self._stop]
-        self._bind(data, start, self.n)
+        params[:, start:stop] = self._pid_params[:, self._start:self._stop]
+        state[:, start:stop] = self._pid_state[:, self._start:self._stop]
+        self._bind(params, state, start, self.n)
 
 
     def reset(self) -> None:
         "Set the state of every channel to zero."
-        self._data.state[:, self._start:self._stop] = 0.
+        self._pid_state[:, self._start:self._stop] = 0.
 
 
     def set_params(self, **params: Union[np.ndarray, bool, float, int]) -> None:
@@ -258,12 +310,12 @@ class PIDController(PIDStage):
         mea = np.zeros(shape) if ref_is_error \
             else np.array(np.broadcast_to(_vector(measurement), shape))
         columns = slice(self._start, self._stop)
-        state = self._data.state[:, columns]
-        action, new_state = pid_stage(
-            self._data.params[:, columns], state, ref, mea, float(dt))
+        state = self._pid_state[:, columns]
+        new_state = np.asarray(_pid_stage(
+            state, self._pid_params[:, columns], ref, mea, float(dt)))
         if persist:
             state[:] = new_state
-        return action
+        return new_state[PID_ACTION].copy()
 
 
 
@@ -410,12 +462,12 @@ class RateController(PIDStage):
 
     def _get_max_acceleration(self) -> Union[float, np.ndarray]:
         "The acceleration limit: a number if it is the same for all axes, else one per axis."
-        limit = self._data.params[PID_LIMIT, self._start:self._stop]
+        limit = self._pid_params[PID_LIMIT, self._start:self._stop]
         return float(limit[0]) if np.all(limit == limit[0]) else limit.copy()
 
     def _set_max_acceleration(self, value: Gain) -> None:
         """Set the acceleration limit."""
-        self._data.params[PID_LIMIT, self._start:self._stop] = value
+        self._pid_params[PID_LIMIT, self._start:self._stop] = value
 
     max_acceleration = property(
         _get_max_acceleration, _set_max_acceleration,
@@ -544,7 +596,7 @@ class Controller:
         self.steps_a = max(1, round(self.period_a / dt))
         self.steps_z = max(1, round(self.period_z / dt))
         self.feedforward_weight = feedforward_weight
-        # The stages become views of the columns of one data object
+        # The stages index the columns of one pair of matrices
         stages = self._stages
         # A stage moves into this controller's data, so it can belong to only one
         # controller. Check all stages before moving any.
@@ -553,12 +605,38 @@ class Controller:
         if any(stage._adopted for stage in stages):
             raise ValueError(
                 'A stage already belongs to a Controller. Build new stages.')
-        self._data = ControllerData(sum(stage.n for stage in stages))
+        self._pid_params, self._pid_state = new_matrices(sum(stage.n for stage in stages))
         start = 0
         for stage in stages:
-            stage._adopt(self._data, start)
+            stage._adopt(self._pid_params, self._pid_state, start)
             start += stage.n
+        self._fixed_inputs: Optional[CascadeStepInputs] = None
+        self._fixed_key: tuple = ()
         self.reset()
+
+
+    def _inputs(self) -> CascadeStepInputs:
+        """
+        The inputs of a step that change only when a parameter does, as JAX arrays. They are
+        made again when a parameter, a period or an option has changed since the last step,
+        so that a step does not convert them every time.
+        """
+        vehicle = self.vehicle
+        key = (
+            self.steps_p, self.steps_a, self.steps_z, float(self.feedforward_weight),
+            bool(self.ctrl_p.leashing), bool(self.ctrl_p.square_root_scaling),
+            bool(self.ctrl_a.square_root_scaling), float(vehicle.params.mass),
+            float(vehicle.weight), float(vehicle.simulation.dt))
+        if key != self._fixed_key or not np.array_equal(self._pid_params, self._fixed_params):
+            steps_p, steps_a, steps_z, weight, leashing, sqrt_p, sqrt_a, mass, weight_n, dt = key
+            self._fixed_params = self._pid_params.copy()
+            self._fixed_key = key
+            self._fixed_inputs = jax.tree_util.tree_map(jnp.asarray, CascadeStepInputs(
+                self._fixed_params, np.zeros(4), np.zeros(12), np.zeros(3),
+                np.asarray(vehicle.params.inertia_matrix, dtype=np.float64), mass, weight_n,
+                dt, Steps(steps_p, steps_a, steps_z), np.zeros(2), False, weight, leashing,
+                sqrt_p, sqrt_a))
+        return self._fixed_inputs
 
 
     def reset(self) -> np.ndarray:
@@ -585,6 +663,74 @@ class Controller:
         return self.state
 
 
+    @classmethod
+    def from_gains(cls, gains: CascadeGains, vehicle: Multirotor) -> 'Controller':
+        """
+        A controller with the gains, limits and periods of a `CascadeGains`, for a vehicle.
+
+        Parameters
+        ----------
+        gains : CascadeGains
+            The gains. Their values are copied.
+        vehicle : Multirotor
+            The vehicle to control.
+
+        Returns
+        -------
+        Controller
+        """
+        def copy(x):
+            return None if x is None else np.array(x, dtype=float)
+        p, v, a, r, z, c = (gains.position, gains.velocity, gains.attitude, gains.rate,
+                            gains.altitude, gains.climb)
+        return cls(
+            PosController(
+                copy(p.k_p), copy(p.k_i), copy(p.k_d), copy(p.max_err_i),
+                float(p.max_velocity), float(p.max_acceleration), float(p.max_jerk),
+                p.square_root_scaling, p.leashing),
+            VelController(copy(v.k_p), copy(v.k_i), copy(v.k_d), copy(v.max_err_i),
+                          float(v.max_tilt)),
+            AttController(
+                copy(a.k_p), copy(a.k_i), copy(a.k_d), copy(a.max_err_i),
+                float(a.max_acceleration), float(a.max_jerk), a.square_root_scaling),
+            RateController(copy(r.k_p), copy(r.k_i), copy(r.k_d), copy(r.max_err_i),
+                           copy(r.max_acceleration)),
+            AltController(copy(z.k_p), 0., 0., copy(z.max_err_i), float(z.max_velocity)),
+            AltRateController(copy(c.k_p), copy(c.k_i), copy(c.k_d), copy(c.max_err_i)),
+            vehicle=vehicle, period_p=gains.period_p, period_a=gains.period_a,
+            period_z=gains.period_z, feedforward_weight=float(gains.feedforward_weight))
+
+
+    def gains(self) -> CascadeGains:
+        """
+        The gains, limits and periods of this controller as a `CascadeGains`, as of this
+        call. `multirotor.controller.gains.build_controller` of them gives
+        `rollout_params`. A gain that is the same for all channels of a stage is a number.
+
+        Returns
+        -------
+        CascadeGains
+        """
+        def one(x):
+            x = np.array(x, dtype=float)
+            return float(x[0]) if np.all(x == x[0]) else x
+        def pid(stage):
+            return dict(k_p=one(stage.k_p), k_i=one(stage.k_i), k_d=one(stage.k_d),
+                        max_err_i=one(stage.max_err_i))
+        p, v, a, r, z, c = self._stages
+        return CascadeGains(
+            PosGains(**pid(p), max_velocity=p.max_velocity,
+                     max_acceleration=p.max_acceleration, max_jerk=float(p.max_jerk),
+                     square_root_scaling=p.square_root_scaling, leashing=p.leashing),
+            VelGains(**pid(v), max_tilt=v.max_tilt),
+            AttGains(**pid(a), max_acceleration=a.max_acceleration,
+                     max_jerk=float(a.max_jerk), square_root_scaling=a.square_root_scaling),
+            RateGains(**pid(r), max_acceleration=r.max_acceleration),
+            AltGains(k_p=one(z.k_p), max_err_i=one(z.max_err_i), max_velocity=z.max_velocity),
+            ClimbGains(**pid(c)),
+            float(self.feedforward_weight), self.period_p, self.period_a, self.period_z)
+
+
     def rollout_params(self) -> ControllerParams:
         """
         The parameters of this controller as the `multirotor.tuples.ControllerParams` that
@@ -597,10 +743,28 @@ class Controller:
             The parameters.
         """
         return ControllerParams(
-            np.array(self._data.params, float), np.array(self.vehicle.alloc_inverse, float),
+            np.array(self._pid_params, float), np.array(self.vehicle.alloc_inverse, float),
             Steps(self.steps_p, self.steps_a, self.steps_z), float(self.feedforward_weight),
             bool(self.ctrl_p.leashing), bool(self.ctrl_p.square_root_scaling),
             bool(self.ctrl_a.square_root_scaling))
+
+
+    def rollout_model(self) -> ControllerModel:
+        """
+        What this controller believes about its vehicle, as the
+        `multirotor.tuples.ControllerModel` that a rollout takes: the mass, weight and inertia
+        it was given, as of this call. Pass it to a rollout to simulate a vehicle whose mass
+        differs from the one the controller was tuned for.
+
+        Returns
+        -------
+        ControllerModel
+            The mass, the weight (N) and the inertia matrix, as float64.
+        """
+        vehicle = self.vehicle
+        return ControllerModel(
+            float(vehicle.params.mass), float(vehicle.weight),
+            np.array(vehicle.params.inertia_matrix, float))
 
 
     def rollout_state(self) -> ControllerState:
@@ -614,7 +778,7 @@ class Controller:
             The state.
         """
         return ControllerState(
-            np.array(self._data.state, float),
+            np.array(self._pid_state, float),
             Memo(np.array(self._ref_vel, float), np.array(self._thrust, float),
                  np.array(self._torques, float)), int(self.n))
 
@@ -629,7 +793,7 @@ class Controller:
         state : ControllerState
             The state to continue from.
         """
-        self._data.state[:] = np.asarray(state.x, float)
+        self._pid_state[:] = np.asarray(state.x, float)
         self._ref_vel, self._thrust, self._torques = (np.array(m, float) for m in state.memo)
         self.n = int(state.n)
         self.t = self.vehicle.t
@@ -696,9 +860,9 @@ class Controller:
         "The largest horizontal position error that is acted on, given the vehicle's motion."
         if not self.ctrl_p.leashing:
             return np.inf
-        return leash_distance(
+        return float(_leash_distance(
             float(self.ctrl_p.k_p[0]), _state64(self.vehicle),
-            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt)
+            _vector(self.vehicle.acceleration), self.vehicle.simulation.dt))
 
 
     def step(
@@ -744,21 +908,19 @@ class Controller:
         use_feed_forward = feed_forward_velocity is not None
         feed_forward = _vector(feed_forward_velocity)[:2] if use_feed_forward \
             else np.zeros(2)
-        inputs = CascadeStepInputs(
-            self._data.params, target, _state64(vehicle), _vector(vehicle.acceleration),
-            np.asarray(vehicle.params.inertia_matrix, dtype=np.float64),
-            float(vehicle.params.mass), float(vehicle.weight), float(vehicle.simulation.dt),
-            Steps(self.steps_p, self.steps_a, self.steps_z), feed_forward, use_feed_forward,
-            float(self.feedforward_weight), self.ctrl_p.leashing,
-            self.ctrl_p.square_root_scaling, self.ctrl_a.square_root_scaling)
-        state, memo, action = cascaded_step(
-            self._data.state, Memo(self._ref_vel, self._thrust, self._torques), inputs, self.n)
-        action = action.astype(self.dtype)
+        inputs = np.concatenate((
+            self._pid_state.ravel(), self._ref_vel, self._thrust, self._torques, target,
+            vehicle.state, vehicle.acceleration, feed_forward, (use_feed_forward, self.n)),
+            dtype=float)
+        out = np.asarray(_compiled_cascaded_step(inputs, self._inputs()))
+        size = self._pid_state.size
+        action = out[size + 6:].astype(self.dtype)
         # The outputs of the stages are kept even if the state is not, as `thrust` and
         # `torques` report the last step that ran, probe or not.
-        self._ref_vel, self._thrust, self._torques = memo
+        self._ref_vel, self._thrust, self._torques = (
+            out[size:size + 2], out[size + 2:size + 3], out[size + 3:size + 6])
         if persist:
-            self._data.state[:] = state
+            self._pid_state[:] = out[:size].reshape(self._pid_state.shape)
             self.n += 1
             self.t = vehicle.t
             self.action = action

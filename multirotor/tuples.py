@@ -1,57 +1,41 @@
 """
-The named tuples that `multirotor.rollout` takes and returns, and the ones that the
-kernel modules share (`MotorSupply`).
+The named tuples that `multirotor.rollout` takes and returns.
 
-Both backends read them as they are: numba types a named tuple as a value on the
-stack, and JAX treats it as a pytree that it can differentiate, and returns the
-gradient in the same type, so ``grad(loss)(vehicle).mass`` is the gradient with
-respect to the mass. A kernel reads ``vehicle.mass`` where it once read ``vehicle[1]``.
+JAX treats a named tuple as a pytree: it compiles and maps functions over one, and returns a
+gradient in the same type, so ``grad(loss)(vehicle).mass`` is the gradient with respect to
+the mass.
 
-These are the tuples that cross modules. A tuple that is only the operand of one
-function's branches or loop body, such as ``BatteryLoad`` in `multirotor.physics`, is defined
-beside those functions, and is not exported.
-
-The imperative classes convert to and from these tuples, and nowhere else: see
-`multirotor.simulation.Multirotor.rollout_params` and
-`multirotor.controller.Controller.rollout_params`. The matrices inside them keep the
-layout of the imperative classes. A row of ``prop_params`` is named by the ``PROP_*``
-constants of `multirotor.physics`, and a row of ``ControllerParams.params`` by the ``PID_*``
-constants of `multirotor.controller.data`.
+`multirotor.builder.build_vehicle` makes the vehicle tuples from a
+`multirotor.vehicle.VehicleParams`, with numpy or JAX operations, so a gradient can reach the
+geometry. `multirotor.simulation.Multirotor.rollout_params` and
+`multirotor.controller.Controller.rollout_params` give the tuples of a vehicle and a controller
+that exist. The matrices inside them keep the layout of the classes. A row of ``prop_params`` is
+named by the ``PROP_*`` constants of `multirotor.physics`, and a row of
+``ControllerParams.params`` by the ``PID_*`` constants of `multirotor.controller.data`.
 
 The values can be numpy or JAX arrays. A named tuple is immutable. To change one value of
-a tuple ``v``, make a new one with ``v._replace(mass=2.)``. That works with numpy and
-JAX, but not inside numba-compiled code.
+a tuple ``v``, make a new one with ``v._replace(mass=2.)``.
 
 ``inertia_inverse`` is a field of its own, so that a step does not invert the matrix. To
 differentiate with respect to the inertia, replace both fields:
 ``v._replace(inertia=m, inertia_inverse=jnp.linalg.inv(m))``. Replacing only ``inertia``
-leaves the dynamics with the old inverse, and the gradient is silently wrong.
+leaves the dynamics with the old inverse, and the gradient is silently wrong. Building the tuple
+with `multirotor.builder.build_vehicle` derives the inverse, the positions and the rest from the
+parameters, so they stay consistent. The same goes for the controller's allocation:
+``ControllerParams.alloc_inverse`` is ``control_allocation_matrix(params)[1]`` of the vehicle it
+is for, and does not follow a change to the vehicle's tuple.
 """
-from typing import NamedTuple, Union
+from typing import Any, NamedTuple, Sequence, Union
 
 import numpy as np
-
-
-class MotorSupply(NamedTuple):
-    """
-    The battery's supply to the motors: its open-circuit voltage, and the motors' speeds,
-    speed signals and parameters. The input to the branches that tell a battery that supplies
-    the motors from one that is cut off or empty, during a step
-    (`multirotor.dynamics.battery_state`) and at its end
-    (`multirotor.physics.battery_end_step`).
-    """
-    open_circuit_voltage: float
-    speeds: np.ndarray
-    u: np.ndarray
-    motor_params: np.ndarray
-    battery_params: np.ndarray
 
 
 class BodyVehicle(NamedTuple):
     """
     The parameters of a vehicle without motors. ``prop_params`` is the propeller matrix,
     ``clockwise`` the sign of each propeller's spin and ``positions`` the propellers' positions
-    relative to the center of mass, shape (3, n).
+    relative to the center of mass, shape (3, n). ``disturbance`` is a force and a torque on
+    the body, in its frame, shape (6,).
     """
     g: float
     mass: float
@@ -60,6 +44,7 @@ class BodyVehicle(NamedTuple):
     prop_params: np.ndarray
     clockwise: np.ndarray
     positions: np.ndarray
+    disturbance: np.ndarray
 
 
 class MotorsVehicle(NamedTuple):
@@ -98,6 +83,19 @@ class BatteryVehicle(NamedTuple):
 
 KINDS = {BodyVehicle: 'body', MotorsVehicle: 'motors', BatteryVehicle: 'motors_battery'}
 "The ``closed_loop_<kind>`` function that takes each type of vehicle."
+
+
+class ControllerModel(NamedTuple):
+    """
+    What the controller believes about the vehicle: the ``mass`` and ``weight`` (N) that it
+    uses to turn a commanded acceleration into thrust, and the ``inertia`` matrix, shape
+    (3, 3), that it uses to turn a commanded angular acceleration into torque. A rollout uses
+    the vehicle's own values unless it is given a model, so that a vehicle with a different
+    mass than the controller was tuned for can be simulated.
+    """
+    mass: float
+    weight: float
+    inertia: np.ndarray
 
 
 class VehicleState(NamedTuple):
@@ -166,57 +164,6 @@ class ControllerState(NamedTuple):
     n: int
 
 
-def body_arguments(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> tuple:
-    """
-    The parameters that `multirotor.dynamics.rhs_body` takes.
-
-    Parameters
-    ----------
-    vehicle : BodyVehicle, MotorsVehicle or BatteryVehicle
-        The vehicle's parameters.
-
-    Returns
-    -------
-    tuple
-        Gravity, mass, inertia matrix and its inverse.
-    """
-    return vehicle.g, vehicle.mass, vehicle.inertia, vehicle.inertia_inverse
-
-
-def rhs_arguments(
-    vehicle: Union[MotorsVehicle, BatteryVehicle], u: np.ndarray, limit: Union[float, bool],
-    disturbance: np.ndarray
-) -> tuple:
-    """
-    The arguments, after ``t`` and ``x``, of the right-hand side in `multirotor.dynamics` for a
-    vehicle with motors, in the order that it takes them.
-
-    Parameters
-    ----------
-    vehicle : MotorsVehicle or BatteryVehicle
-        The vehicle's parameters.
-    u : np.ndarray
-        The speed signals, shape (n,).
-    limit : float or bool
-        The motors' voltage limit, or with a battery model the battery's cutoff flag.
-    disturbance : np.ndarray
-        The force and torque disturbing the body, shape (6,).
-
-    Returns
-    -------
-    tuple
-        The arguments of `rhs_body_with_motors`, or with a battery model of
-        `rhs_body_with_motors_and_battery` up to its last one, the charge drawn before the step,
-        which varies from step to step.
-    """
-    arguments = (
-        u, limit, disturbance, *body_arguments(vehicle), vehicle.prop_params,
-        vehicle.motor_params, vehicle.clockwise, vehicle.positions)
-    if isinstance(vehicle, BatteryVehicle):
-        arguments += (vehicle.battery_params, vehicle.ocv_soc, vehicle.ocv_voltage)
-    return arguments
-
-
 def kind_of(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> str:
     """
     The type of a vehicle's parameters, as the name of its rollout function.
@@ -233,3 +180,26 @@ def kind_of(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> str:
         that takes it.
     """
     return KINDS[type(vehicle)]
+
+
+
+def stack(trees: Sequence) -> Any:
+    """
+    Stack tuples of one kind into one whose every field has a new first axis, one row per
+    tuple, as JAX arrays: the batch that ``jax.vmap`` and the fleet's steps map over.
+
+    Parameters
+    ----------
+    trees : Sequence
+        Tuples (or any pytrees) of the same structure, such as the `BodyVehicle` of each
+        vehicle in a fleet.
+
+    Returns
+    -------
+    Any
+        A tuple of the same type, whose fields have shape (len(trees), ...).
+    """
+    import jax
+    import jax.numpy as jnp
+    return jax.tree_util.tree_map(
+        lambda *leaves: jnp.asarray(np.stack([np.asarray(x, float) for x in leaves])), *trees)

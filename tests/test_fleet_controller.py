@@ -3,8 +3,8 @@ Tests for `FleetController`: a fleet in closed loop must fly like separate
 vehicles, each with its own `Controller`, and the fleet's controllers must accept
 only what the fleet's arrays can hold.
 
-As in ``test_fleet.py``, a tight-tolerance integrator takes the solver's error out
-of the comparison.
+As in ``test_fleet.py``, the fleet and the separate vehicles use the same fixed-step
+integrator, so the comparison is to rounding.
 """
 from copy import deepcopy
 
@@ -18,7 +18,7 @@ from multirotor.optimize import get_controller, get_fleet_controller
 from multirotor.simulation import Multirotor
 from multirotor.vehicle import BatteryParams
 
-from test_fleet import BATTERY, K, make_fleet_params, stacked, tight
+from test_fleet import BATTERY, K, make_fleet_params, stacked
 
 STEPS = 400
 config = pytest.mark.parametrize('kwargs', (
@@ -63,14 +63,14 @@ def start_state() -> np.ndarray:
 def make_closed_loop(kwargs, spread=True, **overrides):
     "Separate vehicles with controllers, and the same as a fleet."
     plist, sp = make_fleet_params(**kwargs)
-    singles = [Multirotor(p, sp, tight) for p in plist]
+    singles = [Multirotor(p, sp) for p in plist]
     for vehicle, state in zip(singles, start_state()):
         vehicle.state[:] = state
     controllers = make_controllers(singles, spread)
     for controller in controllers:
         for name, value in overrides.items():
             setattr(controller, name, value)
-    fleet = Fleet(plist, sp, tight)
+    fleet = Fleet(plist, sp)
     fleet.reset(start_state())
     return singles, controllers, fleet, FleetController(fleet, controllers)
 
@@ -143,21 +143,21 @@ def test_reference_as_error():
 
 def test_one_controller_for_all_vehicles_and_defaults():
     plist, sp = make_fleet_params()
-    singles = [Multirotor(p, sp, tight) for p in plist]
+    singles = [Multirotor(p, sp) for p in plist]
     template = get_controller(singles[0])
-    fleet = Fleet(plist, sp, tight)
+    fleet = Fleet(plist, sp)
     fleet_controller = FleetController(fleet, template)
     # The vehicles differ in mass, but the gains are those of the template
-    assert np.all(fleet_controller.params == template._data.params)
+    assert np.all(fleet_controller.params == template._pid_params)
     defaults = get_fleet_controller(fleet)
     assert np.all(defaults.params == fleet_controller.params)
     # The template is a copy: stepping the fleet leaves it unchanged
-    state = template._data.state.copy()
+    state = template._pid_state.copy()
     for i in range(20):
         fleet_controller.step(waypoint(i))
         fleet.step_speeds(np.tile(fleet.allocate_control(
             fleet.weight, np.zeros((K, 3)))[0], (K, 1)))
-    assert np.all(template._data.state == state)
+    assert np.all(template._pid_state == state)
     assert not np.all(fleet_controller.state == 0)
 
 
