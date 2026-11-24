@@ -5,12 +5,13 @@ JAX treats a named tuple as a pytree: it compiles and maps functions over one, a
 gradient in the same type, so ``grad(loss)(vehicle).mass`` is the gradient with respect to
 the mass.
 
-The classes convert to and from these tuples, and nowhere else: see
-`multirotor.simulation.Multirotor.rollout_params` and
-`multirotor.controller.Controller.rollout_params`. The matrices inside them keep the
-layout of the classes. A row of ``prop_params`` is named by the ``PROP_*``
-constants of `multirotor.physics`, and a row of ``ControllerParams.params`` by the ``PID_*``
-constants of `multirotor.controller.data`.
+`multirotor.builder.build_vehicle` makes the vehicle tuples from a
+`multirotor.vehicle.VehicleParams`, with numpy or JAX operations, so a gradient can reach the
+geometry. `multirotor.simulation.Multirotor.rollout_params` and
+`multirotor.controller.Controller.rollout_params` give the tuples of a vehicle and a controller
+that exist. The matrices inside them keep the layout of the classes. A row of ``prop_params`` is
+named by the ``PROP_*`` constants of `multirotor.physics`, and a row of
+``ControllerParams.params`` by the ``PID_*`` constants of `multirotor.controller.data`.
 
 The values can be numpy or JAX arrays. A named tuple is immutable. To change one value of
 a tuple ``v``, make a new one with ``v._replace(mass=2.)``.
@@ -18,7 +19,11 @@ a tuple ``v``, make a new one with ``v._replace(mass=2.)``.
 ``inertia_inverse`` is a field of its own, so that a step does not invert the matrix. To
 differentiate with respect to the inertia, replace both fields:
 ``v._replace(inertia=m, inertia_inverse=jnp.linalg.inv(m))``. Replacing only ``inertia``
-leaves the dynamics with the old inverse, and the gradient is silently wrong.
+leaves the dynamics with the old inverse, and the gradient is silently wrong. Building the tuple
+with `multirotor.builder.build_vehicle` derives the inverse, the positions and the rest from the
+parameters, so they stay consistent. The same goes for the controller's allocation:
+``ControllerParams.alloc_inverse`` is ``control_allocation_matrix(params)[1]`` of the vehicle it
+is for, and does not follow a change to the vehicle's tuple.
 """
 from typing import NamedTuple, Union
 
@@ -78,6 +83,19 @@ class BatteryVehicle(NamedTuple):
 
 KINDS = {BodyVehicle: 'body', MotorsVehicle: 'motors', BatteryVehicle: 'motors_battery'}
 "The ``closed_loop_<kind>`` function that takes each type of vehicle."
+
+
+class ControllerModel(NamedTuple):
+    """
+    What the controller believes about the vehicle: the ``mass`` and ``weight`` (N) that it
+    uses to turn a commanded acceleration into thrust, and the ``inertia`` matrix, shape
+    (3, 3), that it uses to turn a commanded angular acceleration into torque. A rollout uses
+    the vehicle's own values unless it is given a model, so that a vehicle with a different
+    mass than the controller was tuned for can be simulated.
+    """
+    mass: float
+    weight: float
+    inertia: np.ndarray
 
 
 class VehicleState(NamedTuple):

@@ -45,7 +45,7 @@ from .._compile import step_function
 from ..simulation import Multirotor
 from .cascade import CascadeStepInputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
-from ..tuples import ControllerParams, ControllerState, Memo, Steps
+from ..tuples import ControllerModel, ControllerParams, ControllerState, Memo, Steps
 from .data import (
     new_matrices, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
     PID_MAX_ACCELERATION, PID_ERR, PID_ERR_P, PID_ERR_I, PID_ERR_D, PID_REFERENCE,
@@ -677,6 +677,24 @@ class Controller:
             Steps(self.steps_p, self.steps_a, self.steps_z), float(self.feedforward_weight),
             bool(self.ctrl_p.leashing), bool(self.ctrl_p.square_root_scaling),
             bool(self.ctrl_a.square_root_scaling))
+
+
+    def rollout_model(self) -> ControllerModel:
+        """
+        What this controller believes about its vehicle, as the
+        `multirotor.tuples.ControllerModel` that a rollout takes: the mass, weight and inertia
+        it was given, as of this call. Pass it to a rollout to simulate a vehicle whose mass
+        differs from the one the controller was tuned for.
+
+        Returns
+        -------
+        ControllerModel
+            The mass, the weight (N) and the inertia matrix, as float64.
+        """
+        vehicle = self.vehicle
+        return ControllerModel(
+            float(vehicle.params.mass), float(vehicle.weight),
+            np.array(vehicle.params.inertia_matrix, float))
 
 
     def rollout_state(self) -> ControllerState:

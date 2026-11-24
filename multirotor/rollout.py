@@ -37,8 +37,8 @@ from .dynamics import (
 from .integrator import DEFAULT_SUBSTEPS, integrate  # noqa: F401, DEFAULT_SUBSTEPS is re-exported
 from .physics import battery_end_step, forces_torques, sqrt_nonneg
 from .tuples import (
-    BatteryVehicle, BodyVehicle, ControllerParams, ControllerState, Memo, MotorsVehicle,
-    VehicleState)
+    BatteryVehicle, BodyVehicle, ControllerModel, ControllerParams, ControllerState, Memo,
+    MotorsVehicle, VehicleState)
 
 Array = jax.Array
 Vehicle = Union[BodyVehicle, MotorsVehicle, BatteryVehicle]
@@ -122,17 +122,30 @@ def allocate(alloc_inverse: Array, thrust_torques: Array) -> Array:
 
 
 
+def plant_model(vehicle: Vehicle) -> ControllerModel:
+    """
+    The controller model that is exact for a vehicle: its mass, its weight and its inertia.
+    A rollout uses it unless it is given another.
+    """
+    return ControllerModel(vehicle.mass, vehicle.mass * vehicle.g, vehicle.inertia)
+
+
+
 def control(
     controller: ControllerState, state: VehicleState, vehicle: Vehicle,
-    ctrl: ControllerParams, target: Array, dt: float
+    ctrl: ControllerParams, target: Array, dt: float,
+    model: Optional[ControllerModel] = None
 ) -> Tuple[ControllerState, Array]:
     """
     One step of the controller for a vehicle in ``state``, towards ``target`` (x, y, z and
-    yaw). Returns the controller's new state, and its thrust and three torques, shape (4,).
+    yaw). The controller's model of the vehicle is ``model``, by default the vehicle's own
+    values (`plant_model`). Returns the controller's new state, and its thrust and three
+    torques, shape (4,).
     """
+    model = plant_model(vehicle) if model is None else model
     inputs = CascadeStepInputs(
-        ctrl.params, target, state.x[:N_BODY_STATES], state.acceleration, vehicle.inertia,
-        vehicle.mass, vehicle.mass * vehicle.g, dt, ctrl.steps, jnp.zeros(2), False,
+        ctrl.params, target, state.x[:N_BODY_STATES], state.acceleration, model.inertia,
+        model.mass, model.weight, dt, ctrl.steps, jnp.zeros(2), False,
         ctrl.feedforward_weight, ctrl.leashing, ctrl.square_root_position,
         ctrl.square_root_attitude)
     x, memo, action = cascaded_step(controller.x, controller.memo, inputs, controller.n)
@@ -149,7 +162,8 @@ def controller_at_rest() -> ControllerState:
 
 def closed_loop(
     step: Step, state0: VehicleState, vehicle: Vehicle, ctrl: ControllerParams,
-    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None
+    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None,
+    model: Optional[ControllerModel] = None
 ) -> Tuple[Tuple[ControllerState, VehicleState], Array]:
     """
     Run the controller and a vehicle for ``len(targets)`` steps. ``closed_loop_body``,
@@ -161,7 +175,7 @@ def closed_loop(
     step : Step
         The step function of the vehicle: `step_body`, `step_motors` or
         `step_motors_battery`.
-    state0, vehicle, ctrl, targets, dt, substeps, start
+    state0, vehicle, ctrl, targets, dt, substeps, start, model
         As in `closed_loop_body`.
 
     Returns
@@ -176,7 +190,7 @@ def closed_loop(
     ) -> Tuple[Tuple[ControllerState, VehicleState], Array]:
         """The controller drives, then the vehicle steps. Returns the trajectory's row."""
         controller, state = carry
-        controller, action = control(controller, state, vehicle, ctrl, target, dt)
+        controller, action = control(controller, state, vehicle, ctrl, target, dt, model)
         state = step(state, allocate(ctrl.alloc_inverse, action), vehicle, dt, substeps)
         return (controller, state), jnp.concatenate((state.x[:N_BODY_STATES], action))
 
@@ -187,7 +201,8 @@ def closed_loop(
 
 def closed_loop_body(
     state0: VehicleState, vehicle: BodyVehicle, ctrl: ControllerParams,
-    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None
+    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None,
+    model: Optional[ControllerModel] = None
 ) -> Tuple[Tuple[ControllerState, VehicleState], Array]:
     """
     Run the controller and a vehicle without motors for ``len(targets)`` steps, from
@@ -213,6 +228,11 @@ def closed_loop_body(
         The controller's state to start from, including the number of steps it has taken,
         which sets the phase of the stages that run every few steps. By default the
         controller starts at rest, with ``n=0``.
+    model : ControllerModel, optional
+        What the controller believes about the vehicle's mass, weight and inertia. By
+        default the vehicle's own values, so the controller adapts to a change of mass. Give
+        the values the controller was tuned for to simulate a vehicle that differs from
+        them: ``ControllerModel(mass, mass * g, inertia)``, or `Controller.rollout_model`.
 
     Returns
     -------
@@ -223,20 +243,21 @@ def closed_loop_body(
         Per step, the vehicle's 12 body states after the step and the 4 controller
         outputs (thrust and torques) that drove it, shape (n, 16).
     """
-    return closed_loop(step_body, state0, vehicle, ctrl, targets, dt, substeps, start)
+    return closed_loop(step_body, state0, vehicle, ctrl, targets, dt, substeps, start, model)
 
 
 
 def closed_loop_motors(
     state0: VehicleState, vehicle: MotorsVehicle, ctrl: ControllerParams,
-    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None
+    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None,
+    model: Optional[ControllerModel] = None
 ) -> Tuple[Tuple[ControllerState, VehicleState], Array]:
     """
     `closed_loop_body` for a vehicle with motors (`MotorsVehicle`).
 
     Parameters
     ----------
-    state0, vehicle, ctrl, targets, dt, substeps, start
+    state0, vehicle, ctrl, targets, dt, substeps, start, model
         As in `closed_loop_body`, with ``vehicle`` a `MotorsVehicle`. The state's ``x`` also
         holds the motor speeds.
 
@@ -247,20 +268,21 @@ def closed_loop_motors(
     trajectory : jax.Array
         The body states and controller outputs of each step, shape (n, 16).
     """
-    return closed_loop(step_motors, state0, vehicle, ctrl, targets, dt, substeps, start)
+    return closed_loop(step_motors, state0, vehicle, ctrl, targets, dt, substeps, start, model)
 
 
 
 def closed_loop_motors_battery(
     state0: VehicleState, vehicle: BatteryVehicle, ctrl: ControllerParams,
-    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None
+    targets: Array, dt: float, substeps: int, start: Optional[ControllerState] = None,
+    model: Optional[ControllerModel] = None
 ) -> Tuple[Tuple[ControllerState, VehicleState], Array]:
     """
     `closed_loop_body` for a vehicle with motors and a battery (`BatteryVehicle`).
 
     Parameters
     ----------
-    state0, vehicle, ctrl, targets, dt, substeps, start
+    state0, vehicle, ctrl, targets, dt, substeps, start, model
         As in `closed_loop_body`, with ``vehicle`` a `BatteryVehicle`. The state's ``aux``
         holds the battery's charge drawn, cutoff and overload.
 
@@ -271,4 +293,5 @@ def closed_loop_motors_battery(
     trajectory : jax.Array
         The body states and controller outputs of each step, shape (n, 16).
     """
-    return closed_loop(step_motors_battery, state0, vehicle, ctrl, targets, dt, substeps, start)
+    return closed_loop(
+        step_motors_battery, state0, vehicle, ctrl, targets, dt, substeps, start, model)
