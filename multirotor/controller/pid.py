@@ -45,6 +45,8 @@ from .._compile import step_function
 from ..simulation import Multirotor
 from .cascade import CascadeStepInputs, cascaded_step, leash_distance, pid_stage
 from .cascade import sqrt_control # noqa: F401, kept importable from here
+from .gains import (
+    AltGains, AttGains, CascadeGains, ClimbGains, PosGains, RateGains, VelGains)
 from ..tuples import ControllerModel, ControllerParams, ControllerState, Memo, Steps
 from .data import (
     new_matrices, PID_K_P, PID_K_I, PID_K_D, PID_MAX_ERR_I, PID_LIMIT,
@@ -659,6 +661,74 @@ class Controller:
         for stage in self._stages:
             stage.reset()
         return self.state
+
+
+    @classmethod
+    def from_gains(cls, gains: CascadeGains, vehicle: Multirotor) -> 'Controller':
+        """
+        A controller with the gains, limits and periods of a `CascadeGains`, for a vehicle.
+
+        Parameters
+        ----------
+        gains : CascadeGains
+            The gains. Their values are copied.
+        vehicle : Multirotor
+            The vehicle to control.
+
+        Returns
+        -------
+        Controller
+        """
+        def copy(x):
+            return None if x is None else np.array(x, dtype=float)
+        p, v, a, r, z, c = (gains.position, gains.velocity, gains.attitude, gains.rate,
+                            gains.altitude, gains.climb)
+        return cls(
+            PosController(
+                copy(p.k_p), copy(p.k_i), copy(p.k_d), copy(p.max_err_i),
+                float(p.max_velocity), float(p.max_acceleration), float(p.max_jerk),
+                p.square_root_scaling, p.leashing),
+            VelController(copy(v.k_p), copy(v.k_i), copy(v.k_d), copy(v.max_err_i),
+                          float(v.max_tilt)),
+            AttController(
+                copy(a.k_p), copy(a.k_i), copy(a.k_d), copy(a.max_err_i),
+                float(a.max_acceleration), float(a.max_jerk), a.square_root_scaling),
+            RateController(copy(r.k_p), copy(r.k_i), copy(r.k_d), copy(r.max_err_i),
+                           copy(r.max_acceleration)),
+            AltController(copy(z.k_p), 0., 0., copy(z.max_err_i), float(z.max_velocity)),
+            AltRateController(copy(c.k_p), copy(c.k_i), copy(c.k_d), copy(c.max_err_i)),
+            vehicle=vehicle, period_p=gains.period_p, period_a=gains.period_a,
+            period_z=gains.period_z, feedforward_weight=float(gains.feedforward_weight))
+
+
+    def gains(self) -> CascadeGains:
+        """
+        The gains, limits and periods of this controller as a `CascadeGains`, as of this
+        call. `multirotor.controller.gains.build_controller` of them gives
+        `rollout_params`. A gain that is the same for all channels of a stage is a number.
+
+        Returns
+        -------
+        CascadeGains
+        """
+        def one(x):
+            x = np.array(x, dtype=float)
+            return float(x[0]) if np.all(x == x[0]) else x
+        def pid(stage):
+            return dict(k_p=one(stage.k_p), k_i=one(stage.k_i), k_d=one(stage.k_d),
+                        max_err_i=one(stage.max_err_i))
+        p, v, a, r, z, c = self._stages
+        return CascadeGains(
+            PosGains(**pid(p), max_velocity=p.max_velocity,
+                     max_acceleration=p.max_acceleration, max_jerk=float(p.max_jerk),
+                     square_root_scaling=p.square_root_scaling, leashing=p.leashing),
+            VelGains(**pid(v), max_tilt=v.max_tilt),
+            AttGains(**pid(a), max_acceleration=a.max_acceleration,
+                     max_jerk=float(a.max_jerk), square_root_scaling=a.square_root_scaling),
+            RateGains(**pid(r), max_acceleration=r.max_acceleration),
+            AltGains(k_p=one(z.k_p), max_err_i=one(z.max_err_i), max_velocity=z.max_velocity),
+            ClimbGains(**pid(c)),
+            float(self.feedforward_weight), self.period_p, self.period_a, self.period_z)
 
 
     def rollout_params(self) -> ControllerParams:

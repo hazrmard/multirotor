@@ -18,7 +18,7 @@ from typing import List, Optional, Sequence, Union
 import numpy as np
 
 from . import physics
-from .tuples import BatteryVehicle, BodyVehicle, MotorsVehicle
+from .tuples import BatteryVehicle, BodyVehicle, ControllerModel, MotorsVehicle
 from .vehicle import BatteryParams, MotorParams, PropellerParams, SimulationParams, VehicleParams, xp_of
 
 Vehicle = Union[BodyVehicle, MotorsVehicle, BatteryVehicle]
@@ -224,3 +224,26 @@ def build_vehicle(params: VehicleParams, simulation: SimulationParams) -> Vehicl
         return MotorsVehicle(**fields)
     vector, soc, voltage = battery_arrays(battery, xp)
     return BatteryVehicle(**fields, battery_params=vector, ocv_soc=soc, ocv_voltage=voltage)
+
+
+
+def controller_model(params: VehicleParams, simulation: SimulationParams) -> ControllerModel:
+    """
+    What a controller tuned for a vehicle believes about it: its mass, weight and inertia.
+    Pass it to a rollout as ``model`` to fly a vehicle whose parameters differ.
+
+    Parameters
+    ----------
+    params : VehicleParams
+        The vehicle the controller was tuned for. Its values can be tracers.
+    simulation : SimulationParams
+        The simulation parameters. ``g`` is used.
+
+    Returns
+    -------
+    ControllerModel
+    """
+    xp = xp_of(params)
+    mass = xp.asarray(params.mass, dtype=float)
+    return ControllerModel(
+        mass, simulation.g * mass, xp.asarray(params.inertia_matrix, dtype=float))

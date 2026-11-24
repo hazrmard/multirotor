@@ -10,6 +10,8 @@ from .trajectories import Trajectory
 from .vehicle import VehicleParams, SimulationParams
 from .helpers import DataLog
 from .env import DynamicsMultirotorEnv
+from .controller.gains import (
+    AltGains, AttGains, CascadeGains, ClimbGains, PosGains, RateGains, VelGains)
 from .controller import (
     AltController, AltRateController,
     PosController, AttController,
@@ -105,11 +107,48 @@ def run_sim(
 
 
 
+def default_gains(args: Namespace = DEFAULTS) -> CascadeGains:
+    """
+    The default gains and limits of `get_controller`, as a `CascadeGains`.
+
+    Parameters
+    ----------
+    args : Namespace, optional
+        The default settings, by default DEFAULTS
+
+    Returns
+    -------
+    CascadeGains
+    """
+    # Each loop must be slower than the loop inside it. Approximate bandwidths:
+    # velocity g * k_p = 5 rad/s, attitude 8 rad/s, rate 32 rad/s. The yaw gains are 0, in
+    # case use_yaw=False. The rate controller outputs angular acceleration, and k_d acts on
+    # the change of the rate error, which that acceleration causes. A k_d of 1 or more makes
+    # the torque flip sign at every step, so there is no D term.
+    return CascadeGains(
+        PosGains(
+            0.8, 0., 3.75, max_err_i=float(args.max_velocity),
+            max_velocity=float(args.max_velocity),
+            max_acceleration=float(args.max_acceleration),
+            square_root_scaling=args.sqrt_scaling, leashing=args.leashing),
+        VelGains(0.5, 0., 0., max_err_i=float(args.max_acceleration),
+                 max_tilt=float(args.max_tilt)),
+        AttGains(np.array([8., 8., 0.]), 0., 0., max_err_i=float(args.max_err_i_attitude)),
+        RateGains(np.array([32., 32., 0.]), 0., 0., max_err_i=float(args.max_err_i_rate),
+                  max_acceleration=float(args.max_angular_acceleration)),
+        AltGains(1., max_err_i=float(args.max_velocity),
+                 max_velocity=float(args.max_velocity)),
+        ClimbGains(10., 0., 0., max_err_i=float(args.max_acceleration)),
+        period_p=0.1, period_a=0.01, period_z=0.1)
+
+
+
 def get_controller(
     m: Multirotor, scurve: bool = False, args: Namespace = DEFAULTS
 ) -> Controller:
     """
-    Create a `multirotor.controller.Controller` object with default values.
+    Create a `multirotor.controller.Controller` object with default values
+    (`default_gains`).
 
     Note: `max_acceleration`, `max_velocity`, `max_error_i` etc are important
     parameters that are set as defaults.
@@ -129,43 +168,7 @@ def get_controller(
     """
     # The rate loop is stable while |1 - k_p * dt| < 1, i.e. dt < 2 / 32 = 0.0625 s.
     assert m.simulation.dt <= 0.05, 'Simulation time step too large for the default gains.'
-    pos = PosController( # PD
-        0.8, 0., 3.75,
-        max_err_i=args.max_velocity,
-        max_velocity=args.max_velocity,
-        max_acceleration=args.max_acceleration,
-        square_root_scaling=args.sqrt_scaling,
-        leashing=args.leashing
-    )
-    # Each loop must be slower than the loop inside it. Approximate bandwidths:
-    # velocity g * k_p = 5 rad/s, attitude 8 rad/s, rate 32 rad/s.
-    vel = VelController( # P
-        0.5, 0., 0,
-        max_err_i=args.max_acceleration,
-        max_tilt=args.max_tilt)
-    att = AttController( # P
-        [8., 8., 0.], 0, 0., # yaw param is set to 0, in case use_yaw=False
-        max_err_i=args.max_err_i_attitude)
-    # The rate controller outputs angular acceleration, and k_d acts on the change
-    # of the rate error, which that acceleration causes. A k_d of 1 or more makes
-    # the torque flip sign at every step, so there is no D term.
-    rat = RateController( # P
-        [32, 32, 0], 0, 0, # yaw param is set to 0, in case use_yaw=False
-        max_err_i=args.max_err_i_rate,
-        max_acceleration=args.max_angular_acceleration)
-
-    alt = AltController(
-        1, 0, 0,
-        max_err_i=args.max_velocity,
-        max_velocity=args.max_velocity)
-    alt_rate = AltRateController(
-        10, 0, 0,
-        max_err_i=args.max_acceleration)
-
-    ctrl = Controller(
-        pos, vel, att, rat, alt, alt_rate, vehicle=m,
-        period_p=0.1, period_a=0.01, period_z=0.1,
-    )
+    ctrl = Controller.from_gains(default_gains(args), m)
     if scurve:
         return SCurveController(ctrl)
     return ctrl
