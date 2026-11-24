@@ -25,7 +25,7 @@ parameters, so they stay consistent. The same goes for the controller's allocati
 ``ControllerParams.alloc_inverse`` is ``control_allocation_matrix(params)[1]`` of the vehicle it
 is for, and does not follow a change to the vehicle's tuple.
 """
-from typing import NamedTuple, Union
+from typing import Any, NamedTuple, Sequence, Union
 
 import numpy as np
 
@@ -180,3 +180,26 @@ def kind_of(vehicle: Union[BodyVehicle, MotorsVehicle, BatteryVehicle]) -> str:
         that takes it.
     """
     return KINDS[type(vehicle)]
+
+
+
+def stack(trees: Sequence) -> Any:
+    """
+    Stack tuples of one kind into one whose every field has a new first axis, one row per
+    tuple, as JAX arrays: the batch that ``jax.vmap`` and the fleet's steps map over.
+
+    Parameters
+    ----------
+    trees : Sequence
+        Tuples (or any pytrees) of the same structure, such as the `BodyVehicle` of each
+        vehicle in a fleet.
+
+    Returns
+    -------
+    Any
+        A tuple of the same type, whose fields have shape (len(trees), ...).
+    """
+    import jax
+    import jax.numpy as jnp
+    return jax.tree_util.tree_map(
+        lambda *leaves: jnp.asarray(np.stack([np.asarray(x, float) for x in leaves])), *trees)

@@ -242,3 +242,22 @@ def test_wrong_signal_shape_is_an_error():
         fleet.step_speeds(np.zeros((K, 3)))
     with pytest.raises(ValueError, match='shape'):
         fleet.step_speeds(np.zeros(6))
+
+
+
+def test_fleet_builds_without_multirotors(monkeypatch):
+    "A fleet takes its arrays from the builders: no `Multirotor` is made."
+    import multirotor.simulation as simulation_module
+    from multirotor.fleet import Fleet
+    from multirotor.simulation import Multirotor
+    from multirotor.tuples import stack
+    from common import make_params
+    params, sim = make_params(4, motor=True, dtype=np.float64)
+    separate = Multirotor(params, sim)
+    def refuse(*args, **kwargs):
+        raise AssertionError('Fleet made a Multirotor')
+    monkeypatch.setattr(simulation_module.Multirotor, '__init__', refuse)
+    fleet = Fleet([params, params], sim)
+    expected = stack([separate._vehicle, separate._vehicle])
+    for got, want in zip(fleet._vehicle, expected):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
