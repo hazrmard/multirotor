@@ -39,7 +39,6 @@ def make_fleet_params(n=6, count=K, dtype=np.float64, motor=False, battery=None)
         vp, sp = make_params(n, 'quadratic', motor, dtype, battery=battery)
         vp = replace(vp, mass=vp.mass * (1 + 0.1 * k))
         vp.inertia_matrix = vp.inertia_matrix * (1 + 0.1 * k)
-        vp.inertia_matrix_inverse = np.linalg.inv(vp.inertia_matrix)
         plist.append(vp)
     return plist, sp
 

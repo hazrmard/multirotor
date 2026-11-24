@@ -66,10 +66,10 @@ def test_vehicle_params_have_the_type_of_the_vehicle(kind, expected):
     params = vehicle.rollout_params()
     assert type(params) is expected and tuples.kind_of(params) == kind
     np.testing.assert_array_equal(params.mass, vehicle.params.mass)
-    np.testing.assert_array_equal(params.prop_params, vehicle._data.params)
+    np.testing.assert_array_equal(params.prop_params, vehicle._vehicle.prop_params)
     np.testing.assert_allclose(params.inertia @ params.inertia_inverse, np.eye(3), atol=1e-12)
     if kind != 'body':
-        np.testing.assert_array_equal(params.motor_params, vehicle._data.motors.params)
+        np.testing.assert_array_equal(params.motor_params, vehicle._vehicle.motor_params)
     if kind == 'motors_battery':
         np.testing.assert_array_equal(params.battery_params, vehicle.battery._params_vector)
 

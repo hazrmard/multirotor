@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from scipy.optimize import brentq
 
-from multirotor.data import MotorData
+from multirotor.builder import motor_matrix
 from multirotor.dynamics import rhs_body_with_motors_and_battery
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import battery_operating_point, battery_terminal, motor_power
@@ -83,7 +83,7 @@ def test_terminal_voltage_overload():
 def test_operating_point_with_voltage_limited_motors():
     params = deepcopy(MP)
     params.k_drag = PP.k_drag
-    motor_params = MotorData([params] * 4).params
+    motor_params = motor_matrix([params] * 4)
     speed = np.full(4, 300.)
     u = np.asarray([300., 500., 700., 900.])   # the larger signals exceed the voltage
     v_oc, resistance = 20., 0.05
@@ -125,8 +125,7 @@ def test_defaults_keep_the_voltage_limit_model():
         vehicle.step_speeds(hover(vehicle))
     assert vehicle.battery.voltage == 22.2
     assert vehicle.battery.charge_drawn == 0.
-    motors = vehicle._data.motors
-    assert vehicle.battery_current == pytest.approx(np.sum(motors.current * motors.voltage) / 22.2)
+    assert vehicle.battery_current == pytest.approx(np.sum(vehicle._current * vehicle._voltage) / 22.2)
 
 
 
@@ -148,8 +147,7 @@ def test_charge_under_constant_load():
     vehicle = make_vehicle(BatteryParams(max_voltage=22.2, capacity=5.))
     u = hover(vehicle)
     vehicle.step_speeds(u)
-    motors = vehicle._data.motors
-    current = np.sum(motors.current * motors.voltage) / 22.2
+    current = np.sum(vehicle._current * vehicle._voltage) / 22.2
     steps = 100
     for _ in range(steps):
         vehicle.step_speeds(u)
@@ -195,7 +193,7 @@ def test_motors_are_limited_by_a_discharged_battery():
         vehicle.step_speeds(u)
     assert not vehicle.battery.empty
     assert vehicle.battery.voltage < requested
-    np.testing.assert_allclose(vehicle._data.motors.voltage, vehicle.battery.voltage, rtol=1e-6)
+    np.testing.assert_allclose(vehicle._voltage, vehicle.battery.voltage, rtol=1e-6)
     assert vehicle.inertial_velocity[2] < 0
 
 
@@ -226,7 +224,7 @@ def test_cutoff_latches_until_reset():
     assert voltages[k] < min_voltage <= voltages[k - 1], 'cutoff within one step'
     # From the next step on, the motors get no voltage and draw no current
     vehicle.step_speeds(u)
-    assert not vehicle._data.motors.voltage.any()
+    assert not vehicle._voltage.any()
     assert vehicle.battery.current == 0.
     # The latch holds after the unloaded voltage recovers above min_voltage
     assert vehicle.battery.voltage > min_voltage
@@ -275,8 +273,8 @@ def test_empty_battery_supplies_nothing():
     assert 0. < currents[-1] < currents[-2]
     vehicle.step_speeds(u)
     assert battery.current == 0. and battery.voltage == 0.
-    assert not vehicle._data.motors.voltage.any()
-    assert not vehicle._data.motors.current.any()
+    assert not vehicle._voltage.any()
+    assert not vehicle._current.any()
     assert not battery.cutoff, 'empty is not a cutoff'
     for _ in range(50):
         vehicle.step_speeds(u)
@@ -294,7 +292,7 @@ def test_empty_battery_draws_no_charge_within_a_step():
     capacity = 3600. * 0.002
     u = hover(vehicle)
     n = len(u)
-    x = np.concatenate((vehicle.state, vehicle._data.motors.speed, [0.]))
+    x = np.concatenate((vehicle.state, vehicle._speed, [0.]))
     for charge_drawn, drawing in ((capacity - 0.1, True), (capacity, False), (capacity + 0.1, False)):
         dxdt = rhs_body_with_motors_and_battery(
             x.astype(float), u.astype(float), False, charge_drawn, vehicle._compiled_vehicle)
@@ -307,12 +305,11 @@ def test_current_reporting():
     vehicle = make_vehicle(BatteryParams(max_voltage=22.2, capacity=5., internal_resistance=0.02))
     for _ in range(20):
         vehicle.step_speeds(hover(vehicle))
-    motors = vehicle._data.motors
-    np.testing.assert_array_equal(vehicle.motor_currents, motors.current)
+    np.testing.assert_array_equal(vehicle.motor_currents, vehicle._current)
     # At steady hover the step-average battery current equals the
     # instantaneous one: motor power divided by the terminal voltage.
     assert vehicle.battery_current == pytest.approx(
-        np.sum(motors.current * motors.voltage) / vehicle.battery.voltage, rel=5e-3)
+        np.sum(vehicle._current * vehicle._voltage) / vehicle.battery.voltage, rel=5e-3)
 
     vp, sp = make_params(8, 'quadratic', True)
     assert np.isnan(Multirotor(vp, sp).battery_current), 'no battery voltage'

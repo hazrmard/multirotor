@@ -14,7 +14,7 @@ import pytest
 from scipy.integrate import odeint
 
 import legacy.simulation
-from multirotor.data import MotorData
+from multirotor.builder import motor_matrix
 from multirotor.dynamics import N_BODY_STATES, rhs_body, rhs_body_with_motors
 from multirotor.models.tarott18 import MP, PP
 from multirotor.physics import motor_acc
@@ -45,7 +45,7 @@ def reference_trajectory(vehicle: Multirotor, us: np.ndarray) -> np.ndarray:
     np.ndarray
         The body states and motor speeds after each step, shape (steps, 12 + n).
     """
-    x = np.concatenate((vehicle.state.astype(float), vehicle._data.motors.speed))
+    x = np.concatenate((vehicle.state.astype(float), vehicle._speed))
     out = []
     params, max_voltage = vehicle._compiled_vehicle, float(vehicle.battery.voltage)
     for u in us:
@@ -115,14 +115,14 @@ def test_motor_equations_match_oracle(max_voltage):
     # The oracle's motor stores the acceleration at the start of each step.
     params = deepcopy(MP)
     params.k_drag = PP.k_drag
-    data = MotorData([params])
+    motor_params = motor_matrix([params])
     sp = SimulationParams(dt=0.01)
     for speed in (0., 150., 300., 450.):
         for u in (0., 100., 300., 600., 2000.):
             oracle = LegacyMotor(params, sp)
             oracle.speed = speed
             oracle.step(u, max_voltage=max_voltage)
-            acc = motor_acc(np.asarray([speed]), np.asarray([u]), max_voltage, data.params)
+            acc = motor_acc(np.asarray([speed]), np.asarray([u]), max_voltage, motor_params)
             np.testing.assert_allclose(acc[0], oracle._last_angular_acc, rtol=1e-12, atol=1e-9)
 
 

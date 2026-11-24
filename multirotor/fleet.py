@@ -115,7 +115,7 @@ class Fleet:
 
         n = len(first.propellers)
         self.n_propellers: int = n
-        self._motors: bool = first._data.motors is not None
+        self._motors: bool = first._has_motors
         self._battery: bool = first.battery.has_model
         kernel = [v._vehicle for v in vehicles]
         # The parameters of all vehicles as one tuple, each field with the vehicle as its
@@ -174,8 +174,8 @@ class Fleet:
         first = vehicles[0]
         kinds = {
             'number of propellers': lambda v: len(v.propellers),
-            'motors': lambda v: v._data.motors is not None,
-            'thrust model': lambda v: v._data.use_thrust_constant,
+            'motors': lambda v: v._has_motors,
+            'thrust model': lambda v: v._use_thrust_constant,
             'battery model': lambda v: v.battery.has_model,
             'dtype': lambda v: np.dtype(v.dtype),
         }
@@ -184,7 +184,7 @@ class Fleet:
         for name, kind in kinds.items():
             if len({kind(v) for v in vehicles}) > 1:
                 raise ValueError(f'All vehicles in a fleet must have the same {name}.')
-        if not first._data.use_thrust_constant:
+        if not first._use_thrust_constant:
             raise NotImplementedError(
                 'A Fleet needs quadratic thrust (use_thrust_constant=True). '
                 'The blade-element model is not supported.')
