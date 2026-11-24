@@ -1,7 +1,7 @@
 """
 The cascaded controller, as pure functions of its parameters and state, written for
 JAX. A `multirotor.controller.pid.Controller` calls `cascaded_step` once per simulation
-step, with the matrices of its `multirotor.controller.data.ControllerData`.
+step, with the matrices of `multirotor.controller.data`.
 `multirotor.rollout` calls it inside a compiled loop, and can differentiate a
 simulation with respect to the gains.
 

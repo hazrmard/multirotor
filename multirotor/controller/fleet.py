@@ -8,7 +8,7 @@ It is the `Controller` of every vehicle at once. The controllers of the vehicles
 have the same structure: the same periods and options. Their gains and limits can
 differ from vehicle to vehicle.
 
-The arrays follow the layout of `multirotor.controller.data.ControllerData`, with
+The arrays follow the layout of `multirotor.controller.data`, with
 the vehicle in front. A vehicle's slice, such as ``params[k]``, is the matrix of
 one `Controller`: one column per control channel of its six stages. The ``PID_*``
 and ``CASCADE_*`` constants in `multirotor.controller.data` name the rows and
@@ -105,7 +105,7 @@ class FleetController:
         self._template: Controller = self._copy(first)
 
         self.params: np.ndarray = np.stack(
-            [c._data.params for c in controllers]).astype(float)
+            [c._pid_params for c in controllers]).astype(float)
         "Parameters, shape (K, N_PID_PARAMS, 12)."
         self.state: np.ndarray = np.zeros((k_vehicles, N_PID_STATES, N_CASCADE_CHANNELS))
         "State of the stages, shape (K, N_PID_STATES, 12)."
@@ -136,7 +136,7 @@ class FleetController:
     def _controller_of(self, index: int) -> Controller:
         """A new `Controller` with the parameters of one vehicle's controller."""
         controller = self._copy(self._template)
-        controller._data.params[:] = self.params[index]
+        controller._pid_params[:] = self.params[index]
         controller.feedforward_weight = self.feedforward_weight[index]
         return controller
 
@@ -219,7 +219,7 @@ class FleetController:
             raise ValueError(
                 'The periods and options (leashing, square_root_scaling) are the '
                 'same for all vehicles of a fleet.')
-        self.params[index] = scratch._data.params
+        self.params[index] = scratch._pid_params
         self.feedforward_weight[index] = scratch.feedforward_weight
 
 

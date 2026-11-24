@@ -268,9 +268,9 @@ def test_persist_false_leaves_the_controller_unchanged():
     for i in range(STEPS):
         ref = waypoints(i).astype(vehicle.dtype)
         if i % 7 == 3:
-            data, n, action = new._data.state.copy(), new.n, new.action.copy()
+            data, n, action = new._pid_state.copy(), new.n, new.action.copy()
             probe = new.step(reference=ref, persist=False)
-            np.testing.assert_array_equal(new._data.state, data, err_msg=f'step {i}')
+            np.testing.assert_array_equal(new._pid_state, data, err_msg=f'step {i}')
             assert new.n == n
             np.testing.assert_array_equal(new.action, action)
             # The stage outputs are those of the last step that ran, as in the oracle
@@ -324,18 +324,18 @@ def test_standalone_pid_matches_oracle():
 
 
 
-def test_stages_are_views_of_one_data_object():
+def test_stages_index_one_pair_of_matrices():
     vehicle = make_vehicle()
     ctrl = make_controller(pid, vehicle)
     stages = [getattr(ctrl, name) for name in CONTROLLERS]
-    assert all(stage._data is ctrl._data for stage in stages)
-    assert ctrl._data.params.shape[1] == sum(stage.n for stage in stages) == 12
+    assert all(stage._pid_params is ctrl._pid_params for stage in stages)
+    assert ctrl._pid_params.shape[1] == sum(stage.n for stage in stages) == 12
     # Writing through a stage changes the shared matrix, and the reverse
     ctrl.ctrl_a.k_p[:] = 7.
-    assert np.all(ctrl._data.params[pid.PID_K_P, 4:7] == 7.)
-    ctrl._data.params[pid.PID_K_D, 7:10] = 3.
+    assert np.all(ctrl._pid_params[pid.PID_K_P, 4:7] == 7.)
+    ctrl._pid_params[pid.PID_K_D, 7:10] = 3.
     assert np.all(ctrl.ctrl_r.k_d == 3.)
-    assert np.shares_memory(ctrl.ctrl_r.k_d, ctrl._data.params)
+    assert np.shares_memory(ctrl.ctrl_r.k_d, ctrl._pid_params)
 
 
 
@@ -344,7 +344,7 @@ def test_controller_keeps_the_parameters_of_the_stages_it_takes_over():
     stages = make_stages(pid, vehicle)
     stages[3].set_params(k_p=9., max_acceleration=np.asarray([1., 2., 3.]))
     controller = pid.Controller(*stages, vehicle=vehicle)
-    assert all(stage._data is controller._data for stage in stages)
+    assert all(stage._pid_params is controller._pid_params for stage in stages)
     np.testing.assert_array_equal(controller.ctrl_r.k_p, 9.)
     np.testing.assert_array_equal(controller.ctrl_r.max_acceleration, [1., 2., 3.])
 
@@ -356,7 +356,7 @@ def test_a_stage_belongs_to_one_controller():
     first = pid.Controller(*stages, vehicle=vehicle)
     with pytest.raises(ValueError, match='already belongs'):
         pid.Controller(*stages, vehicle=vehicle)
-    assert all(stage._data is first._data for stage in stages), 'the first keeps its stages'
+    assert all(stage._pid_params is first._pid_params for stage in stages), 'the first keeps its stages'
 
 
 
@@ -370,9 +370,9 @@ def test_a_controller_rejects_one_stage_in_two_roles():
 
 
 
-def test_standalone_stage_owns_its_data():
+def test_standalone_stage_owns_its_matrices():
     stage = pid.AttController(1., 0., 0., 0.1)
-    assert stage._data.params.shape[1] == stage.n == 3
+    assert stage._pid_params.shape[1] == stage.n == 3
     assert stage.k_p.shape == (3,)
 
 

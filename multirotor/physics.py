@@ -53,10 +53,10 @@ Array = jax.Array
 
 
 
-# Row indices of the parameter matrices in `multirotor.data`. Each matrix has
+# Row indices of the parameter matrices that `multirotor.builder` makes. Each matrix has
 # one column per propeller. The equations index rows with these constants.
 
-# PropellerData.params
+# Propeller parameter matrix
 PROP_K_THRUST = 0
 PROP_K_DRAG = 1
 PROP_MOMENT_OF_INERTIA = 2
@@ -70,7 +70,7 @@ PROP_THETA0 = 9
 PROP_THETA1 = 10
 N_PROP_PARAMS = 11
 
-# MotorData.params
+# Motor parameter matrix
 MOTOR_RESISTANCE = 0
 MOTOR_K_EMF = 1
 MOTOR_K_TORQUE = 2
@@ -161,7 +161,7 @@ def thrusts_blade_element_model(
 
     ``speeds``: Propeller speeds (rad/s), shape (n,).
     ``airstream_velocities``: Airstream velocity at each propeller, shape (3, n).
-    ``prop_params``: The `PropellerData.params` matrix, shape (N_PROP_PARAMS, n).
+    ``prop_params``: The propeller parameter matrix, shape (N_PROP_PARAMS, n).
     ``rho``: Air density (kg/m^3).
     Returns: The thrust (N) of each propeller, shape (n,).
     """

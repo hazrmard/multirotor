@@ -148,16 +148,16 @@ def test_one_controller_for_all_vehicles_and_defaults():
     fleet = Fleet(plist, sp)
     fleet_controller = FleetController(fleet, template)
     # The vehicles differ in mass, but the gains are those of the template
-    assert np.all(fleet_controller.params == template._data.params)
+    assert np.all(fleet_controller.params == template._pid_params)
     defaults = get_fleet_controller(fleet)
     assert np.all(defaults.params == fleet_controller.params)
     # The template is a copy: stepping the fleet leaves it unchanged
-    state = template._data.state.copy()
+    state = template._pid_state.copy()
     for i in range(20):
         fleet_controller.step(waypoint(i))
         fleet.step_speeds(np.tile(fleet.allocate_control(
             fleet.weight, np.zeros((K, 3)))[0], (K, 1)))
-    assert np.all(template._data.state == state)
+    assert np.all(template._pid_state == state)
     assert not np.all(fleet_controller.state == 0)
 
 

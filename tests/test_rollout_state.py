@@ -50,11 +50,11 @@ def test_controller_params_are_what_the_controller_holds():
     controller = make_controller(pid, make_vehicle('body'))
     ctrl = controller.rollout_params()
     assert isinstance(ctrl, tuples.ControllerParams)
-    np.testing.assert_array_equal(ctrl.params, controller._data.params)
+    np.testing.assert_array_equal(ctrl.params, controller._pid_params)
     np.testing.assert_array_equal(ctrl.alloc_inverse, controller.vehicle.alloc_inverse)
     assert ctrl.steps == (controller.steps_p, controller.steps_a, controller.steps_z)
     ctrl.params[:] = 0.                      # a copy
-    assert controller._data.params.any()
+    assert controller._pid_params.any()
 
 
 
